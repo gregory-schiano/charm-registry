@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: charm_registry
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d charm_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  create-bucket:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done
+        mc mb --ignore-existing local/charm-registry
+
+  registry:
+    image: registry:2
+    ports:
+      - "5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+
+  charm-registry:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+      registry:
+        condition: service_started
+    environment:
+      CHARM_REGISTRY_LISTEN: ":8080"
+      CHARM_REGISTRY_PUBLIC_API_URL: "http://localhost:8080"
+      CHARM_REGISTRY_PUBLIC_STORAGE_URL: "http://localhost:8080"
+      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "http://localhost:5000"
+      CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
+      CHARM_REGISTRY_S3_BUCKET: "charm-registry"
+      CHARM_REGISTRY_S3_REGION: "us-east-1"
+      CHARM_REGISTRY_S3_ENDPOINT: "http://minio:9000"
+      CHARM_REGISTRY_S3_ACCESS_KEY_ID: "minioadmin"
+      CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: "minioadmin"
+      CHARM_REGISTRY_S3_USE_PATH_STYLE: "true"
+      CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+      CHARM_REGISTRY_REGISTRY_USERNAME: "registry"
+      CHARM_REGISTRY_REGISTRY_PASSWORD: "registry-secret"
+      CHARM_REGISTRY_REGISTRY_REPOSITORY_ROOT: "charms"
+      CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT: "10s"
+      CHARM_REGISTRY_SERVER_READ_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_WRITE_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_IDLE_TIMEOUT: "2m"
+      CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES: "1048576"
+      CHARM_REGISTRY_MAX_JSON_BODY_BYTES: "1048576"
+      CHARM_REGISTRY_MAX_UPLOAD_BYTES: "67108864"
+    cap_drop:
+      - ALL
+    ports:
+      - "8080:8080"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+volumes:
+  postgres-data:
+  minio-data:
+  registry-data:

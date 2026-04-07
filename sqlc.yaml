@@ -1,0 +1,29 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "internal/repo/migrations"
+    queries: "internal/repo/queries"
+    gen:
+      go:
+        package: "repo"
+        out: "internal/repo/db"
+        sql_package: "pgx/v5"
+        emit_prepared_queries: false
+        emit_interface: true
+        emit_exact_table_names: false
+        emit_empty_slices: true
+        emit_json_tags: false
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          - db_type: "jsonb"
+            nullable: true
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "jsonb"
+            nullable: false
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"

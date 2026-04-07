@@ -1,0 +1,107 @@
+version: "2"
+
+run:
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - cyclop
+    - errcheck
+    - gocognit
+    - gocritic
+    - govet
+    - ineffassign
+    - misspell
+    - nestif
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    cyclop:
+      max-complexity: 15
+    gocognit:
+      min-complexity: 20
+    nestif:
+      min-complexity: 5
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - badLock
+        - boolExprSimplify
+        - captLocal
+        - caseOrder
+        - deprecatedComment
+        - dupImport
+        - equalFold
+        - evalOrder
+    govet:
+      disable-all: true
+      enable:
+        - asmdecl
+        - assign
+        - atomic
+        - bools
+        - buildtag
+        - copylocks
+        - httpresponse
+        - loopclosure
+        - lostcancel
+        - nilfunc
+        - shift
+        - stdmethods
+        - structtag
+        - tests
+        - unmarshal
+        - unreachable
+        - unsafeptr
+        - unusedresult
+    revive:
+      rules:
+        - name: unexported-naming
+          severity: error
+          disabled: false
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+            - sayRepetitiveInsteadOfStutters
+          severity: error
+          disabled: false
+        - name: atomic
+          severity: error
+          disabled: false
+        - name: defer
+          arguments:
+            - [return, recover, method-call]
+          severity: error
+          disabled: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: (.+)_test\.go
+        linters:
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - Prefix(github.com/gschiano/charm-registry)
+    gofmt:
+      simplify: true

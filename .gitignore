@@ -1,0 +1,45 @@
+# Build and tooling
+.bin/
+dist/
+build/
+
+# Test coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Go and module artifacts
+*.so
+*.a
+*.dylib
+go.work.sum
+
+# IDE and editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Environment and config
+.env
+.env.local
+.env.*.local
+
+# Dependencies and build cache (if developer builds locally)
+vendor/
+.cache/
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
