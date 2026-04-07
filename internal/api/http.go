@@ -50,6 +50,7 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Post("/v1/tokens/dashboard/exchange", api.handleDashboardExchange)
 	router.Get("/v1/whoami", api.handleWhoAmI)
 
+	router.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
 	router.Get("/v1/charm", api.handleListPackages)
 	router.Post("/v1/charm", api.handleRegisterPackage)
 	router.Get("/v1/charm/{name}", api.handleGetPackage)

@@ -1370,6 +1370,43 @@ func TestInfoEndpointNoRelease(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
+// TestLibrariesBulkNoAuth verifies that POST /v1/charm/libraries/bulk works
+// without credentials (charmcraft uses its anonymous client for this call)
+// and always returns an empty libraries list.
+func TestLibrariesBulkNoAuth(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	// Empty request (no local libs with known IDs).
+	resp := doRequest(t, handler, "POST", "/v1/charm/libraries/bulk", []any{}, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	libs, ok := body["libraries"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, libs)
+}
+
+func TestLibrariesBulkWithPayload(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	// charmcraft sends a list of {library-id: "..."} objects.
+	payload := []any{
+		map[string]any{"library-id": "some-uuid-1"},
+		map[string]any{"library-id": "some-uuid-2"},
+	}
+	resp := doRequest(t, handler, "POST", "/v1/charm/libraries/bulk", payload, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	libs, ok := body["libraries"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, libs, "unknown library IDs should return empty list, not an error")
+}
+
 func TestListReleasesEmpty(t *testing.T) {
 	t.Parallel()
 
