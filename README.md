@@ -43,7 +43,13 @@ The compose stack includes:
 - Docker Distribution as the OCI registry
 - The charm registry service
 
-The API is exposed at [http://localhost:8080](http://localhost:8080), MinIO at [http://localhost:9001](http://localhost:9001), and the OCI registry at [http://localhost:5000](http://localhost:5000).
+The API is exposed at [http://localhost:8080](http://localhost:8080), MinIO at [http://localhost:9001](http://localhost:9001), and the OCI registry at [https://localhost:5000](https://localhost:5000) (TLS, self-signed).
+
+On first run, `docker compose up` generates a local CA and a TLS certificate for the OCI registry and writes them to `./certs/`. Install the CA once so that skopeo and other container tools trust the registry:
+
+```bash
+make install-cert   # requires sudo; supports Ubuntu/Debian and Fedora/RHEL
+```
 
 For local-only auth you can use insecure development bearer tokens:
 

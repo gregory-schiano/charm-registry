@@ -38,12 +38,66 @@ services:
         until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done
         mc mb --ignore-existing local/charm-registry
 
+  # Generate a local CA and a TLS certificate for the OCI registry.
+  # The certificate is stored in ./certs/ (bind-mounted from the host) so it
+  # persists across restarts and can be installed into the system trust store
+  # with `make install-cert`.  Generation is skipped when the files already
+  # exist, so re-running `docker compose up` is safe.
+  gen-certs:
+    image: alpine:3.21
+    volumes:
+      - ./certs:/certs
+    command:
+      - sh
+      - -euc
+      - |
+        if [ -f /certs/ca.crt ] && [ -f /certs/registry.crt ]; then
+          echo "Registry TLS certificates already exist — skipping generation."
+          exit 0
+        fi
+        apk add --no-cache openssl >/dev/null 2>&1
+        mkdir -p /certs
+
+        echo "Generating local CA…"
+        openssl genrsa -out /certs/ca.key 4096
+        openssl req -new -x509 -days 3650 \
+          -key /certs/ca.key \
+          -out /certs/ca.crt \
+          -subj "/CN=Local Charm Registry CA"
+
+        echo "Generating registry server certificate…"
+        openssl genrsa -out /certs/registry.key 2048
+        openssl req -new \
+          -key /certs/registry.key \
+          -out /certs/registry.csr \
+          -subj "/CN=localhost"
+        printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > /tmp/san.ext
+        openssl x509 -req -days 3650 \
+          -in /certs/registry.csr \
+          -CA /certs/ca.crt -CAkey /certs/ca.key -CAcreateserial \
+          -out /certs/registry.crt \
+          -extfile /tmp/san.ext
+
+        chmod 644 /certs/ca.crt /certs/registry.crt
+        chmod 600 /certs/ca.key /certs/registry.key
+        echo "TLS certificates written to ./certs/."
+        echo "Run 'make install-cert' once to trust the CA on this machine."
+
+  # OCI registry — served over TLS so that charmcraft's bundled skopeo can
+  # push images without the --dest-tls-verify=false flag.
   registry:
     image: registry:2
+    depends_on:
+      gen-certs:
+        condition: service_completed_successfully
+    environment:
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     ports:
       - "5000:5000"
     volumes:
       - registry-data:/var/lib/registry
+      - ./certs:/certs:ro
 
   charm-registry:
     build:
@@ -59,7 +113,7 @@ services:
       CHARM_REGISTRY_LISTEN: ":8080"
       CHARM_REGISTRY_PUBLIC_API_URL: "http://localhost:8080"
       CHARM_REGISTRY_PUBLIC_STORAGE_URL: "http://localhost:8080"
-      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "http://localhost:5000"
+      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "https://localhost:5000"
       CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
       CHARM_REGISTRY_S3_BUCKET: "charm-registry"
       CHARM_REGISTRY_S3_REGION: "us-east-1"
