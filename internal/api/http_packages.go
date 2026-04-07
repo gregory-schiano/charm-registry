@@ -23,7 +23,7 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, invalidRequestError(err))
 		return
 	}
-	private := true
+	private := false
 	if req.Private != nil {
 		private = *req.Private
 	}
