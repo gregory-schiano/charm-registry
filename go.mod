@@ -10,14 +10,17 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.79.4
 	github.com/coreos/go-oidc/v3 v3.12.0
 	github.com/go-chi/chi/v5 v5.2.5
-	github.com/golangci/golangci-lint/v2 v2.11.4
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
-	github.com/securego/gosec/v2 v2.25.0
-	github.com/sqlc-dev/sqlc v1.30.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/vuln v1.1.4
 	gopkg.in/yaml.v3 v3.0.1
+)
+
+tool (
+	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+	github.com/securego/gosec/v2/cmd/gosec
+	github.com/sqlc-dev/sqlc/cmd/sqlc
+	golang.org/x/vuln/cmd/govulncheck
 )
 
 require (
@@ -128,6 +131,7 @@ require (
 	github.com/golangci/dupl v0.0.0-20250308024227-f665c8d69b32 // indirect
 	github.com/golangci/go-printf-func-name v0.1.1 // indirect
 	github.com/golangci/gofmt v0.0.0-20250106114630-d62b90e6713d // indirect
+	github.com/golangci/golangci-lint/v2 v2.11.4 // indirect
 	github.com/golangci/golines v0.15.0 // indirect
 	github.com/golangci/misspell v0.8.0 // indirect
 	github.com/golangci/plugin-module-register v0.1.2 // indirect
@@ -224,6 +228,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
 	github.com/sashamelentyev/usestdlibvars v1.29.0 // indirect
+	github.com/securego/gosec/v2 v2.25.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/sivchari/containedctx v1.0.3 // indirect
 	github.com/sonatard/noctx v0.5.1 // indirect
@@ -234,6 +239,7 @@ require (
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.12.0 // indirect
+	github.com/sqlc-dev/sqlc v1.30.0 // indirect
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.3.1 // indirect
 	github.com/stoewer/go-strcase v1.2.0 // indirect
@@ -285,6 +291,7 @@ require (
 	golang.org/x/telemetry v0.0.0-20260311193753-579e4da9a98c // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
+	golang.org/x/vuln v1.1.4 // indirect
 	google.golang.org/genai v1.50.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
