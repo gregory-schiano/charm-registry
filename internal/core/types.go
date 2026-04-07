@@ -82,9 +82,10 @@ type Package struct {
 }
 
 type Base struct {
-	Architecture string `json:"architecture" yaml:"architecture"`
-	Channel      string `json:"channel" yaml:"channel"`
-	Name         string `json:"name" yaml:"name"`
+	Architecture  string   `json:"architecture,omitempty"  yaml:"architecture,omitempty"`
+	Architectures []string `json:"architectures,omitempty" yaml:"architectures,omitempty"`
+	Channel       string   `json:"channel,omitempty"       yaml:"channel,omitempty"`
+	Name          string   `json:"name,omitempty"          yaml:"name,omitempty"`
 }
 
 type Relation struct {
