@@ -49,11 +49,32 @@ func (s *MemoryStore) Get(_ context.Context, key string) ([]byte, error) {
 	return append([]byte(nil), payload...), nil
 }
 
+// s3API is the subset of [s3.Client] methods used by [S3Store].
+// Declared as an interface so tests can substitute a mock without a live AWS endpoint.
+type s3API interface {
+	HeadBucket(ctx context.Context, input *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	CreateBucket(ctx context.Context, input *s3.CreateBucketInput, opts ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+	PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 type S3Store struct {
-	client *s3.Client
+	client s3API
 	bucket string
 	region string
 	isS3   bool
+}
+
+// newS3StoreWithClient constructs an [S3Store] from an already-initialised client.
+// It does NOT call [S3Store.ensureBucket]; callers are responsible for that.
+// This function exists primarily to enable unit tests to inject a mock client.
+func newS3StoreWithClient(client s3API, bucket, region string, isS3 bool) *S3Store {
+	return &S3Store{
+		client: client,
+		bucket: bucket,
+		region: region,
+		isS3:   isS3,
+	}
 }
 
 // NewS3Store builds an S3-backed blob store and ensures its bucket exists.
@@ -83,12 +104,7 @@ func NewS3Store(ctx context.Context, cfg config.Config) (*S3Store, error) {
 		o.UsePathStyle = cfg.S3UsePathStyle
 	})
 
-	store := &S3Store{
-		client: client,
-		bucket: cfg.S3Bucket,
-		region: cfg.S3Region,
-		isS3:   cfg.S3Endpoint == "",
-	}
+	store := newS3StoreWithClient(client, cfg.S3Bucket, cfg.S3Region, cfg.S3Endpoint == "")
 	if err := store.ensureBucket(ctx); err != nil {
 		return nil, err
 	}

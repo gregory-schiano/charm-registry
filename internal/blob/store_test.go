@@ -1,12 +1,40 @@
 package blob
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockS3Client implements s3API for unit tests.
+type mockS3Client struct {
+	headBucketFn   func(ctx context.Context, input *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	createBucketFn func(ctx context.Context, input *s3.CreateBucketInput, opts ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+	putObjectFn    func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	getObjectFn    func(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+func (m *mockS3Client) HeadBucket(ctx context.Context, input *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return m.headBucketFn(ctx, input, opts...)
+}
+
+func (m *mockS3Client) CreateBucket(ctx context.Context, input *s3.CreateBucketInput, opts ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+	return m.createBucketFn(ctx, input, opts...)
+}
+
+func (m *mockS3Client) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	return m.putObjectFn(ctx, input, opts...)
+}
+
+func (m *mockS3Client) GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return m.getObjectFn(ctx, input, opts...)
+}
 
 func TestMemoryStorePutAndGet(t *testing.T) {
 	t.Parallel()
@@ -93,4 +121,194 @@ func TestMemoryStoreMultipleKeys(t *testing.T) {
 	b, _ := store.Get(ctx, "b")
 	assert.Equal(t, []byte("alpha"), a)
 	assert.Equal(t, []byte("beta"), b)
+}
+
+// ---- S3Store tests --------------------------------------------------------
+
+func TestS3StoreEnsureBucketAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	createCalled := false
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return &s3.HeadBucketOutput{}, nil // bucket exists
+		},
+		createBucketFn: func(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			createCalled = true
+			return nil, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	err := store.ensureBucket(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, createCalled, "CreateBucket should not be called when HeadBucket succeeds")
+}
+
+func TestS3StoreEnsureBucketCreatedWithoutConstraint(t *testing.T) {
+	t.Parallel()
+
+	// isS3=false → no LocationConstraint regardless of region.
+	var capturedInput *s3.CreateBucketInput
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, input *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			capturedInput = input
+			return &s3.CreateBucketOutput{}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "eu-west-1", false /* isS3=false */)
+
+	err := store.ensureBucket(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedInput)
+	assert.Nil(t, capturedInput.CreateBucketConfiguration, "no LocationConstraint expected when isS3=false")
+}
+
+func TestS3StoreEnsureBucketCreatedWithRegionConstraint(t *testing.T) {
+	t.Parallel()
+
+	// isS3=true, region != "us-east-1" → LocationConstraint must be set.
+	var capturedInput *s3.CreateBucketInput
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, input *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			capturedInput = input
+			return &s3.CreateBucketOutput{}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "eu-west-1", true /* isS3=true */)
+
+	err := store.ensureBucket(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedInput)
+	require.NotNil(t, capturedInput.CreateBucketConfiguration)
+	assert.Equal(t, "eu-west-1", string(capturedInput.CreateBucketConfiguration.LocationConstraint))
+}
+
+func TestS3StoreEnsureBucketNoConstraintForUsEast1(t *testing.T) {
+	t.Parallel()
+
+	// isS3=true, region == "us-east-1" → LocationConstraint must NOT be set.
+	var capturedInput *s3.CreateBucketInput
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, input *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			capturedInput = input
+			return &s3.CreateBucketOutput{}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true /* isS3=true */)
+
+	err := store.ensureBucket(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedInput)
+	assert.Nil(t, capturedInput.CreateBucketConfiguration, "us-east-1 must not include a LocationConstraint")
+}
+
+func TestS3StoreEnsureBucketCreateError(t *testing.T) {
+	t.Parallel()
+
+	createErr := errors.New("create failed")
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			return nil, createErr
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	err := store.ensureBucket(context.Background())
+
+	assert.ErrorIs(t, err, createErr)
+}
+
+func TestS3StorePutSuccess(t *testing.T) {
+	t.Parallel()
+
+	var capturedInput *s3.PutObjectInput
+	mock := &mockS3Client{
+		putObjectFn: func(_ context.Context, input *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			capturedInput = input
+			return &s3.PutObjectOutput{}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	err := store.Put(context.Background(), "charms/foo/1.charm", []byte("charm data"), "application/octet-stream")
+
+	require.NoError(t, err)
+	require.NotNil(t, capturedInput)
+	assert.Equal(t, "my-bucket", *capturedInput.Bucket)
+	assert.Equal(t, "charms/foo/1.charm", *capturedInput.Key)
+	assert.Equal(t, "application/octet-stream", *capturedInput.ContentType)
+
+	body, err := io.ReadAll(capturedInput.Body)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("charm data"), body)
+}
+
+func TestS3StorePutError(t *testing.T) {
+	t.Parallel()
+
+	putErr := errors.New("S3 write failed")
+	mock := &mockS3Client{
+		putObjectFn: func(_ context.Context, _ *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+			return nil, putErr
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	err := store.Put(context.Background(), "key", []byte("data"), "text/plain")
+
+	assert.ErrorIs(t, err, putErr)
+}
+
+func TestS3StoreGetSuccess(t *testing.T) {
+	t.Parallel()
+
+	content := []byte("retrieved charm bytes")
+	mock := &mockS3Client{
+		getObjectFn: func(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+			assert.Equal(t, "my-bucket", *input.Bucket)
+			assert.Equal(t, "charms/foo/1.charm", *input.Key)
+			return &s3.GetObjectOutput{
+				Body: io.NopCloser(bytes.NewReader(content)),
+			}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	data, err := store.Get(context.Background(), "charms/foo/1.charm")
+
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+}
+
+func TestS3StoreGetError(t *testing.T) {
+	t.Parallel()
+
+	getErr := errors.New("S3 read failed")
+	mock := &mockS3Client{
+		getObjectFn: func(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+			return nil, getErr
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	_, err := store.Get(context.Background(), "key")
+
+	assert.ErrorIs(t, err, getErr)
 }
