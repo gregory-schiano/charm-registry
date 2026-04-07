@@ -230,14 +230,30 @@ func (s *Service) Info(ctx context.Context, identity core.Identity, charmName st
 	if err != nil {
 		return nil, err
 	}
+	// Cache loaded revisions so we don't re-fetch the same revision number for
+	// multiple channel-map entries (e.g. when the same revision is released to
+	// several channels).
+	revisionCache := map[int]core.Revision{defaultRelease.Revision: defaultRevision}
 	channelMap := make([]map[string]any, 0, len(releases))
 	for _, release := range releases {
+		rev, ok := revisionCache[release.Revision]
+		if !ok {
+			rev, err = s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
+			if err != nil {
+				continue
+			}
+			revisionCache[release.Revision] = rev
+		}
+		chInfo := splitChannel(release.Channel)
 		channelMap = append(channelMap, map[string]any{
-			"channel":         release.Channel,
-			"base":            release.Base,
-			"expiration-date": release.ExpirationDate,
-			"revision":        release.Revision,
-			"when":            release.When,
+			"channel": map[string]any{
+				"base":        release.Base,
+				"name":        release.Channel,
+				"released-at": release.When,
+				"risk":        chInfo.risk,
+				"track":       chInfo.track,
+			},
+			"revision": revisionToInfo(rev, pkg.ID, s.cfg),
 		})
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
