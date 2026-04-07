@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1146,9 +1147,16 @@ func TestIssueTokenDevAutoLogin(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
-	macaroon, ok := body["macaroon"].(string)
+	macaroonJSON, ok := body["macaroon"].(string)
 	require.True(t, ok, "response should contain a macaroon string")
-	assert.True(t, strings.HasPrefix(macaroon, "cr_"), "token should use cr_ prefix")
+	// The value must be a JSON string that bakery.Macaroon.from_dict() can parse.
+	var macaroonDict map[string]any
+	require.NoError(t, json.Unmarshal([]byte(macaroonJSON), &macaroonDict),
+		"macaroon field must itself be a JSON string")
+	identifier, _ := macaroonDict["identifier"].(string)
+	assert.True(t, strings.HasPrefix(identifier, "cr_"), "macaroon identifier should use cr_ prefix")
+	assert.NotEmpty(t, macaroonDict["signature"], "macaroon should have a signature")
+	assert.Equal(t, testCfg.PublicAPIURL, macaroonDict["location"])
 }
 
 // TestIssueTokenDevAutoLoginDisabled verifies that POST /v1/tokens with no
@@ -1166,26 +1174,46 @@ func TestIssueTokenDevAutoLoginDisabled(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 }
 
-// TestIssueTokenDevAutoLoginMacaroonScheme verifies that subsequent requests
-// using the Macaroon auth scheme (as some charmcraft versions send) are
-// authenticated correctly.
-func TestIssueTokenDevAutoLoginMacaroonScheme(t *testing.T) {
+// TestIssueTokenDevAutoLoginExchange simulates the full charmcraft login flow:
+//  1. POST /v1/tokens (no auth, dev mode) → bakery macaroon JSON
+//  2. POST /v1/tokens/exchange with Macaroons header → plain cr_xxx token
+//  3. Subsequent request with Authorization: Macaroon cr_xxx → authenticated
+func TestIssueTokenDevAutoLoginExchange(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t, testCfg)
 
-	// First: obtain a token via dev auto-login
+	// Step 1: charmcraft calls POST /v1/tokens with no auth.
 	resp := doRequest(t, handler, "POST", "/v1/tokens",
-		map[string]any{"description": "charmcraft@dev"}, "")
+		map[string]any{"description": "charmcraft@dev", "ttl": 108000}, "")
 	require.Equal(t, http.StatusOK, resp.Code)
-	token := decodeJSON(t, resp)["macaroon"].(string)
+	macaroonJSON := decodeJSON(t, resp)["macaroon"].(string)
 
-	// Then: use the token with the Macaroon scheme
-	resp = doRequest(t, handler, "GET", "/v1/tokens/whoami", nil, "Macaroon "+token)
+	// Step 2: simulate what craft-store does — build the Macaroons header.
+	// craft-store serializes the macaroon array and base64url-encodes it.
+	macaroonsArray := "[" + macaroonJSON + "]"
+	macaroonsHeader := base64.URLEncoding.EncodeToString([]byte(macaroonsArray))
 
+	resp = doRequest(t, handler, "POST", "/v1/tokens/exchange",
+		map[string]any{}, "")
+	// Without the Macaroons header this should still be 401.
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
+	resp = doJSONRequest(t, handler, "POST", "/v1/tokens/exchange", "{}", "")
+	req, _ := http.NewRequest("POST", "/v1/tokens/exchange", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Macaroons", macaroonsHeader)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	finalToken := decodeJSON(t, recorder)["macaroon"].(string)
+	assert.True(t, strings.HasPrefix(finalToken, "cr_"),
+		"exchange should return a plain cr_ token")
+
+	// Step 3: use the final token with Authorization: Macaroon <cr_xxx>.
+	resp = doRequest(t, handler, "GET", "/v1/tokens/whoami", nil, "Macaroon "+finalToken)
 	assert.Equal(t, http.StatusOK, resp.Code)
-	body := decodeJSON(t, resp)
-	account := body["account"].(map[string]any)
+	account := decodeJSON(t, resp)["account"].(map[string]any)
 	assert.Equal(t, "developer", account["username"])
 }
 

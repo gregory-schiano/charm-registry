@@ -128,6 +128,26 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 	}, nil, nil
 }
 
+// AuthenticateToken validates a raw store token string and returns the
+// associated claims and token record. It is used by the token-exchange handler
+// to validate a token extracted from the charmcraft "Macaroons" header.
+func (a *Authenticator) AuthenticateToken(ctx context.Context, raw string) (Claims, *core.StoreToken, error) {
+	tokenHash := HashToken(raw)
+	storeToken, account, err := a.tokenStore.FindStoreTokenByHash(ctx, tokenHash)
+	if err != nil {
+		return Claims{}, nil, fmt.Errorf("cannot authenticate: token not found")
+	}
+	if storeToken.RevokedAt != nil || storeToken.ValidUntil.Before(time.Now().UTC()) {
+		return Claims{}, nil, fmt.Errorf("cannot authenticate: token revoked or expired")
+	}
+	return Claims{
+		Subject:     account.Subject,
+		Username:    account.Username,
+		DisplayName: account.DisplayName,
+		Email:       account.Email,
+	}, &storeToken, nil
+}
+
 // HashToken returns the stable SHA-256 hash for a raw store token.
 func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))

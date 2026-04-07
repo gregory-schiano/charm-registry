@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -355,6 +357,136 @@ func TestParseInsecureTokenNotDevPrefix(t *testing.T) {
 
 	assert.False(t, ok)
 	assert.Empty(t, claims.Subject)
+}
+
+func TestWrapInMacaroon(t *testing.T) {
+	t.Parallel()
+
+	raw := "cr_testtoken"
+	location := "http://localhost:8080"
+
+	result := WrapInMacaroon(raw, location)
+
+	// Must be valid JSON.
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &m))
+	assert.Equal(t, raw, m["identifier"])
+	assert.Equal(t, location, m["location"])
+	assert.NotEmpty(t, m["signature"])
+	caveats, ok := m["caveats"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, caveats)
+}
+
+func TestWrapInMacaroonDeterministic(t *testing.T) {
+	t.Parallel()
+
+	// Same token always produces same JSON (no random data).
+	r1 := WrapInMacaroon("cr_abc", "http://localhost:8080")
+	r2 := WrapInMacaroon("cr_abc", "http://localhost:8080")
+	assert.Equal(t, r1, r2)
+}
+
+func TestExtractTokenFromMacaroons(t *testing.T) {
+	t.Parallel()
+
+	// Build a Macaroons header the way craft-store does:
+	// base64url("[<pymacaroon-json>]")
+	macaroonJSON := WrapInMacaroon("cr_mytoken", "http://localhost:8080")
+	payload := "[" + macaroonJSON + "]"
+	header := base64.URLEncoding.EncodeToString([]byte(payload))
+
+	token, err := ExtractTokenFromMacaroons(header)
+
+	require.NoError(t, err)
+	assert.Equal(t, "cr_mytoken", token)
+}
+
+func TestExtractTokenFromMacaroonsRawEncoding(t *testing.T) {
+	t.Parallel()
+
+	// Also accept RawURL (no padding) encoding.
+	macaroonJSON := WrapInMacaroon("cr_rawtoken", "http://localhost:8080")
+	payload := "[" + macaroonJSON + "]"
+	header := base64.RawURLEncoding.EncodeToString([]byte(payload))
+
+	token, err := ExtractTokenFromMacaroons(header)
+
+	require.NoError(t, err)
+	assert.Equal(t, "cr_rawtoken", token)
+}
+
+func TestExtractTokenFromMacaroonsInvalid(t *testing.T) {
+	t.Parallel()
+
+	_, err := ExtractTokenFromMacaroons("not-valid-base64!!!")
+	assert.Error(t, err)
+}
+
+func TestAuthenticateTokenValid(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	account, err := repository.EnsureAccount(ctx, core.Account{
+		ID: "acc-at", Subject: "sub-at", Username: "at-user",
+		DisplayName: "AT User", Email: "at@test.com",
+	})
+	require.NoError(t, err)
+
+	raw, hash, err := NewOpaqueToken()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, repository.CreateStoreToken(ctx, core.StoreToken{
+		SessionID:  "sess-at",
+		TokenHash:  hash,
+		AccountID:  account.ID,
+		ValidSince: now.Add(-time.Hour),
+		ValidUntil: now.Add(time.Hour),
+	}))
+
+	a := &Authenticator{config: config.Config{}, tokenStore: repository}
+
+	claims, storeToken, err := a.AuthenticateToken(ctx, raw)
+
+	require.NoError(t, err)
+	assert.Equal(t, "at-user", claims.Username)
+	require.NotNil(t, storeToken)
+	assert.Equal(t, "sess-at", storeToken.SessionID)
+}
+
+func TestAuthenticateTokenNotFound(t *testing.T) {
+	t.Parallel()
+
+	a := &Authenticator{config: config.Config{}, tokenStore: repo.NewMemory()}
+
+	_, _, err := a.AuthenticateToken(context.Background(), "cr_unknown")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token not found")
+}
+
+func TestAuthenticateTokenExpired(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	account, _ := repository.EnsureAccount(ctx, core.Account{ID: "acc-exp", Subject: "sub-exp", Username: "exp"})
+	raw, hash, _ := NewOpaqueToken()
+	now := time.Now().UTC()
+	_ = repository.CreateStoreToken(ctx, core.StoreToken{
+		SessionID:  "sess-exp",
+		TokenHash:  hash,
+		AccountID:  account.ID,
+		ValidSince: now.Add(-2 * time.Hour),
+		ValidUntil: now.Add(-time.Hour),
+	})
+
+	a := &Authenticator{config: config.Config{}, tokenStore: repository}
+	_, _, err := a.AuthenticateToken(ctx, raw)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "revoked or expired")
 }
 
 func TestNewAuthenticatorWithoutOIDC(t *testing.T) {

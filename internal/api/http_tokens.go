@@ -102,7 +102,11 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"macaroon": raw})
+	// Wrap the opaque token in a pymacaroons-compatible JSON structure so that
+	// charmcraft (craft-store) can parse it with bakery.Macaroon.from_dict().
+	// discharge_all() will find no third-party caveats and return immediately,
+	// then send the serialized bundle to POST /v1/tokens/exchange.
+	writeJSON(w, http.StatusOK, map[string]any{"macaroon": auth.WrapInMacaroon(raw, a.cfg.PublicAPIURL)})
 }
 
 func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +114,26 @@ func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	// charmcraft (craft-store) sends the discharged macaroon bundle in the
+	// "Macaroons" header (not Authorization) when completing the login flow.
+	// The bundle is a base64url-encoded JSON array of pymacaroon objects; the
+	// first element's identifier field holds the original raw store token that
+	// was issued by POST /v1/tokens.
+	if !identity.Authenticated {
+		if macaroonsHeader := r.Header.Get("Macaroons"); macaroonsHeader != "" {
+			rawToken, extractErr := auth.ExtractTokenFromMacaroons(macaroonsHeader)
+			if extractErr == nil {
+				claims, storeToken, authErr := a.auth.AuthenticateToken(r.Context(), rawToken)
+				if authErr == nil {
+					identity, err = a.svc.ResolveIdentity(r.Context(), claims, storeToken)
+					if err != nil {
+						writeError(w, err)
+						return
+					}
+				}
+			}
+		}
 	}
 	raw, err := a.svc.ExchangeStoreToken(r.Context(), identity, nil)
 	if err != nil {
