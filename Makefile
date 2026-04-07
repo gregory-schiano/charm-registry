@@ -1,28 +1,26 @@
-GO ?= go
+GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
-PACKAGE ?= ./...
 
-GOLANGCI_LINT := $(BIN_DIR)/golangci-lint
-GOSEC := $(BIN_DIR)/gosec
-GOVULNCHECK := $(BIN_DIR)/govulncheck
-
-.PHONY: help fmt tidy test test-race vet build run lint vuln gosec audit check tools up down
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down
 
 help:
 	@printf "%s\n" \
-		"make fmt        - format Go code" \
-		"make tidy       - tidy and verify Go modules" \
-		"make test       - run unit tests" \
-		"make test-race  - run tests with the race detector" \
-		"make vet        - run go vet" \
-		"make lint       - run golangci-lint" \
-		"make vuln       - run govulncheck" \
-		"make gosec      - run gosec static analysis" \
-		"make audit      - run lint, tests, and security checks" \
-		"make build      - build the registry binary" \
-		"make run        - run the registry locally" \
-		"make up         - start the local compose stack" \
-		"make down       - stop the local compose stack"
+		"make fmt          - format Go code" \
+		"make tidy         - tidy and verify Go modules" \
+		"make tidy-check   - tidy, verify, and assert go.mod/go.sum are unchanged (CI)" \
+		"make test         - run unit tests" \
+		"make test-race    - run tests with the race detector" \
+		"make coverage     - run tests with coverage and print report" \
+		"make vet          - run go vet" \
+		"make lint         - run golangci-lint" \
+		"make vuln         - run govulncheck" \
+		"make gosec        - run gosec static analysis" \
+		"make sqlc-diff    - verify sqlc-generated code is up to date" \
+		"make audit        - run lint, tests, and security checks" \
+		"make build        - build the registry binary" \
+		"make run          - run the registry locally" \
+		"make up           - start the local compose stack" \
+		"make down         - stop the local compose stack"
 
 fmt:
 	$(GO) fmt ./...
@@ -31,14 +29,30 @@ tidy:
 	$(GO) mod tidy
 	$(GO) mod verify
 
+# Intended for CI: ensures go.mod/go.sum are already tidy and unmodified.
+tidy-check:
+	$(GO) mod verify
+	$(GO) mod tidy
+	git diff --exit-code go.mod go.sum
+
+# Packages to unit-test: exclude infrastructure wiring (internal/app) that
+# requires live external services, and sqlc-generated code (internal/repo/db).
+_UNIT_PKGS = $(shell $(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$')
+
 test:
-	$(GO) test $(PACKAGE)
+	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | xargs $(GO) test
 
 test-race:
-	$(GO) test -race $(PACKAGE)
+	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | xargs $(GO) test -race
+
+coverage:
+	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | \
+		xargs $(GO) test -race -coverprofile=coverage.out -covermode=atomic
+	grep -v 'internal/repo/postgres' coverage.out > coverage_unit.out
+	$(GO) tool cover -func=coverage_unit.out
 
 vet:
-	$(GO) vet $(PACKAGE)
+	$(GO) vet ./...
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -47,32 +61,23 @@ build:
 run:
 	$(GO) run ./cmd/charm-registry
 
-lint: $(GOLANGCI_LINT)
-	$(GOLANGCI_LINT) run
+lint:
+	$(GO) tool golangci-lint run
 
-vuln: $(GOVULNCHECK)
-	$(GOVULNCHECK) ./...
+vuln:
+	$(GO) tool govulncheck ./...
 
-gosec: $(GOSEC)
-	$(GOSEC) ./...
+# internal/repo/db is sqlc-generated; G101 false-positives on SQL string
+# constants are suppressed by excluding the directory from the scan.
+gosec:
+	$(GO) tool gosec -exclude-dir=internal/repo/db ./...
+
+sqlc-diff:
+	$(GO) tool sqlc diff
 
 audit: tidy vet lint test vuln gosec
 
 check: fmt audit
-
-tools: $(GOLANGCI_LINT) $(GOSEC) $(GOVULNCHECK)
-
-$(BIN_DIR):
-	mkdir -p $(BIN_DIR)
-
-$(GOLANGCI_LINT): | $(BIN_DIR)
-	$(GO) build -o $(GOLANGCI_LINT) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-
-$(GOSEC): | $(BIN_DIR)
-	$(GO) build -o $(GOSEC) github.com/securego/gosec/v2/cmd/gosec
-
-$(GOVULNCHECK): | $(BIN_DIR)
-	$(GO) build -o $(GOVULNCHECK) golang.org/x/vuln/cmd/govulncheck
 
 up:
 	docker compose up --build

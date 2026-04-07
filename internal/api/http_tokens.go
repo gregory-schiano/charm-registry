@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
@@ -73,6 +74,23 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	// charmcraft login calls POST /v1/tokens with no credentials: it expects
+	// the real store to start a Candid/SSO discharge flow and return a root
+	// macaroon.  When dev auth is enabled we short-circuit that by
+	// auto-provisioning a dev identity, so `charmcraft login` completes
+	// without an OIDC provider.
+	if !identity.Authenticated && a.cfg.EnableInsecureDevAuth {
+		identity, err = a.svc.ResolveIdentity(r.Context(), auth.Claims{
+			Subject:     "dev-auto",
+			Username:    "developer",
+			DisplayName: "Developer",
+			Email:       "developer@example.invalid",
+		}, nil)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	var req service.IssueTokenRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {

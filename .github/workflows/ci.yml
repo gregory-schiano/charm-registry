@@ -23,23 +23,18 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Verify go.sum integrity
-        run: go mod verify
-
       - name: Verify module tidiness
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+        run: make tidy-check
 
       - name: Run go vet
-        run: go vet ./...
+        run: make vet
 
       - name: Run golangci-lint
-        run: go tool golangci-lint run
+        run: make lint
 
       - name: Verify sqlc generated code is up-to-date
         run: |
-          if ! go tool sqlc diff; then
+          if ! make sqlc-diff; then
             echo "::error::sqlc-generated code is out of sync with query files. Run 'sqlc generate' and commit the result."
             exit 1
           fi
@@ -55,10 +50,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run govulncheck
-        run: go tool govulncheck ./...
+        run: make vuln
 
       - name: Run gosec
-        run: go tool gosec -exclude-dir=internal/repo/db ./...
+        run: make gosec
 
   test:
     name: Test
@@ -70,20 +65,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Run tests
-        run: |
-          # Exclude packages that cannot be unit-tested without external services:
-          # - internal/app: wires S3, Postgres and OIDC together (integration only)
-          # - internal/repo/db: sqlc-generated code with no hand-written tests
-          go list ./internal/... \
-            | grep -Ev '/(app|repo/db)$' \
-            | xargs go test -race -coverprofile=coverage.out -covermode=atomic
+      - name: Run tests with coverage
+        run: make coverage
 
       - name: Check coverage threshold
         run: |
-          # Exclude Postgres implementations that require a live database;
-          # those are exercised by integration tests, not unit tests.
-          grep -v 'internal/repo/postgres' coverage.out > coverage_unit.out
           COVERAGE=$(go tool cover -func=coverage_unit.out | grep '^total:' | awk '{print $NF}' | tr -d '%')
           echo "Total unit-test coverage: ${COVERAGE}%"
           THRESHOLD=80
@@ -111,4 +97,4 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Build binary
-        run: CGO_ENABLED=0 go build -trimpath -buildvcs=true -o .bin/charm-registry ./cmd/charm-registry
+        run: make build

@@ -67,8 +67,14 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 	if header == "" {
 		return Claims{}, nil, nil
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	// Accept both Bearer (standard) and Macaroon (legacy charmcraft) schemes.
+	var prefix string
+	switch {
+	case strings.HasPrefix(header, "Bearer "):
+		prefix = "Bearer "
+	case strings.HasPrefix(header, "Macaroon "):
+		prefix = "Macaroon "
+	default:
 		return Claims{}, nil, fmt.Errorf("cannot authenticate: unsupported authorization scheme")
 	}
 	secret := strings.TrimSpace(strings.TrimPrefix(header, prefix))

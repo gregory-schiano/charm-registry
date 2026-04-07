@@ -1133,15 +1133,60 @@ func TestTokenWhoAmIUnauthenticated(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 }
 
-func TestIssueTokenUnauthenticated(t *testing.T) {
+// TestIssueTokenDevAutoLogin verifies that POST /v1/tokens with no credentials
+// succeeds in dev mode by auto-provisioning a "developer" identity, so that
+// `charmcraft login` completes without an OIDC provider.
+func TestIssueTokenDevAutoLogin(t *testing.T) {
 	t.Parallel()
 
-	handler := newTestHandler(t, testCfg)
+	handler := newTestHandler(t, testCfg) // EnableInsecureDevAuth: true
+
+	resp := doRequest(t, handler, "POST", "/v1/tokens",
+		map[string]any{"description": "charmcraft@dev", "ttl": 108000}, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	macaroon, ok := body["macaroon"].(string)
+	require.True(t, ok, "response should contain a macaroon string")
+	assert.True(t, strings.HasPrefix(macaroon, "cr_"), "token should use cr_ prefix")
+}
+
+// TestIssueTokenDevAutoLoginDisabled verifies that POST /v1/tokens with no
+// credentials still returns 401 when dev auth is disabled.
+func TestIssueTokenDevAutoLoginDisabled(t *testing.T) {
+	t.Parallel()
+
+	cfg := testCfg
+	cfg.EnableInsecureDevAuth = false
+	handler := newTestHandler(t, cfg)
 
 	resp := doRequest(t, handler, "POST", "/v1/tokens",
 		map[string]any{}, "")
 
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// TestIssueTokenDevAutoLoginMacaroonScheme verifies that subsequent requests
+// using the Macaroon auth scheme (as some charmcraft versions send) are
+// authenticated correctly.
+func TestIssueTokenDevAutoLoginMacaroonScheme(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	// First: obtain a token via dev auto-login
+	resp := doRequest(t, handler, "POST", "/v1/tokens",
+		map[string]any{"description": "charmcraft@dev"}, "")
+	require.Equal(t, http.StatusOK, resp.Code)
+	token := decodeJSON(t, resp)["macaroon"].(string)
+
+	// Then: use the token with the Macaroon scheme
+	resp = doRequest(t, handler, "GET", "/v1/tokens/whoami", nil, "Macaroon "+token)
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	account := body["account"].(map[string]any)
+	assert.Equal(t, "developer", account["username"])
 }
 
 func TestRevokeTokenUnauthenticated(t *testing.T) {

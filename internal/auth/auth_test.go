@@ -146,6 +146,59 @@ func TestAuthenticateInsecureDevTokenTooFewParts(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAuthenticateMacaroonScheme(t *testing.T) {
+	t.Parallel()
+
+	// Arrange: store a token, then present it using the Macaroon scheme
+	// (older charmcraft clients use "Macaroon" instead of "Bearer").
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	account, err := repository.EnsureAccount(ctx, core.Account{
+		ID: "acc-mac", Subject: "sub-mac", Username: "mac-user",
+		DisplayName: "Mac User", Email: "mac@test.com",
+	})
+	require.NoError(t, err)
+
+	raw, hash, err := NewOpaqueToken()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, repository.CreateStoreToken(ctx, core.StoreToken{
+		SessionID:  "sess-mac",
+		TokenHash:  hash,
+		AccountID:  account.ID,
+		ValidSince: now.Add(-time.Hour),
+		ValidUntil: now.Add(time.Hour),
+	}))
+
+	a := &Authenticator{config: config.Config{}, tokenStore: repository}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Macaroon "+raw)
+
+	// Act
+	claims, storeToken, err := a.Authenticate(req)
+
+	// Assert: Macaroon scheme resolves identically to Bearer
+	require.NoError(t, err)
+	assert.Equal(t, "mac-user", claims.Username)
+	require.NotNil(t, storeToken)
+	assert.Equal(t, "sess-mac", storeToken.SessionID)
+}
+
+func TestAuthenticateMacaroonSchemeInsecureDevToken(t *testing.T) {
+	t.Parallel()
+
+	a := &Authenticator{config: config.Config{EnableInsecureDevAuth: true}}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Macaroon dev:bob:Bob")
+
+	claims, token, err := a.Authenticate(req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "bob", claims.Subject)
+	assert.Equal(t, "Bob", claims.Username)
+	assert.Nil(t, token)
+}
+
 func TestAuthenticateValidStoreToken(t *testing.T) {
 	t.Parallel()
 
