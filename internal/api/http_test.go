@@ -20,20 +20,26 @@ import (
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
 var testCfg = config.Config{
-	PublicAPIURL:           "https://registry.test",
-	PublicStorageURL:       "https://storage.test",
-	PublicRegistryURL:      "https://oci.test",
-	EnableInsecureDevAuth:  true,
-	RegistryUsername:       "registry",
-	RegistryPassword:       "registry-secret",
-	RegistryRepositoryRoot: "charms",
-	MaxJSONBodyBytes:       1 << 20,
-	MaxUploadBytes:         64 << 20,
+	PublicAPIURL:          "https://registry.test",
+	PublicStorageURL:      "https://storage.test",
+	PublicRegistryURL:     "https://oci.test",
+	EnableInsecureDevAuth: true,
+	HarborURL:             "https://harbor.test",
+	HarborAPIURL:          "https://harbor.test/api/v2.0",
+	HarborAdminUsername:   "admin",
+	HarborAdminPassword:   "admin-secret",
+	HarborProjectPrefix:   "charm",
+	HarborPullRobotPrefix: "pull",
+	HarborPushRobotPrefix: "push",
+	HarborSecretKey:       "test-harbor-secret",
+	MaxJSONBodyBytes:      1 << 20,
+	MaxUploadBytes:        64 << 20,
 }
 
 func TestRootIncludesSecurityHeaders(t *testing.T) {
@@ -495,6 +501,7 @@ func TestUnscannedUploadMissingFile(t *testing.T) {
 	handler := newTestHandler(t, testCfg)
 
 	req := httptest.NewRequest("POST", "/unscanned-upload/", strings.NewReader("not multipart"))
+	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recorder := httptest.NewRecorder()
 
@@ -507,7 +514,7 @@ func TestUnscannedUploadSuccess(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t, testCfg)
-	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "")
+	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "Bearer dev:alice:alice")
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
@@ -594,7 +601,7 @@ func TestOCIEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Contains(t, body["image-name"], "oci-charm/workload-image")
-	assert.Equal(t, "registry", body["username"])
+	assert.Contains(t, body["username"], "robot$push-")
 
 	// OCI image blob
 	resp = doRequest(t, handler, "POST",
@@ -688,6 +695,9 @@ func TestInfoEndpointNotFound(t *testing.T) {
 	resp := doRequest(t, handler, "GET", "/v2/charms/info/nonexistent", nil, "Bearer dev:alice:alice")
 
 	assert.Equal(t, http.StatusNotFound, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "not-found", body["code"])
+	assert.NotEmpty(t, body["message"])
 }
 
 func TestRefreshEndpointInvalidBody(t *testing.T) {
@@ -1033,11 +1043,24 @@ func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
 
-	// OCIImageBlob does not validate package existence — it assembles and returns the payload
-	resp := doRequest(t, handler, "POST",
-		"/v1/charm/any-charm/resources/config/oci-image/blob",
-		map[string]any{"image-digest": "sha256:abc"}, "Bearer dev:alice:alice")
+	doRequest(t, handler, "POST", "/v1/charm", map[string]any{"name": "oci-charm"}, authHeader)
+	resp := doMultipartUpload(
+		t,
+		handler,
+		buildTestCharmArchiveWithContainers(t, "oci-charm"),
+		"oci-charm.charm",
+		authHeader,
+	)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/oci-charm/revisions", map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doRequest(t, handler, "POST",
+		"/v1/charm/oci-charm/resources/workload-image/oci-image/blob",
+		map[string]any{"image-digest": "sha256:abc"}, authHeader)
 
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), "sha256:abc")
@@ -1199,7 +1222,6 @@ func TestIssueTokenDevAutoLoginExchange(t *testing.T) {
 	// Without the Macaroons header this should still be 401.
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 
-	resp = doJSONRequest(t, handler, "POST", "/v1/tokens/exchange", "{}", "")
 	req, _ := http.NewRequest("POST", "/v1/tokens/exchange", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Macaroons", macaroonsHeader)
@@ -1292,6 +1314,7 @@ func TestUnscannedUploadMissingBinaryField(t *testing.T) {
 	require.NoError(t, writer.Close())
 
 	req := httptest.NewRequest("POST", "/unscanned-upload/", &buf)
+	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
@@ -1299,6 +1322,16 @@ func TestUnscannedUploadMissingBinaryField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	body := decodeJSON(t, recorder)
 	assert.Equal(t, false, body["successful"])
+}
+
+func TestUnscannedUploadRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "")
+
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 }
 
 func TestListRevisionsWithRevisionParam(t *testing.T) {
@@ -1368,6 +1401,9 @@ func TestInfoEndpointNoRelease(t *testing.T) {
 	resp := doRequest(t, handler, "GET", "/v2/charms/info/norel-info", nil, authHeader)
 
 	assert.Equal(t, http.StatusNotFound, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "not-found", body["code"])
+	assert.Equal(t, "no released revisions found", body["message"])
 }
 
 // TestLibrariesBulkNoAuth verifies that POST /v1/charm/libraries/bulk works
@@ -1524,8 +1560,34 @@ func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	authenticator, err := auth.New(context.Background(), cfg, repository)
 	require.NoError(t, err)
 
-	svc := service.New(cfg, repository, blob.NewMemoryStore())
+	svc := service.New(cfg, repository, blob.NewMemoryStore(), apiTestOCIRegistry{})
 	return New(cfg, svc, authenticator)
+}
+
+type apiTestOCIRegistry struct{}
+
+func (apiTestOCIRegistry) SyncPackage(_ context.Context, pkg core.Package) (core.Package, error) {
+	if pkg.HarborProject == "" {
+		pkg.HarborProject = "charm-" + pkg.Name
+	}
+	if pkg.HarborPushRobot == nil {
+		pkg.HarborPushRobot = &core.RobotCredential{ID: 1, Username: "robot$push-" + pkg.ID, EncryptedSecret: "push"}
+	}
+	if pkg.HarborPullRobot == nil {
+		pkg.HarborPullRobot = &core.RobotCredential{ID: 2, Username: "robot$pull-" + pkg.ID, EncryptedSecret: "pull"}
+	}
+	return pkg, nil
+}
+
+func (apiTestOCIRegistry) ImageReference(pkg core.Package, resourceName string) (string, error) {
+	return "oci.test/" + pkg.HarborProject + "/" + resourceName, nil
+}
+
+func (apiTestOCIRegistry) Credentials(pkg core.Package, pull bool) (string, string, error) {
+	if pull {
+		return pkg.HarborPullRobot.Username, "pull-secret", nil
+	}
+	return pkg.HarborPushRobot.Username, "push-secret", nil
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, path string, body any, authHeader string) *httptest.ResponseRecorder {

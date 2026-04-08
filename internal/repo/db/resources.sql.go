@@ -13,35 +13,36 @@ import (
 
 const createResourceRevision = `-- name: CreateResourceRevision :exec
 INSERT INTO resource_revisions (
-    id, resource_id, revision, name, type, description,
+    id, resource_id, revision, package_revision, name, type, description,
     filename, created_at, size, sha256, sha384, sha512, sha3_384,
     object_key, bases, architectures, oci_image_digest, oci_image_blob
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11, $12, $13,
-    $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19
 )
 `
 
 type CreateResourceRevisionParams struct {
-	ID             string
-	ResourceID     string
-	Revision       int32
-	Name           string
-	Type           string
-	Description    string
-	Filename       string
-	CreatedAt      time.Time
-	Size           int64
-	Sha256         string
-	Sha384         string
-	Sha512         string
-	Sha3384        string
-	ObjectKey      string
-	Bases          json.RawMessage
-	Architectures  json.RawMessage
-	OciImageDigest string
-	OciImageBlob   string
+	ID              string
+	ResourceID      string
+	Revision        int32
+	PackageRevision *int32
+	Name            string
+	Type            string
+	Description     string
+	Filename        string
+	CreatedAt       time.Time
+	Size            int64
+	Sha256          string
+	Sha384          string
+	Sha512          string
+	Sha3384         string
+	ObjectKey       string
+	Bases           json.RawMessage
+	Architectures   json.RawMessage
+	OciImageDigest  string
+	OciImageBlob    string
 }
 
 func (q *Queries) CreateResourceRevision(ctx context.Context, arg CreateResourceRevisionParams) error {
@@ -49,6 +50,7 @@ func (q *Queries) CreateResourceRevision(ctx context.Context, arg CreateResource
 		arg.ID,
 		arg.ResourceID,
 		arg.Revision,
+		arg.PackageRevision,
 		arg.Name,
 		arg.Type,
 		arg.Description,
@@ -97,7 +99,7 @@ func (q *Queries) GetResourceDefinition(ctx context.Context, arg GetResourceDefi
 }
 
 const getResourceRevision = `-- name: GetResourceRevision :one
-SELECT id, resource_id, revision, name, type, description,
+SELECT id, resource_id, revision, package_revision, name, type, description,
        filename, created_at, size, sha256, sha384, sha512, sha3_384,
        object_key, bases, architectures, oci_image_digest, oci_image_blob
 FROM resource_revisions
@@ -117,6 +119,7 @@ func (q *Queries) GetResourceRevision(ctx context.Context, arg GetResourceRevisi
 		&i.ID,
 		&i.ResourceID,
 		&i.Revision,
+		&i.PackageRevision,
 		&i.Name,
 		&i.Type,
 		&i.Description,
@@ -173,7 +176,7 @@ func (q *Queries) ListResourceDefinitions(ctx context.Context, packageID string)
 }
 
 const listResourceRevisions = `-- name: ListResourceRevisions :many
-SELECT id, resource_id, revision, name, type, description,
+SELECT id, resource_id, revision, package_revision, name, type, description,
        filename, created_at, size, sha256, sha384, sha512, sha3_384,
        object_key, bases, architectures, oci_image_digest, oci_image_blob
 FROM resource_revisions
@@ -194,6 +197,7 @@ func (q *Queries) ListResourceRevisions(ctx context.Context, resourceID string) 
 			&i.ID,
 			&i.ResourceID,
 			&i.Revision,
+			&i.PackageRevision,
 			&i.Name,
 			&i.Type,
 			&i.Description,

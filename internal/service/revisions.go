@@ -48,6 +48,11 @@ func (s *Service) CreateUpload(ctx context.Context, filename string, payload []b
 	return upload, nil
 }
 
+// AuthorizeUpload verifies that the caller may create an upload placeholder.
+func (s *Service) AuthorizeUpload(identity core.Identity) error {
+	return s.requirePermission(identity, permAccountRegisterPackage)
+}
+
 // PushRevision publishes a charm revision from a prior upload.
 //
 // The following errors may be returned:

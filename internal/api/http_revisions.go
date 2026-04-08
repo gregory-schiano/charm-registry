@@ -81,6 +81,15 @@ func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request) {
+	identity, err := a.identity(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := a.svc.AuthorizeUpload(identity); err != nil {
+		writeError(w, err)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadBytes)
 	// #nosec G120 -- MaxBytesReader bounds the multipart body size.
 	if err := r.ParseMultipartForm(a.cfg.MaxUploadBytes); err != nil {

@@ -12,14 +12,15 @@ import (
 // EnsureAccount is part of the [Repository] interface.
 func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (core.Account, error) {
 	query := `
-		INSERT INTO accounts (id, subject, username, display_name, email, validation, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO accounts (id, subject, username, display_name, email, validation, is_admin, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (subject) DO UPDATE SET
 			username = EXCLUDED.username,
 			display_name = EXCLUDED.display_name,
 			email = EXCLUDED.email,
-			validation = EXCLUDED.validation
-		RETURNING id, subject, username, display_name, email, validation, created_at
+			validation = EXCLUDED.validation,
+			is_admin = EXCLUDED.is_admin
+		RETURNING id, subject, username, display_name, email, validation, is_admin, created_at
 	`
 	var stored core.Account
 	err := p.pool.QueryRow(ctx, query,
@@ -29,6 +30,7 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 		account.DisplayName,
 		account.Email,
 		account.Validation,
+		account.IsAdmin,
 		account.CreatedAt,
 	).Scan(
 		&stored.ID,
@@ -37,6 +39,7 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 		&stored.DisplayName,
 		&stored.Email,
 		&stored.Validation,
+		&stored.IsAdmin,
 		&stored.CreatedAt,
 	)
 	return stored, err
@@ -45,7 +48,7 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 // GetAccountByID is part of the [Repository] interface.
 func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.Account, error) {
 	row := p.pool.QueryRow(ctx, `
-		SELECT id, subject, username, display_name, email, validation, created_at
+		SELECT id, subject, username, display_name, email, validation, is_admin, created_at
 		FROM accounts WHERE id = $1
 	`, accountID)
 	var account core.Account
@@ -56,6 +59,7 @@ func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.A
 		&account.DisplayName,
 		&account.Email,
 		&account.Validation,
+		&account.IsAdmin,
 		&account.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -140,7 +144,7 @@ func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.
 		SELECT
 			t.session_id, t.token_hash, t.account_id, t.description, t.packages, t.channels, t.permissions,
 			t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
-			a.id, a.subject, a.username, a.display_name, a.email, a.validation, a.created_at
+			a.id, a.subject, a.username, a.display_name, a.email, a.validation, a.is_admin, a.created_at
 		FROM store_tokens t
 		JOIN accounts a ON a.id = t.account_id
 		WHERE t.token_hash = $1
@@ -168,6 +172,7 @@ func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.
 		&account.DisplayName,
 		&account.Email,
 		&account.Validation,
+		&account.IsAdmin,
 		&account.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

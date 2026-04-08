@@ -26,10 +26,20 @@ type Config struct {
 	OIDCUsernameClaim       string
 	OIDCDisplayNameClaim    string
 	OIDCEmailClaim          string
+	AdminSubjects           []string
+	AdminEmails             []string
+	AdminUsernames          []string
 	EnableInsecureDevAuth   bool
-	RegistryUsername        string
-	RegistryPassword        string
-	RegistryRepositoryRoot  string
+	HarborURL               string
+	HarborAPIURL            string
+	HarborAdminUsername     string
+	HarborAdminPassword     string
+	HarborProjectPrefix     string
+	HarborPullRobotPrefix   string
+	HarborPushRobotPrefix   string
+	HarborSecretKey         string
+	HarborCAFile            string
+	HarborInsecureTLS       bool
 	ServerReadHeaderTimeout time.Duration
 	ServerReadTimeout       time.Duration
 	ServerWriteTimeout      time.Duration
@@ -69,10 +79,20 @@ func Load() (Config, error) {
 		OIDCUsernameClaim:       env("CHARM_REGISTRY_OIDC_USERNAME_CLAIM", "preferred_username"),
 		OIDCDisplayNameClaim:    env("CHARM_REGISTRY_OIDC_DISPLAY_NAME_CLAIM", "name"),
 		OIDCEmailClaim:          env("CHARM_REGISTRY_OIDC_EMAIL_CLAIM", "email"),
-		EnableInsecureDevAuth:   envBool("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", true),
-		RegistryUsername:        env("CHARM_REGISTRY_REGISTRY_USERNAME", "registry"),
-		RegistryPassword:        env("CHARM_REGISTRY_REGISTRY_PASSWORD", "registry-secret"),
-		RegistryRepositoryRoot:  strings.Trim(env("CHARM_REGISTRY_REGISTRY_REPOSITORY_ROOT", "charms"), "/"),
+		AdminSubjects:           envCSV("CHARM_REGISTRY_ADMIN_SUBJECTS"),
+		AdminEmails:             envCSV("CHARM_REGISTRY_ADMIN_EMAILS"),
+		AdminUsernames:          envCSV("CHARM_REGISTRY_ADMIN_USERNAMES"),
+		EnableInsecureDevAuth:   envBool("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", false),
+		HarborURL:               strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_URL"), "/"),
+		HarborAPIURL:            strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_API_URL"), "/"),
+		HarborAdminUsername:     os.Getenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME"),
+		HarborAdminPassword:     os.Getenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD"),
+		HarborProjectPrefix:     strings.Trim(env("CHARM_REGISTRY_HARBOR_PROJECT_PREFIX", "charm"), "-"),
+		HarborPullRobotPrefix:   strings.Trim(env("CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX", "pull"), "-"),
+		HarborPushRobotPrefix:   strings.Trim(env("CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX", "push"), "-"),
+		HarborSecretKey:         os.Getenv("CHARM_REGISTRY_HARBOR_SECRET_KEY"),
+		HarborCAFile:            os.Getenv("CHARM_REGISTRY_HARBOR_CA_FILE"),
+		HarborInsecureTLS:       envBool("CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY", false),
 		ServerReadHeaderTimeout: envDuration("CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT", 10*time.Second),
 		ServerReadTimeout:       envDuration("CHARM_REGISTRY_SERVER_READ_TIMEOUT", 30*time.Second),
 		ServerWriteTimeout:      envDuration("CHARM_REGISTRY_SERVER_WRITE_TIMEOUT", 30*time.Second),
@@ -86,8 +106,42 @@ func Load() (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("CHARM_REGISTRY_DATABASE_URL is required")
 	}
+	if (cfg.OIDCIssuerURL == "") != (cfg.OIDCClientID == "") {
+		return Config{}, fmt.Errorf(
+			"CHARM_REGISTRY_OIDC_ISSUER_URL and CHARM_REGISTRY_OIDC_CLIENT_ID must be set together",
+		)
+	}
+	if !cfg.EnableInsecureDevAuth && cfg.OIDCIssuerURL == "" && cfg.OIDCClientID == "" {
+		return Config{}, fmt.Errorf(
+			"configure OIDC or explicitly enable CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH for development",
+		)
+	}
+	if cfg.HarborURL == "" {
+		return Config{}, fmt.Errorf("CHARM_REGISTRY_HARBOR_URL is required")
+	}
+	if cfg.HarborAPIURL == "" {
+		cfg.HarborAPIURL = cfg.HarborURL
+	}
+	if cfg.HarborAdminUsername == "" || cfg.HarborAdminPassword == "" {
+		return Config{}, fmt.Errorf(
+			"CHARM_REGISTRY_HARBOR_ADMIN_USERNAME and CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD are required",
+		)
+	}
+	if cfg.HarborSecretKey == "" {
+		return Config{}, fmt.Errorf("CHARM_REGISTRY_HARBOR_SECRET_KEY is required")
+	}
 
 	return cfg, nil
+}
+
+func (c Config) HasOIDC() bool {
+	return c.OIDCIssuerURL != "" && c.OIDCClientID != ""
+}
+
+func (c Config) IsAdminIdentity(subject, email, username string) bool {
+	return stringInSlice(subject, c.AdminSubjects) ||
+		stringInSlice(email, c.AdminEmails) ||
+		stringInSlice(username, c.AdminUsernames)
 }
 
 func env(key, fallback string) string {
@@ -143,4 +197,35 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+func envCSV(key string) []string {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+func stringInSlice(candidate string, values []string) bool {
+	if candidate == "" {
+		return false
+	}
+	for _, value := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }

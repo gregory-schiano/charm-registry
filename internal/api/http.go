@@ -125,7 +125,7 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) err
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }

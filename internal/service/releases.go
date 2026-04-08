@@ -40,6 +40,9 @@ func (s *Service) Release(
 		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, request.Revision); err != nil {
 			return nil, translateRepoError(err, "revision not found")
 		}
+		if err := s.validateReleaseResources(ctx, pkg.ID, request.Revision, request.Resources); err != nil {
+			return nil, err
+		}
 		if request.When.IsZero() {
 			request.When = now
 		}
@@ -60,6 +63,39 @@ func (s *Service) Release(
 		return nil, err
 	}
 	return released, nil
+}
+
+func (s *Service) validateReleaseResources(
+	ctx context.Context,
+	packageID string,
+	packageRevision int,
+	resources []core.ReleaseResourceRef,
+) error {
+	for _, ref := range resources {
+		if ref.Revision == nil {
+			continue
+		}
+		def, err := s.repo.GetResourceDefinition(ctx, packageID, ref.Name)
+		if err != nil {
+			return translateRepoError(err, "resource not found")
+		}
+		resourceRevision, err := s.repo.GetResourceRevision(ctx, def.ID, *ref.Revision)
+		if err != nil {
+			return translateRepoError(err, "resource revision not found")
+		}
+		if resourceRevision.PackageRevision != nil && *resourceRevision.PackageRevision != packageRevision {
+			return newError(
+				400,
+				"invalid-request",
+				fmt.Sprintf("resource %q revision %d is not compatible with package revision %d",
+					ref.Name,
+					*ref.Revision,
+					packageRevision,
+				),
+			)
+		}
+	}
+	return nil
 }
 
 // ListReleases returns the release map for a package.
@@ -105,6 +141,7 @@ func (s *Service) ListReleases(ctx context.Context, identity core.Identity, char
 			"bases":      revision.Bases,
 			"created-at": revision.CreatedAt,
 			"created-by": revision.CreatedBy,
+			"errors":     []any{},
 			"revision":   revision.Revision,
 			"sha3-384":   revision.SHA384,
 			"size":       revision.Size,

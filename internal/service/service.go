@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
@@ -111,11 +113,18 @@ type Service struct {
 	cfg   config.Config
 	repo  repo.Repository
 	blobs blob.Store
+	oci   OCIRegistry
+}
+
+type OCIRegistry interface {
+	SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error)
+	ImageReference(pkg core.Package, resourceName string) (string, error)
+	Credentials(pkg core.Package, pull bool) (username, password string, err error)
 }
 
 // New returns a [Service] backed by the provided repository and blob store.
-func New(cfg config.Config, repository repo.Repository, blobs blob.Store) *Service {
-	return &Service{cfg: cfg, repo: repository, blobs: blobs}
+func New(cfg config.Config, repository repo.Repository, blobs blob.Store, oci OCIRegistry) *Service {
+	return &Service{cfg: cfg, repo: repository, blobs: blobs, oci: oci}
 }
 
 // RootDocument returns the top-level service metadata document.

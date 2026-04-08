@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -269,6 +270,88 @@ func TestExchangeStoreTokenPreservesScope(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, raw)
+}
+
+func TestResolveIdentityMarksConfiguredAdmin(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	cfg := testConfig()
+	cfg.AdminSubjects = []string{"oidc|admin"}
+	svc := New(cfg, repository, blob.NewMemoryStore(), testOCIRegistry{})
+
+	identity, err := svc.ResolveIdentity(ctx, auth.Claims{
+		Subject:     "oidc|admin",
+		Username:    "admin",
+		DisplayName: "Admin User",
+		Email:       "admin@example.com",
+	}, nil)
+
+	require.NoError(t, err)
+	assert.True(t, identity.Account.IsAdmin)
+}
+
+func TestAdminListsAllPackages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("owner-1", "owner")
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+
+	_, err := svc.RegisterPackage(ctx, owner, "private-charm", "charm", true)
+	require.NoError(t, err)
+	_, err = svc.RegisterPackage(ctx, admin, "admin-charm", "charm", true)
+	require.NoError(t, err)
+
+	packages, err := svc.ListRegisteredPackages(ctx, admin, false)
+
+	require.NoError(t, err)
+	assert.Len(t, packages, 2)
+}
+
+func TestReleaseRejectsResourceForDifferentPackageRevision(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("owner-1", "owner")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	uploadOne, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: uploadOne.ID})
+	require.NoError(t, err)
+
+	uploadTwo, err := svc.CreateUpload(ctx, "my-charm-v2.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: uploadTwo.ID})
+	require.NoError(t, err)
+
+	resourceUpload, err := svc.CreateUpload(ctx, "config.yaml", []byte("debug: true\n"))
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, pkg.Name, "config", PushResourceRequest{
+		UploadID:        resourceUpload.ID,
+		Type:            "file",
+		PackageRevision: intPtr(1),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Release(ctx, owner, pkg.Name, []core.Release{{
+		Channel:  "latest/stable",
+		Revision: 2,
+		Resources: []core.ReleaseResourceRef{{
+			Name:     "config",
+			Revision: intPtr(1),
+		}},
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
 }
 
 func TestListStoreTokensUnauthenticated(t *testing.T) {
@@ -1444,7 +1527,7 @@ func TestDownloadResourceOCIImage(t *testing.T) {
 	require.NoError(t, err)
 
 	// Push an OCI image blob as a resource
-	ociBlob := []byte(`{"layers":[]}`)
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
 	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
 	require.NoError(t, err)
 	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
@@ -1457,7 +1540,8 @@ func TestDownloadResourceOCIImage(t *testing.T) {
 	payload, err := svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
 
 	require.NoError(t, err)
-	assert.Equal(t, ociBlob, payload)
+	assert.Contains(t, string(payload), `"Digest":"sha256:test"`)
+	assert.Contains(t, string(payload), `"Username":"robot$pull-`)
 }
 
 func TestReleaseMultipleChannels(t *testing.T) {
@@ -1861,6 +1945,7 @@ func TestListReleasesWithChannelInfo(t *testing.T) {
 	assert.Len(t, channelMap, 2)
 	revisions := result["revisions"].([]map[string]any)
 	assert.Len(t, revisions, 1)
+	assert.Equal(t, []any{}, revisions[0]["errors"])
 	pkgInfo := result["package"].(map[string]any)
 	channels := pkgInfo["channels"].([]map[string]any)
 	assert.NotEmpty(t, channels)
@@ -2319,7 +2404,7 @@ func TestPushResourceOCIImage(t *testing.T) {
 	require.NoError(t, err)
 
 	// Push an OCI image blob
-	ociBlob := []byte(`{"layers":[]}`)
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
 	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
 	require.NoError(t, err)
 	statusURL, err := svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
@@ -2793,7 +2878,7 @@ func boolPtr(v bool) *bool {
 
 func newTestService() (*Service, repo.Repository) {
 	repository := repo.NewMemory()
-	return New(testConfig(), repository, blob.NewMemoryStore()), repository
+	return New(testConfig(), repository, blob.NewMemoryStore(), testOCIRegistry{}), repository
 }
 
 func newIdentity(id, username string) core.Identity {
@@ -2812,14 +2897,47 @@ func newIdentity(id, username string) core.Identity {
 
 func testConfig() config.Config {
 	return config.Config{
-		PublicAPIURL:           "https://registry.example.test",
-		PublicStorageURL:       "https://storage.example.test",
-		PublicRegistryURL:      "https://oci.example.test",
-		EnableInsecureDevAuth:  true,
-		RegistryUsername:       "registry",
-		RegistryPassword:       "registry-secret",
-		RegistryRepositoryRoot: "charms",
+		PublicAPIURL:          "https://registry.example.test",
+		PublicStorageURL:      "https://storage.example.test",
+		PublicRegistryURL:     "https://oci.example.test",
+		EnableInsecureDevAuth: true,
+		HarborURL:             "https://harbor.example.test",
+		HarborAPIURL:          "https://harbor.example.test/api/v2.0",
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "admin-secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "test-harbor-secret",
 	}
+}
+
+type testOCIRegistry struct{}
+
+func (testOCIRegistry) SyncPackage(_ context.Context, pkg core.Package) (core.Package, error) {
+	if pkg.HarborProject == "" {
+		pkg.HarborProject = "charm-" + pkg.Name
+	}
+	if pkg.HarborPushRobot == nil {
+		pkg.HarborPushRobot = &core.RobotCredential{ID: 1, Username: "robot$push-" + pkg.ID, EncryptedSecret: "push"}
+	}
+	if pkg.HarborPullRobot == nil {
+		pkg.HarborPullRobot = &core.RobotCredential{ID: 2, Username: "robot$pull-" + pkg.ID, EncryptedSecret: "pull"}
+	}
+	now := time.Now().UTC()
+	pkg.HarborSyncedAt = &now
+	return pkg, nil
+}
+
+func (testOCIRegistry) ImageReference(pkg core.Package, resourceName string) (string, error) {
+	return "oci.example.test/" + pkg.HarborProject + "/" + resourceName, nil
+}
+
+func (testOCIRegistry) Credentials(pkg core.Package, pull bool) (string, string, error) {
+	if pull {
+		return pkg.HarborPullRobot.Username, "pull-secret", nil
+	}
+	return pkg.HarborPushRobot.Username, "push-secret", nil
 }
 
 func buildCharmArchive(t *testing.T, name string) []byte {

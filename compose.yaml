@@ -14,20 +14,26 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    networks:
+      - shared
 
   minio:
     image: minio/minio:RELEASE.2025-02-28T09-55-16Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - minio-data:/data
+    networks:
+      shared:
+        aliases:
+          - minio
 
-  create-bucket:
+  create-buckets:
     image: minio/mc:RELEASE.2025-03-12T17-29-24Z
     depends_on:
       - minio
@@ -35,69 +41,72 @@ services:
       - /bin/sh
       - -c
       - |
-        until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done
-        mc mb --ignore-existing local/charm-registry
-
-  # Generate a local CA and a TLS certificate for the OCI registry.
-  # The certificate is stored in ./certs/ (bind-mounted from the host) so it
-  # persists across restarts and can be installed into the system trust store
-  # with `make install-cert`.  Generation is skipped when the files already
-  # exist, so re-running `docker compose up` is safe.
-  gen-certs:
-    image: alpine:3.21
-    volumes:
-      - ./certs:/certs
-    command:
-      - sh
-      - -euc
-      - |
-        if [ -f /certs/ca.crt ] && [ -f /certs/registry.crt ]; then
-          echo "Registry TLS certificates already exist — skipping generation."
-          exit 0
-        fi
-        apk add --no-cache openssl >/dev/null 2>&1
-        mkdir -p /certs
-
-        echo "Generating local CA…"
-        openssl genrsa -out /certs/ca.key 4096
-        openssl req -new -x509 -days 3650 \
-          -key /certs/ca.key \
-          -out /certs/ca.crt \
-          -subj "/CN=Local Charm Registry CA"
-
-        echo "Generating registry server certificate…"
-        openssl genrsa -out /certs/registry.key 2048
-        openssl req -new \
-          -key /certs/registry.key \
-          -out /certs/registry.csr \
-          -subj "/CN=localhost"
-        printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > /tmp/san.ext
-        openssl x509 -req -days 3650 \
-          -in /certs/registry.csr \
-          -CA /certs/ca.crt -CAkey /certs/ca.key -CAcreateserial \
-          -out /certs/registry.crt \
-          -extfile /tmp/san.ext
-
-        chmod 644 /certs/ca.crt /certs/registry.crt
-        chmod 600 /certs/ca.key /certs/registry.key
-        echo "TLS certificates written to ./certs/."
-        echo "Run 'make install-cert' once to trust the CA on this machine."
-
-  # OCI registry — served over TLS so that charmcraft's bundled skopeo can
-  # push images without the --dest-tls-verify=false flag.
-  registry:
-    image: registry:2
-    depends_on:
-      gen-certs:
-        condition: service_completed_successfully
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 1; done
+        mc mb --ignore-existing local/$${CHARM_REGISTRY_S3_BUCKET}
+        mc mb --ignore-existing local/$${HARBOR_S3_BUCKET}
+        cat >/tmp/charm-registry-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:ListBucket"],
+              "Resource": ["arn:aws:s3:::$${CHARM_REGISTRY_S3_BUCKET}"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+              "Resource": ["arn:aws:s3:::$${CHARM_REGISTRY_S3_BUCKET}/*"]
+            }
+          ]
+        }
+        EOF
+        cat >/tmp/harbor-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads"
+              ],
+              "Resource": ["arn:aws:s3:::$${HARBOR_S3_BUCKET}"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+              ],
+              "Resource": ["arn:aws:s3:::$${HARBOR_S3_BUCKET}/*"]
+            }
+          ]
+        }
+        EOF
+        mc admin user info local "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}" >/dev/null 2>&1 || \
+          mc admin user add local "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}" "$${CHARM_REGISTRY_S3_SECRET_ACCESS_KEY}"
+        mc admin user info local "$${HARBOR_S3_ACCESS_KEY_ID}" >/dev/null 2>&1 || \
+          mc admin user add local "$${HARBOR_S3_ACCESS_KEY_ID}" "$${HARBOR_S3_SECRET_ACCESS_KEY}"
+        mc admin policy create local charm-registry-policy /tmp/charm-registry-policy.json >/dev/null 2>&1 || true
+        mc admin policy create local harbor-policy /tmp/harbor-policy.json >/dev/null 2>&1 || true
+        mc admin policy attach local charm-registry-policy --user "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}"
+        mc admin policy attach local harbor-policy --user "$${HARBOR_S3_ACCESS_KEY_ID}"
     environment:
-      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
-      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
-    ports:
-      - "5000:5000"
-    volumes:
-      - registry-data:/var/lib/registry
-      - ./certs:/certs:ro
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      CHARM_REGISTRY_S3_BUCKET: ${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}
+      CHARM_REGISTRY_S3_ACCESS_KEY_ID: ${CHARM_REGISTRY_S3_ACCESS_KEY_ID:-registry-app}
+      CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: ${CHARM_REGISTRY_S3_SECRET_ACCESS_KEY:-registry-app-secret}
+      HARBOR_S3_BUCKET: ${HARBOR_S3_BUCKET:-harbor-registry}
+      HARBOR_S3_ACCESS_KEY_ID: ${HARBOR_S3_ACCESS_KEY_ID:-harbor-registry}
+      HARBOR_S3_SECRET_ACCESS_KEY: ${HARBOR_S3_SECRET_ACCESS_KEY:-harbor-registry-secret}
+    networks:
+      - shared
 
   charm-registry:
     build:
@@ -105,26 +114,30 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      create-bucket:
+      create-buckets:
         condition: service_completed_successfully
-      registry:
-        condition: service_started
     environment:
       CHARM_REGISTRY_LISTEN: ":8080"
       CHARM_REGISTRY_PUBLIC_API_URL: "http://localhost:8080"
       CHARM_REGISTRY_PUBLIC_STORAGE_URL: "http://localhost:8080"
-      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "https://localhost:5000"
+      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "${CHARM_REGISTRY_PUBLIC_REGISTRY_URL:-https://localhost:9443}"
       CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
-      CHARM_REGISTRY_S3_BUCKET: "charm-registry"
-      CHARM_REGISTRY_S3_REGION: "us-east-1"
+      CHARM_REGISTRY_S3_BUCKET: "${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}"
+      CHARM_REGISTRY_S3_REGION: "${CHARM_REGISTRY_S3_REGION:-us-east-1}"
       CHARM_REGISTRY_S3_ENDPOINT: "http://minio:9000"
-      CHARM_REGISTRY_S3_ACCESS_KEY_ID: "minioadmin"
-      CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: "minioadmin"
+      CHARM_REGISTRY_S3_ACCESS_KEY_ID: "${CHARM_REGISTRY_S3_ACCESS_KEY_ID:-registry-app}"
+      CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: "${CHARM_REGISTRY_S3_SECRET_ACCESS_KEY:-registry-app-secret}"
       CHARM_REGISTRY_S3_USE_PATH_STYLE: "true"
-      CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
-      CHARM_REGISTRY_REGISTRY_USERNAME: "registry"
-      CHARM_REGISTRY_REGISTRY_PASSWORD: "registry-secret"
-      CHARM_REGISTRY_REGISTRY_REPOSITORY_ROOT: "charms"
+      CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "${CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH:-true}"
+      CHARM_REGISTRY_HARBOR_URL: "${CHARM_REGISTRY_HARBOR_URL:-https://localhost:9443}"
+      CHARM_REGISTRY_HARBOR_API_URL: "${CHARM_REGISTRY_HARBOR_API_URL:-https://harbor-proxy:8443/api/v2.0}"
+      CHARM_REGISTRY_HARBOR_ADMIN_USERNAME: "${CHARM_REGISTRY_HARBOR_ADMIN_USERNAME:-admin}"
+      CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD: "${CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD:-Harbor12345}"
+      CHARM_REGISTRY_HARBOR_PROJECT_PREFIX: "${CHARM_REGISTRY_HARBOR_PROJECT_PREFIX:-charm}"
+      CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX: "${CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX:-pull}"
+      CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX: "${CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX:-push}"
+      CHARM_REGISTRY_HARBOR_SECRET_KEY: "${CHARM_REGISTRY_HARBOR_SECRET_KEY:-replace-this-secret}"
+      CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY: "${CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY:-true}"
       CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT: "10s"
       CHARM_REGISTRY_SERVER_READ_TIMEOUT: "30s"
       CHARM_REGISTRY_SERVER_WRITE_TIMEOUT: "30s"
@@ -142,8 +155,14 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    networks:
+      - shared
 
 volumes:
   postgres-data:
   minio-data:
-  registry-data:
+
+networks:
+  shared:
+    external: true
+    name: charm-registry-shared

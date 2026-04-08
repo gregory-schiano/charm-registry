@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 )
@@ -26,6 +25,9 @@ func (s *Service) requireAuth(identity core.Identity) error {
 func (s *Service) requirePermission(identity core.Identity, permission string) error {
 	if err := s.requireAuth(identity); err != nil {
 		return err
+	}
+	if identity.Account.IsAdmin {
+		return nil
 	}
 	if identity.Token == nil || len(identity.Token.Permissions) == 0 {
 		return nil
@@ -60,6 +62,12 @@ func (s *Service) requirePackageView(
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
+	if identity.Account.IsAdmin {
+		if requireTokenPermission {
+			return s.requirePermission(identity, permPackageView)
+		}
+		return nil
+	}
 	allowed, err := s.repo.CanViewPackage(ctx, pkg.ID, identity.Account.ID)
 	if err != nil {
 		return err
@@ -84,6 +92,9 @@ func (s *Service) requirePackageManage(
 ) error {
 	if err := s.requirePermission(identity, permission); err != nil {
 		return err
+	}
+	if identity.Account.IsAdmin {
+		return nil
 	}
 	allowed, err := s.repo.CanManagePackage(ctx, pkg.ID, identity.Account.ID)
 	if err != nil {
@@ -139,13 +150,6 @@ func tokenAllowsPackage(token *core.StoreToken, pkg core.Package) bool {
 		}
 	}
 	return false
-}
-
-// --- Registry helpers ---
-
-func registryImageName(cfg config.Config, charmName, resourceName string) string {
-	withoutScheme := strings.TrimPrefix(strings.TrimPrefix(cfg.PublicRegistryURL, "https://"), "http://")
-	return withoutScheme + "/" + filepath.ToSlash(filepath.Join(cfg.RegistryRepositoryRoot, charmName, resourceName))
 }
 
 // --- Manifest helpers ---

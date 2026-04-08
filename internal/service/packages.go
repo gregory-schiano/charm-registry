@@ -52,6 +52,10 @@ func (s *Service) RegisterPackage(
 	if _, err := s.repo.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
 		return core.Package{}, err
 	}
+	pkg, err := s.syncOCIPackage(ctx, pkg)
+	if err != nil {
+		return core.Package{}, err
+	}
 	return pkg, nil
 }
 
@@ -67,7 +71,15 @@ func (s *Service) ListRegisteredPackages(
 	if err := s.requirePermission(identity, permAccountViewPackages); err != nil {
 		return nil, err
 	}
-	packages, err := s.repo.ListPackagesForAccount(ctx, identity.Account.ID, includeCollaborations)
+	var (
+		packages []core.Package
+		err      error
+	)
+	if identity.Account.IsAdmin {
+		packages, err = s.repo.SearchPackages(ctx, "")
+	} else {
+		packages, err = s.repo.ListPackagesForAccount(ctx, identity.Account.ID, includeCollaborations)
+	}
 	if err != nil {
 		return nil, err
 	}

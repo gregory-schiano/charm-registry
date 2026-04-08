@@ -2,8 +2,13 @@ package api
 
 const openAPISpec = `openapi: 3.1.0
 info:
-  title: Private Charm Registry MVP
-  version: 0.1.0
+  title: Private Charm Registry
+  version: 0.2.0
+  description: |
+    Local registry API compatible with stock charmcraft and juju for supported
+    charm and resource workflows. Production authentication uses OIDC-backed
+    account resolution plus registry-issued store tokens. Development can opt
+    into insecure bearer tokens via CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true.
 paths:
   /v1/charm:
     get:
@@ -39,13 +44,16 @@ paths:
     get:
       summary: List store tokens for the authenticated account
     post:
-      summary: Issue a store token
+      summary: Issue a store token after authenticating with OIDC or dev auth
   /v1/tokens/whoami:
     get:
       summary: Describe the currently authenticated store token
   /v1/tokens/dashboard/exchange:
     post:
-      summary: Exchange an OIDC-authenticated session for a store token
+      summary: Exchange an authenticated session for a store token
+  /unscanned-upload/:
+    post:
+      summary: Upload a charm or resource blob for later publishing
   /v2/charms/find:
     get:
       summary: Search charms

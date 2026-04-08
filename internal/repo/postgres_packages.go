@@ -16,17 +16,28 @@ func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 	_, err := p.pool.Exec(
 		ctx,
 		`
-		INSERT INTO packages (
-			id, name, type, private, status, owner_account_id, authority, contact, default_track,
-			description, summary, title, website, links, media, track_guardrails, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-	`,
+			INSERT INTO packages (
+				id, name, type, private, status, owner_account_id,
+				harbor_project, harbor_push_robot_id, harbor_push_robot_name, harbor_push_robot_secret,
+				harbor_pull_robot_id, harbor_pull_robot_name, harbor_pull_robot_secret, harbor_synced_at,
+				authority, contact, default_track, description, summary, title, website,
+				links, media, track_guardrails, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+		`,
 		pkg.ID,
 		pkg.Name,
 		pkg.Type,
 		pkg.Private,
 		pkg.Status,
 		pkg.OwnerAccountID,
+		pkg.HarborProject,
+		nullInt64(pkg.HarborPushRobot),
+		robotUsername(pkg.HarborPushRobot),
+		robotSecret(pkg.HarborPushRobot),
+		nullInt64(pkg.HarborPullRobot),
+		robotUsername(pkg.HarborPullRobot),
+		robotSecret(pkg.HarborPullRobot),
+		pkg.HarborSyncedAt,
 		pkg.Authority,
 		pkg.Contact,
 		pkg.DefaultTrack,
@@ -51,25 +62,41 @@ func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
 	tag, err := p.pool.Exec(
 		ctx,
 		`
-		UPDATE packages SET
-			private = $2,
-			status = $3,
-			authority = $4,
-			contact = $5,
-			default_track = $6,
-			description = $7,
-			summary = $8,
-			title = $9,
-			website = $10,
-			links = $11,
-			media = $12,
-			track_guardrails = $13,
-			updated_at = $14
-		WHERE id = $1
-	`,
+			UPDATE packages SET
+				private = $2,
+				status = $3,
+				harbor_project = $4,
+				harbor_push_robot_id = $5,
+				harbor_push_robot_name = $6,
+				harbor_push_robot_secret = $7,
+				harbor_pull_robot_id = $8,
+				harbor_pull_robot_name = $9,
+				harbor_pull_robot_secret = $10,
+				harbor_synced_at = $11,
+				authority = $12,
+				contact = $13,
+				default_track = $14,
+				description = $15,
+				summary = $16,
+				title = $17,
+				website = $18,
+				links = $19,
+				media = $20,
+				track_guardrails = $21,
+				updated_at = $22
+			WHERE id = $1
+		`,
 		pkg.ID,
 		pkg.Private,
 		pkg.Status,
+		pkg.HarborProject,
+		nullInt64(pkg.HarborPushRobot),
+		robotUsername(pkg.HarborPushRobot),
+		robotSecret(pkg.HarborPushRobot),
+		nullInt64(pkg.HarborPullRobot),
+		robotUsername(pkg.HarborPullRobot),
+		robotSecret(pkg.HarborPullRobot),
+		pkg.HarborSyncedAt,
 		pkg.Authority,
 		pkg.Contact,
 		pkg.DefaultTrack,
@@ -217,13 +244,15 @@ func (p *Postgres) canAccess(ctx context.Context, packageID, accountID string, m
 
 func packageQuery(where string) string {
 	return `
-		SELECT
-			p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-			p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
-			p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
-			a.id, a.username, a.display_name, a.email, a.validation
-		FROM packages p
-		JOIN accounts a ON a.id = p.owner_account_id
+			SELECT
+				p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
+				p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
+				p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+				p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
+				p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
+				a.id, a.username, a.display_name, a.email, a.validation
+			FROM packages p
+			JOIN accounts a ON a.id = p.owner_account_id
 	` + where
 }
 
@@ -244,6 +273,12 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (core.Package, error)
 	var linksJSON []byte
 	var mediaJSON []byte
 	var guardrailsJSON []byte
+	var harborPushRobotID *int64
+	var harborPushRobotName string
+	var harborPushRobotSecret string
+	var harborPullRobotID *int64
+	var harborPullRobotName string
+	var harborPullRobotSecret string
 	err := row.Scan(
 		&pkg.ID,
 		&pkg.Name,
@@ -251,6 +286,14 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (core.Package, error)
 		&pkg.Private,
 		&pkg.Status,
 		&pkg.OwnerAccountID,
+		&pkg.HarborProject,
+		&harborPushRobotID,
+		&harborPushRobotName,
+		&harborPushRobotSecret,
+		&harborPullRobotID,
+		&harborPullRobotName,
+		&harborPullRobotSecret,
+		&pkg.HarborSyncedAt,
 		&pkg.Authority,
 		&pkg.Contact,
 		&pkg.DefaultTrack,
@@ -272,9 +315,47 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (core.Package, error)
 	if err != nil {
 		return core.Package{}, err
 	}
+	pkg.HarborPushRobot = newRobotCredential(harborPushRobotID, harborPushRobotName, harborPushRobotSecret)
+	pkg.HarborPullRobot = newRobotCredential(harborPullRobotID, harborPullRobotName, harborPullRobotSecret)
 	unmarshalJSON(linksJSON, &pkg.Links)
 	unmarshalJSON(mediaJSON, &pkg.Media)
 	unmarshalJSON(guardrailsJSON, &pkg.TrackGuardrails)
 	pkg.Store = ""
 	return pkg, nil
+}
+
+func newRobotCredential(id *int64, username, encryptedSecret string) *core.RobotCredential {
+	if id == nil && username == "" && encryptedSecret == "" {
+		return nil
+	}
+	credential := &core.RobotCredential{
+		Username:        username,
+		EncryptedSecret: encryptedSecret,
+	}
+	if id != nil {
+		credential.ID = *id
+	}
+	return credential
+}
+
+func nullInt64(credential *core.RobotCredential) *int64 {
+	if credential == nil || credential.ID == 0 {
+		return nil
+	}
+	value := credential.ID
+	return &value
+}
+
+func robotUsername(credential *core.RobotCredential) string {
+	if credential == nil {
+		return ""
+	}
+	return credential.Username
+}
+
+func robotSecret(credential *core.RobotCredential) string {
+	if credential == nil {
+		return ""
+	}
+	return credential.EncryptedSecret
 }

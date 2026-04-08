@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gschiano/charm-registry/internal/auth"
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
@@ -115,25 +116,10 @@ func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// charmcraft (craft-store) sends the discharged macaroon bundle in the
-	// "Macaroons" header (not Authorization) when completing the login flow.
-	// The bundle is a base64url-encoded JSON array of pymacaroon objects; the
-	// first element's identifier field holds the original raw store token that
-	// was issued by POST /v1/tokens.
-	if !identity.Authenticated {
-		if macaroonsHeader := r.Header.Get("Macaroons"); macaroonsHeader != "" {
-			rawToken, extractErr := auth.ExtractTokenFromMacaroons(macaroonsHeader)
-			if extractErr == nil {
-				claims, storeToken, authErr := a.auth.AuthenticateToken(r.Context(), rawToken)
-				if authErr == nil {
-					identity, err = a.svc.ResolveIdentity(r.Context(), claims, storeToken)
-					if err != nil {
-						writeError(w, err)
-						return
-					}
-				}
-			}
-		}
+	identity, err = a.resolveExchangeIdentity(r, identity)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 	raw, err := a.svc.ExchangeStoreToken(r.Context(), identity, nil)
 	if err != nil {
@@ -141,6 +127,25 @@ func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"macaroon": raw})
+}
+
+func (a *API) resolveExchangeIdentity(r *http.Request, identity core.Identity) (core.Identity, error) {
+	if identity.Authenticated {
+		return identity, nil
+	}
+	macaroonsHeader := r.Header.Get("Macaroons")
+	if macaroonsHeader == "" {
+		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+	}
+	rawToken, err := auth.ExtractTokenFromMacaroons(macaroonsHeader)
+	if err != nil {
+		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+	}
+	claims, storeToken, err := a.auth.AuthenticateToken(r.Context(), rawToken)
+	if err != nil {
+		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+	}
+	return a.svc.ResolveIdentity(r.Context(), claims, storeToken)
 }
 
 func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request) {

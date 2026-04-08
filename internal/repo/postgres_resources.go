@@ -111,13 +111,14 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 		ctx,
 		`
 		INSERT INTO resource_revisions (
-			id, resource_id, revision, name, type, description, filename, created_at, size,
+			id, resource_id, revision, package_revision, name, type, description, filename, created_at, size,
 			sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 	`,
 		revision.ID,
 		revision.ResourceID,
 		revision.Revision,
+		revision.PackageRevision,
 		revision.Name,
 		revision.Type,
 		revision.Description,
@@ -167,7 +168,7 @@ func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.Res
 // ListResourceRevisions is part of the [Repository] interface.
 func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT id, resource_id, revision, name, type, description, filename, created_at, size,
+		SELECT id, resource_id, revision, package_revision, name, type, description, filename, created_at, size,
 		       sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
 		FROM resource_revisions WHERE resource_id = $1 ORDER BY revision DESC
 	`, resourceID)
@@ -203,7 +204,8 @@ func scanResourceRevisions(rows pgx.Rows) ([]core.ResourceRevision, error) {
 		var basesJSON []byte
 		var archJSON []byte
 		if err := rows.Scan(
-			&item.ID, &item.ResourceID, &item.Revision, &item.Name, &item.Type, &item.Description, &item.Filename,
+			&item.ID, &item.ResourceID, &item.Revision, &item.PackageRevision, &item.Name, &item.Type,
+			&item.Description, &item.Filename,
 			&item.CreatedAt, &item.Size, &item.SHA256, &item.SHA384, &item.SHA512, &item.SHA3384, &item.ObjectKey,
 			&basesJSON, &archJSON, &item.OCIImageDigest, &item.OCIImageBlob,
 		); err != nil {

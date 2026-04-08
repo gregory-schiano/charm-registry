@@ -19,6 +19,11 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
 
 	cfg, err := Load()
 
@@ -34,6 +39,11 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "preferred_username", cfg.OIDCUsernameClaim)
 	assert.Equal(t, "name", cfg.OIDCDisplayNameClaim)
 	assert.Equal(t, "email", cfg.OIDCEmailClaim)
+	assert.True(t, cfg.EnableInsecureDevAuth)
+	assert.Equal(t, "https://harbor.example.com", cfg.HarborURL)
+	assert.Equal(t, "https://harbor.example.com", cfg.HarborAPIURL)
+	assert.Equal(t, "admin", cfg.HarborAdminUsername)
+	assert.Equal(t, "charm", cfg.HarborProjectPrefix)
 	assert.Equal(t, int64(1<<20), cfg.MaxJSONBodyBytes)
 	assert.Equal(t, int64(64<<20), cfg.MaxUploadBytes)
 	assert.Equal(t, 10*time.Second, cfg.ServerReadHeaderTimeout)
@@ -54,6 +64,11 @@ func TestLoadCustomValues(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", "2048")
 	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "1024")
 	t.Setenv("CHARM_REGISTRY_SERVER_READ_TIMEOUT", "5s")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
 
 	cfg, err := Load()
 
@@ -75,6 +90,12 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_PUBLIC_REGISTRY_URL", "https://oci.example.com/")
 	t.Setenv("CHARM_REGISTRY_S3_ENDPOINT", "https://s3.example.com/")
 	t.Setenv("CHARM_REGISTRY_OIDC_ISSUER_URL", "https://auth.example.com/")
+	t.Setenv("CHARM_REGISTRY_OIDC_CLIENT_ID", "registry")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com/")
+	t.Setenv("CHARM_REGISTRY_HARBOR_API_URL", "https://harbor.example.com/api/v2.0/")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
 
 	cfg, err := Load()
 
@@ -84,6 +105,8 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 	assert.Equal(t, "https://oci.example.com", cfg.PublicRegistryURL)
 	assert.Equal(t, "https://s3.example.com", cfg.S3Endpoint)
 	assert.Equal(t, "https://auth.example.com", cfg.OIDCIssuerURL)
+	assert.Equal(t, "https://harbor.example.com", cfg.HarborURL)
+	assert.Equal(t, "https://harbor.example.com/api/v2.0", cfg.HarborAPIURL)
 }
 
 func TestEnvBoolInvalidFallsBack(t *testing.T) {
@@ -134,12 +157,69 @@ func TestEnvEmptyValueFallsBack(t *testing.T) {
 	assert.Equal(t, 3*time.Second, envDuration("EMPTY_VAL", 3*time.Second))
 }
 
-func TestLoadTrimsRegistryRepositoryRoot(t *testing.T) {
+func TestLoadTrimsHarborPrefixes(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
-	t.Setenv("CHARM_REGISTRY_REGISTRY_REPOSITORY_ROOT", "/my-charms/")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_PROJECT_PREFIX", "-my-charms-")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 
 	cfg, err := Load()
 
 	require.NoError(t, err)
-	assert.Equal(t, "my-charms", cfg.RegistryRepositoryRoot)
+	assert.Equal(t, "my-charms", cfg.HarborProjectPrefix)
+}
+
+func TestLoadRequiresCompleteOIDCConfig(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_OIDC_ISSUER_URL", "https://auth.example.com")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be set together")
+}
+
+func TestLoadRequiresAuthProviderWhenDevAuthDisabled(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "false")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "configure OIDC")
+}
+
+func TestLoadParsesAdminLists(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_ADMIN_SUBJECTS", "sub-1, sub-2")
+	t.Setenv("CHARM_REGISTRY_ADMIN_EMAILS", "admin@example.com")
+	t.Setenv("CHARM_REGISTRY_ADMIN_USERNAMES", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sub-1", "sub-2"}, cfg.AdminSubjects)
+	assert.Equal(t, []string{"admin@example.com"}, cfg.AdminEmails)
+	assert.Equal(t, []string{"admin"}, cfg.AdminUsernames)
+	assert.True(t, cfg.IsAdminIdentity("sub-1", "", ""))
+	assert.True(t, cfg.IsAdminIdentity("", "admin@example.com", ""))
+	assert.True(t, cfg.IsAdminIdentity("", "", "admin"))
+}
+
+func TestLoadRequiresHarborConfig(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CHARM_REGISTRY_HARBOR_URL is required")
 }

@@ -42,12 +42,13 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 	rows := make([]map[string]any, 0, len(revisions))
 	for _, revision := range revisions {
 		rows = append(rows, map[string]any{
-			"architectures": revision.Architectures,
-			"bases":         revision.Bases,
-			"created-at":    revision.CreatedAt,
-			"download":      revision.Download,
-			"filename":      revision.Filename,
-			"revision":      revision.Revision,
+			"architectures":    revision.Architectures,
+			"bases":            revision.Bases,
+			"created-at":       revision.CreatedAt,
+			"download":         revision.Download,
+			"filename":         revision.Filename,
+			"package-revision": revision.PackageRevision,
+			"revision":         revision.Revision,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revisions": rows})

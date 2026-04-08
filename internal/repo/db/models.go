@@ -18,6 +18,7 @@ type Account struct {
 	DisplayName string
 	Email       string
 	Validation  string
+	IsAdmin     bool
 	CreatedAt   time.Time
 }
 
@@ -34,24 +35,32 @@ type AccountGroupMember struct {
 }
 
 type Package struct {
-	ID              string
-	Name            string
-	Type            string
-	Private         bool
-	Status          string
-	OwnerAccountID  string
-	Authority       *string
-	Contact         *string
-	DefaultTrack    *string
-	Description     *string
-	Summary         *string
-	Title           *string
-	Website         *string
-	Links           json.RawMessage
-	Media           json.RawMessage
-	TrackGuardrails json.RawMessage
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                    string
+	Name                  string
+	Type                  string
+	Private               bool
+	Status                string
+	OwnerAccountID        string
+	HarborProject         string
+	HarborPushRobotID     *int64
+	HarborPushRobotName   string
+	HarborPushRobotSecret string
+	HarborPullRobotID     *int64
+	HarborPullRobotName   string
+	HarborPullRobotSecret string
+	HarborSyncedAt        pgtype.Timestamptz
+	Authority             *string
+	Contact               *string
+	DefaultTrack          *string
+	Description           *string
+	Summary               *string
+	Title                 *string
+	Website               *string
+	Links                 json.RawMessage
+	Media                 json.RawMessage
+	TrackGuardrails       json.RawMessage
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type PackageAcl struct {
@@ -85,24 +94,25 @@ type ResourceDefinition struct {
 }
 
 type ResourceRevision struct {
-	ID             string
-	ResourceID     string
-	Revision       int32
-	Name           string
-	Type           string
-	Description    string
-	Filename       string
-	CreatedAt      time.Time
-	Size           int64
-	Sha256         string
-	Sha384         string
-	Sha512         string
-	Sha3384        string
-	ObjectKey      string
-	Bases          json.RawMessage
-	Architectures  json.RawMessage
-	OciImageDigest string
-	OciImageBlob   string
+	ID              string
+	ResourceID      string
+	Revision        int32
+	PackageRevision *int32
+	Name            string
+	Type            string
+	Description     string
+	Filename        string
+	CreatedAt       time.Time
+	Size            int64
+	Sha256          string
+	Sha384          string
+	Sha512          string
+	Sha3384         string
+	ObjectKey       string
+	Bases           json.RawMessage
+	Architectures   json.RawMessage
+	OciImageDigest  string
+	OciImageBlob    string
 }
 
 type Revision struct {

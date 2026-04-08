@@ -1,15 +1,16 @@
 -- name: EnsureAccount :one
-INSERT INTO accounts (id, subject, username, display_name, email, validation, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO accounts (id, subject, username, display_name, email, validation, is_admin, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (subject) DO UPDATE SET
     username     = EXCLUDED.username,
     display_name = EXCLUDED.display_name,
     email        = EXCLUDED.email,
-    validation   = EXCLUDED.validation
-RETURNING id, subject, username, display_name, email, validation, created_at;
+    validation   = EXCLUDED.validation,
+    is_admin     = EXCLUDED.is_admin
+RETURNING id, subject, username, display_name, email, validation, is_admin, created_at;
 
 -- name: GetAccountByID :one
-SELECT id, subject, username, display_name, email, validation, created_at
+SELECT id, subject, username, display_name, email, validation, is_admin, created_at
 FROM accounts
 WHERE id = $1;
 
@@ -56,6 +57,7 @@ SELECT
     a.display_name AS acc_display_name,
     a.email       AS acc_email,
     a.validation  AS acc_validation,
+    a.is_admin    AS acc_is_admin,
     a.created_at  AS acc_created_at
 FROM store_tokens t
 JOIN accounts a ON a.id = t.account_id

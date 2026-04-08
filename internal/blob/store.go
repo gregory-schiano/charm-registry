@@ -3,8 +3,10 @@ package blob
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
@@ -116,6 +118,9 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
+	if isBucketAccessDenied(err) {
+		return nil
+	}
 	input := &s3.CreateBucketInput{Bucket: &s.bucket}
 	if s.isS3 && s.region != "" && s.region != "us-east-1" {
 		input.CreateBucketConfiguration = &types.CreateBucketConfiguration{
@@ -123,7 +128,21 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 		}
 	}
 	_, err = s.client.CreateBucket(ctx, input)
+	if isBucketAccessDenied(err) {
+		return nil
+	}
 	return err
+}
+
+func isBucketAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr interface{ ErrorCode() string }
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
+		return true
+	}
+	return strings.Contains(err.Error(), "AccessDenied") || strings.Contains(err.Error(), "StatusCode: 403")
 }
 
 // Put is part of the [Store] interface.

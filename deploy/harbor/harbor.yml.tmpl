@@ -1,0 +1,70 @@
+hostname: localhost
+
+http:
+  port: __HARBOR_HTTP_PORT__
+
+https:
+  port: __HARBOR_HTTPS_PORT__
+  certificate: __CERT_FILE__
+  private_key: __KEY_FILE__
+
+external_url: __HARBOR_EXTERNAL_URL__
+
+harbor_admin_password: __HARBOR_ADMIN_PASSWORD__
+
+database:
+  password: __HARBOR_DATABASE_PASSWORD__
+  max_idle_conns: 50
+  max_open_conns: 100
+  conn_max_lifetime: 5m
+  conn_max_idle_time: 0
+
+data_volume: __DATA_VOLUME__
+
+storage_service:
+  s3:
+    accesskey: __HARBOR_S3_ACCESS_KEY_ID__
+    secretkey: __HARBOR_S3_SECRET_ACCESS_KEY__
+    region: __HARBOR_S3_REGION__
+    regionendpoint: __HARBOR_S3_REGION_ENDPOINT__
+    bucket: __HARBOR_S3_BUCKET__
+    secure: __HARBOR_S3_SECURE__
+    v4auth: true
+    chunksize: 5242880
+    rootdirectory: /
+  redirect:
+    disable: true
+
+trivy:
+  skip_update: true
+  skip_java_db_update: true
+  offline_scan: true
+  timeout: 5m0s
+
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 3
+
+jobservice:
+  max_job_workers: 4
+  max_job_duration_hours: 24
+  job_loggers:
+    - STD_OUTPUT
+  logger_sweeper_duration: 1
+
+log:
+  level: info
+  local:
+    rotate_count: 10
+    rotate_size: 50M
+    location: __LOG_LOCATION__
+
+proxy:
+  http_proxy:
+  https_proxy:
+  no_proxy: 127.0.0.1,localhost,minio,postgres,redis,registry,core,portal,jobservice,nginx
+  components:
+    - core
+    - jobservice
+
+_version: 2.15.0

@@ -9,6 +9,7 @@ type Account struct {
 	DisplayName string    `json:"display-name"`
 	Email       string    `json:"email"`
 	Validation  string    `json:"validation"`
+	IsAdmin     bool      `json:"is-admin,omitempty"`
 	CreatedAt   time.Time `json:"created-at"`
 }
 
@@ -77,8 +78,18 @@ type Package struct {
 	Tracks          []Track             `json:"tracks,omitempty"`
 	Publisher       Publisher           `json:"publisher"`
 	Store           string              `json:"store"`
+	HarborProject   string              `json:"-"`
+	HarborPushRobot *RobotCredential    `json:"-"`
+	HarborPullRobot *RobotCredential    `json:"-"`
+	HarborSyncedAt  *time.Time          `json:"-"`
 	CreatedAt       time.Time           `json:"created-at"`
 	UpdatedAt       time.Time           `json:"updated-at"`
+}
+
+type RobotCredential struct {
+	ID              int64  `json:"-"`
+	Username        string `json:"-"`
+	EncryptedSecret string `json:"-"`
 }
 
 type Base struct {
@@ -137,25 +148,26 @@ type Download struct {
 }
 
 type ResourceRevision struct {
-	ID             string    `json:"-"`
-	ResourceID     string    `json:"-"`
-	Name           string    `json:"name"`
-	Type           string    `json:"type"`
-	Description    string    `json:"description"`
-	Filename       string    `json:"filename"`
-	Revision       int       `json:"revision"`
-	CreatedAt      time.Time `json:"created-at"`
-	Size           int64     `json:"size"`
-	SHA256         string    `json:"hash-sha-256,omitempty"`
-	SHA384         string    `json:"hash-sha-384,omitempty"`
-	SHA512         string    `json:"hash-sha-512,omitempty"`
-	SHA3384        string    `json:"hash-sha3-384,omitempty"`
-	ObjectKey      string    `json:"-"`
-	Bases          []Base    `json:"bases,omitempty"`
-	Architectures  []string  `json:"architectures,omitempty"`
-	OCIImageDigest string    `json:"oci-image-digest,omitempty"`
-	OCIImageBlob   string    `json:"-"`
-	Download       Download  `json:"download,omitempty"`
+	ID              string    `json:"-"`
+	ResourceID      string    `json:"-"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Description     string    `json:"description"`
+	Filename        string    `json:"filename"`
+	Revision        int       `json:"revision"`
+	CreatedAt       time.Time `json:"created-at"`
+	Size            int64     `json:"size"`
+	SHA256          string    `json:"hash-sha-256,omitempty"`
+	SHA384          string    `json:"hash-sha-384,omitempty"`
+	SHA512          string    `json:"hash-sha-512,omitempty"`
+	SHA3384         string    `json:"hash-sha3-384,omitempty"`
+	ObjectKey       string    `json:"-"`
+	Bases           []Base    `json:"bases,omitempty"`
+	Architectures   []string  `json:"architectures,omitempty"`
+	PackageRevision *int      `json:"package-revision,omitempty"`
+	OCIImageDigest  string    `json:"oci-image-digest,omitempty"`
+	OCIImageBlob    string    `json:"-"`
+	Download        Download  `json:"download,omitempty"`
 }
 
 type ReleaseResourceRef struct {
@@ -220,7 +232,7 @@ type CharmBase struct {
 
 type CharmManifest struct {
 	Name        string
-	DisplayName string      `yaml:"display-name"`
+	DisplayName string `yaml:"display-name"`
 	Summary     string
 	Description string
 	Docs        string

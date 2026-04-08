@@ -1,0 +1,5 @@
+ALTER TABLE accounts
+    ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE resource_revisions
+    ADD COLUMN IF NOT EXISTS package_revision INTEGER NULL;

@@ -30,6 +30,7 @@ func (s *Service) ResolveIdentity(
 		DisplayName: firstNonEmpty(claims.DisplayName, claims.Username, claims.Subject),
 		Email:       firstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
 		Validation:  "verified",
+		IsAdmin:     s.cfg.IsAdminIdentity(claims.Subject, claims.Email, claims.Username),
 		CreatedAt:   time.Now().UTC(),
 	})
 	if err != nil {
@@ -146,6 +147,7 @@ func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
 			"display-name": identity.Account.DisplayName,
 			"email":        identity.Account.Email,
 			"id":           identity.Account.ID,
+			"is-admin":     identity.Account.IsAdmin,
 			"username":     identity.Account.Username,
 			"validation":   identity.Account.Validation,
 		},
@@ -167,6 +169,7 @@ func (s *Service) DeprecatedWhoAmI(identity core.Identity) (map[string]any, erro
 		"display-name": identity.Account.DisplayName,
 		"email":        identity.Account.Email,
 		"id":           identity.Account.ID,
+		"is-admin":     identity.Account.IsAdmin,
 		"username":     identity.Account.Username,
 		"validation":   identity.Account.Validation,
 	}, nil

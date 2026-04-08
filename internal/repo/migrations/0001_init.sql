@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     display_name TEXT NOT NULL,
     email TEXT NOT NULL,
     validation TEXT NOT NULL,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL
 );
 
@@ -28,6 +29,14 @@ CREATE TABLE IF NOT EXISTS packages (
     private BOOLEAN NOT NULL DEFAULT TRUE,
     status TEXT NOT NULL,
     owner_account_id TEXT NOT NULL REFERENCES accounts(id),
+    harbor_project TEXT NOT NULL DEFAULT '',
+    harbor_push_robot_id BIGINT NULL,
+    harbor_push_robot_name TEXT NOT NULL DEFAULT '',
+    harbor_push_robot_secret TEXT NOT NULL DEFAULT '',
+    harbor_pull_robot_id BIGINT NULL,
+    harbor_pull_robot_name TEXT NOT NULL DEFAULT '',
+    harbor_pull_robot_secret TEXT NOT NULL DEFAULT '',
+    harbor_synced_at TIMESTAMPTZ NULL,
     authority TEXT NULL,
     contact TEXT NULL,
     default_track TEXT NULL,
@@ -114,6 +123,7 @@ CREATE TABLE IF NOT EXISTS resource_revisions (
     id TEXT PRIMARY KEY,
     resource_id TEXT NOT NULL REFERENCES resource_definitions(id) ON DELETE CASCADE,
     revision INTEGER NOT NULL,
+    package_revision INTEGER NULL,
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',

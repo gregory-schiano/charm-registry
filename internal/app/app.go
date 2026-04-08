@@ -8,6 +8,7 @@ import (
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
+	"github.com/gschiano/charm-registry/internal/harbor"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
 )
@@ -38,7 +39,11 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	svc := service.New(cfg, repository, storage)
+	ociRegistry, err := harbor.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	svc := service.New(cfg, repository, storage, ociRegistry)
 	handler := api.New(cfg, svc, authenticator)
 	return &App{Handler: handler}, nil
 }

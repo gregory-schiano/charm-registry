@@ -49,6 +49,8 @@ func (m *Memory) EnsureAccount(_ context.Context, account core.Account) (core.Ac
 		existing.Email = account.Email
 		existing.DisplayName = account.DisplayName
 		existing.Username = account.Username
+		existing.Validation = account.Validation
+		existing.IsAdmin = account.IsAdmin
 		m.accounts[account.Subject] = existing
 		m.accountsByID[existing.ID] = existing
 		return existing, nil

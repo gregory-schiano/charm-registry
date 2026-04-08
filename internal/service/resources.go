@@ -79,6 +79,11 @@ func (s *Service) PushResource(
 	if err != nil {
 		return "", translateRepoError(err, "upload not found")
 	}
+	if req.PackageRevision != nil {
+		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, *req.PackageRevision); err != nil {
+			return "", translateRepoError(err, "package revision not found")
+		}
+	}
 	payload, err := s.blobs.Get(ctx, upload.ObjectKey)
 	if err != nil {
 		return "", err
@@ -95,25 +100,32 @@ func (s *Service) PushResource(
 	sha512sum := sha512.Sum512(payload)
 	sha3384sum := sha512.Sum384(payload)
 	resourceRevision := core.ResourceRevision{
-		ID:            uuid.NewString(),
-		ResourceID:    resourceDef.ID,
-		Name:          resourceDef.Name,
-		Type:          firstNonEmpty(req.Type, resourceDef.Type),
-		Description:   resourceDef.Description,
-		Filename:      firstNonEmpty(resourceDef.Filename, upload.Filename),
-		Revision:      revisionNumber,
-		CreatedAt:     now,
-		Size:          int64(len(payload)),
-		SHA256:        upload.SHA256,
-		SHA384:        upload.SHA384,
-		SHA512:        hex.EncodeToString(sha512sum[:]),
-		SHA3384:       hex.EncodeToString(sha3384sum[:]),
-		ObjectKey:     upload.ObjectKey,
-		Bases:         req.Bases,
-		Architectures: req.Architectures,
+		ID:              uuid.NewString(),
+		ResourceID:      resourceDef.ID,
+		Name:            resourceDef.Name,
+		Type:            firstNonEmpty(req.Type, resourceDef.Type),
+		Description:     resourceDef.Description,
+		Filename:        firstNonEmpty(resourceDef.Filename, upload.Filename),
+		Revision:        revisionNumber,
+		CreatedAt:       now,
+		Size:            int64(len(payload)),
+		SHA256:          upload.SHA256,
+		SHA384:          upload.SHA384,
+		SHA512:          hex.EncodeToString(sha512sum[:]),
+		SHA3384:         hex.EncodeToString(sha3384sum[:]),
+		ObjectKey:       upload.ObjectKey,
+		Bases:           req.Bases,
+		Architectures:   req.Architectures,
+		PackageRevision: req.PackageRevision,
 	}
 	if resourceRevision.Type == "oci-image" {
-		resourceRevision.OCIImageBlob = string(payload)
+		var descriptor struct {
+			Digest string `json:"Digest"`
+		}
+		if err := json.Unmarshal(payload, &descriptor); err != nil {
+			return "", newError(400, "invalid-request", "invalid OCI image blob payload")
+		}
+		resourceRevision.OCIImageDigest = descriptor.Digest
 		resourceRevision.ObjectKey = ""
 		resourceRevision.Size = int64(len(payload))
 	}
@@ -209,11 +221,22 @@ func (s *Service) OCIImageUploadCredentials(
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
 		return nil, translateRepoError(err, "resource not found")
 	}
-	imageName := registryImageName(s.cfg, charmName, resourceName)
+	pkg, err = s.syncOCIPackage(ctx, pkg)
+	if err != nil {
+		return nil, err
+	}
+	imageName, err := s.oci.ImageReference(pkg, resourceName)
+	if err != nil {
+		return nil, err
+	}
+	username, password, err := s.oci.Credentials(pkg, false)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"image-name": imageName,
-		"username":   s.cfg.RegistryUsername,
-		"password":   s.cfg.RegistryPassword,
+		"username":   username,
+		"password":   password,
 	}, nil
 }
 
@@ -222,14 +245,36 @@ func (s *Service) OCIImageUploadCredentials(
 // The following errors may be returned:
 // - JSON marshaling errors.
 func (s *Service) OCIImageBlob(
-	_ context.Context,
-	_ core.Identity,
+	ctx context.Context,
+	identity core.Identity,
 	charmName, resourceName, digest string,
 ) (string, error) {
+	pkg, err := s.repo.GetPackageByName(ctx, charmName)
+	if err != nil {
+		return "", translateRepoError(err, "package not found")
+	}
+	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
+		return "", err
+	}
+	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
+		return "", translateRepoError(err, "resource not found")
+	}
+	pkg, err = s.syncOCIPackage(ctx, pkg)
+	if err != nil {
+		return "", err
+	}
+	imageName, err := s.oci.ImageReference(pkg, resourceName)
+	if err != nil {
+		return "", err
+	}
+	username, password, err := s.oci.Credentials(pkg, true)
+	if err != nil {
+		return "", err
+	}
 	payload := map[string]any{
-		"ImageName": registryImageName(s.cfg, charmName, resourceName),
-		"Username":  s.cfg.RegistryUsername,
-		"Password":  s.cfg.RegistryPassword,
+		"ImageName": imageName,
+		"Username":  username,
+		"Password":  password,
 		"Digest":    digest,
 	}
 	content, err := json.Marshal(payload)
@@ -262,9 +307,35 @@ func (s *Service) DownloadResource(
 		return nil, translateRepoError(err, "resource revision not found")
 	}
 	if revision.ObjectKey == "" {
-		return []byte(revision.OCIImageBlob), nil
+		pkg, err = s.syncOCIPackage(ctx, pkg)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)), nil
 	}
 	return s.blobs.Get(ctx, revision.ObjectKey)
+}
+
+func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest string) string {
+	imageName, err := s.oci.ImageReference(pkg, resourceName)
+	if err != nil {
+		return ""
+	}
+	username, password, err := s.oci.Credentials(pkg, true)
+	if err != nil {
+		return ""
+	}
+	payload := map[string]any{
+		"ImageName": imageName,
+		"Username":  username,
+		"Password":  password,
+		"Digest":    digest,
+	}
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(content)
 }
 
 func releaseResourcesToDownloads(
@@ -275,11 +346,12 @@ func releaseResourcesToDownloads(
 	out := make([]map[string]any, 0, len(resources))
 	for _, resource := range resources {
 		out = append(out, map[string]any{
-			"name":        resource.Name,
-			"revision":    resource.Revision,
-			"type":        resource.Type,
-			"filename":    resource.Filename,
-			"description": resource.Description,
+			"name":             resource.Name,
+			"revision":         resource.Revision,
+			"type":             resource.Type,
+			"filename":         resource.Filename,
+			"description":      resource.Description,
+			"package-revision": resource.PackageRevision,
 			"download": map[string]any{
 				"url": cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resource.Name + "_" + fmt.Sprintf(
 					"%d",

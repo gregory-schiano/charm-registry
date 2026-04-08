@@ -53,14 +53,15 @@ func (q *Queries) CreateStoreToken(ctx context.Context, arg CreateStoreTokenPara
 }
 
 const ensureAccount = `-- name: EnsureAccount :one
-INSERT INTO accounts (id, subject, username, display_name, email, validation, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO accounts (id, subject, username, display_name, email, validation, is_admin, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (subject) DO UPDATE SET
     username     = EXCLUDED.username,
     display_name = EXCLUDED.display_name,
     email        = EXCLUDED.email,
-    validation   = EXCLUDED.validation
-RETURNING id, subject, username, display_name, email, validation, created_at
+    validation   = EXCLUDED.validation,
+    is_admin     = EXCLUDED.is_admin
+RETURNING id, subject, username, display_name, email, validation, is_admin, created_at
 `
 
 type EnsureAccountParams struct {
@@ -70,6 +71,7 @@ type EnsureAccountParams struct {
 	DisplayName string
 	Email       string
 	Validation  string
+	IsAdmin     bool
 	CreatedAt   time.Time
 }
 
@@ -81,6 +83,7 @@ func (q *Queries) EnsureAccount(ctx context.Context, arg EnsureAccountParams) (A
 		arg.DisplayName,
 		arg.Email,
 		arg.Validation,
+		arg.IsAdmin,
 		arg.CreatedAt,
 	)
 	var i Account
@@ -91,6 +94,7 @@ func (q *Queries) EnsureAccount(ctx context.Context, arg EnsureAccountParams) (A
 		&i.DisplayName,
 		&i.Email,
 		&i.Validation,
+		&i.IsAdmin,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -107,6 +111,7 @@ SELECT
     a.display_name AS acc_display_name,
     a.email       AS acc_email,
     a.validation  AS acc_validation,
+    a.is_admin    AS acc_is_admin,
     a.created_at  AS acc_created_at
 FROM store_tokens t
 JOIN accounts a ON a.id = t.account_id
@@ -131,6 +136,7 @@ type FindStoreTokenByHashRow struct {
 	AccDisplayName string
 	AccEmail       string
 	AccValidation  string
+	AccIsAdmin     bool
 	AccCreatedAt   time.Time
 }
 
@@ -155,13 +161,14 @@ func (q *Queries) FindStoreTokenByHash(ctx context.Context, tokenHash string) (F
 		&i.AccDisplayName,
 		&i.AccEmail,
 		&i.AccValidation,
+		&i.AccIsAdmin,
 		&i.AccCreatedAt,
 	)
 	return i, err
 }
 
 const getAccountByID = `-- name: GetAccountByID :one
-SELECT id, subject, username, display_name, email, validation, created_at
+SELECT id, subject, username, display_name, email, validation, is_admin, created_at
 FROM accounts
 WHERE id = $1
 `
@@ -176,6 +183,7 @@ func (q *Queries) GetAccountByID(ctx context.Context, id string) (Account, error
 		&i.DisplayName,
 		&i.Email,
 		&i.Validation,
+		&i.IsAdmin,
 		&i.CreatedAt,
 	)
 	return i, err
