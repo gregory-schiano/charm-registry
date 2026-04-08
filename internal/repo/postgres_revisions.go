@@ -167,6 +167,40 @@ func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision
 	return scanRevisions(rows)
 }
 
+// ListRevisionsByNumbers is part of the [Repository] interface.
+func (p *Postgres) ListRevisionsByNumbers(
+	ctx context.Context,
+	packageID string,
+	revisions []int,
+) (map[int]core.Revision, error) {
+	if len(revisions) == 0 {
+		return map[int]core.Revision{}, nil
+	}
+	numbers := make([]int32, 0, len(revisions))
+	for _, revision := range revisions {
+		numbers = append(numbers, int32(revision))
+	}
+	rows, err := p.db.Query(ctx, `
+		SELECT id, package_id, revision, version, status, created_at, created_by, size,
+		       sha256, sha384, object_key, metadata_yaml, config_yaml, actions_yaml,
+		       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+		FROM revisions WHERE package_id = $1 AND revision = ANY($2)
+	`, packageID, numbers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := scanRevisions(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]core.Revision, len(items))
+	for _, item := range items {
+		out[item.Revision] = item
+	}
+	return out, nil
+}
+
 // GetRevisionByNumber is part of the [Repository] interface.
 func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
 	rows, err := p.db.Query(ctx, `

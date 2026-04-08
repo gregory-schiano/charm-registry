@@ -3,6 +3,7 @@ package charm
 import (
 	"archive/zip"
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,19 @@ func TestParseArchiveInvalidYAML(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse metadata.yaml")
+}
+
+func TestParseArchiveRejectsOversizedZipEntry(t *testing.T) {
+	t.Parallel()
+
+	archive := buildZip(t, map[string]string{
+		"metadata.yaml": "name: " + strings.Repeat("a", maxArchiveFileSize) + "\n",
+	})
+
+	_, err := ParseArchive(archive)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata.yaml exceeds")
 }
 
 func TestParseArchiveAutoGeneratesOCIResourcesFromContainers(t *testing.T) {

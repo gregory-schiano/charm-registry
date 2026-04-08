@@ -64,6 +64,12 @@ func (p *Postgres) Ping(ctx context.Context) error {
 	return p.pool.Ping(ctx)
 }
 
+// Close releases the PostgreSQL connection pool.
+func (p *Postgres) Close() error {
+	p.pool.Close()
+	return nil
+}
+
 // WithinTransaction is part of the [Repository] interface.
 func (p *Postgres) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})

@@ -165,6 +165,28 @@ func TestIssueAndListTokens(t *testing.T) {
 	assert.GreaterOrEqual(t, len(macaroons), 1)
 }
 
+func TestIssueTokenRateLimitedPerAccount(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	for range 5 {
+		resp := doRequest(t, handler, "POST", "/v1/tokens", map[string]any{
+			"description": "test token",
+			"ttl":         3600,
+		}, "Bearer dev:alice:alice")
+		require.Equal(t, http.StatusOK, resp.Code)
+	}
+
+	resp := doRequest(t, handler, "POST", "/v1/tokens", map[string]any{
+		"description": "too many",
+		"ttl":         3600,
+	}, "Bearer dev:alice:alice")
+
+	assert.Equal(t, http.StatusTooManyRequests, resp.Code)
+	assert.Contains(t, resp.Body.String(), "rate-limit-exceeded")
+}
+
 func TestExchangeToken(t *testing.T) {
 	t.Parallel()
 

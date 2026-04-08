@@ -372,6 +372,30 @@ func (m *Memory) ListRevisions(_ context.Context, packageID string, revision *in
 	return nil, ErrNotFound
 }
 
+// ListRevisionsByNumbers is part of the [Repository] interface.
+func (m *Memory) ListRevisionsByNumbers(
+	_ context.Context,
+	packageID string,
+	revisions []int,
+) (map[int]core.Revision, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[int]core.Revision, len(revisions))
+	if len(revisions) == 0 {
+		return out, nil
+	}
+	wanted := make(map[int]struct{}, len(revisions))
+	for _, revision := range revisions {
+		wanted[revision] = struct{}{}
+	}
+	for _, item := range m.revisions[packageID] {
+		if _, ok := wanted[item.Revision]; ok {
+			out[item.Revision] = item
+		}
+	}
+	return out, nil
+}
+
 // GetRevisionByNumber is part of the [Repository] interface.
 func (m *Memory) GetRevisionByNumber(_ context.Context, packageID string, revision int) (core.Revision, error) {
 	m.mu.RLock()

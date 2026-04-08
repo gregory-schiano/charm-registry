@@ -263,21 +263,7 @@ func (s *Service) OCIImageBlob(
 	if err != nil {
 		return "", err
 	}
-	imageName, err := s.oci.ImageReference(pkg, resourceName)
-	if err != nil {
-		return "", err
-	}
-	username, password, err := s.oci.Credentials(pkg, true)
-	if err != nil {
-		return "", err
-	}
-	payload := map[string]any{
-		"ImageName": imageName,
-		"Username":  username,
-		"Password":  password,
-		"Digest":    digest,
-	}
-	content, err := json.Marshal(payload)
+	content, err := s.renderOCIImageBlob(pkg, resourceName, digest)
 	return string(content), err
 }
 
@@ -311,19 +297,19 @@ func (s *Service) DownloadResource(
 		if err != nil {
 			return nil, err
 		}
-		return []byte(s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)), nil
+		return s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)
 	}
 	return s.blobs.Get(ctx, revision.ObjectKey)
 }
 
-func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest string) string {
+func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest string) ([]byte, error) {
 	imageName, err := s.oci.ImageReference(pkg, resourceName)
 	if err != nil {
-		return ""
+		return nil, err
 	}
 	username, password, err := s.oci.Credentials(pkg, true)
 	if err != nil {
-		return ""
+		return nil, err
 	}
 	payload := map[string]any{
 		"ImageName": imageName,
@@ -331,11 +317,7 @@ func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest stri
 		"Password":  password,
 		"Digest":    digest,
 	}
-	content, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return string(content)
+	return json.Marshal(payload)
 }
 
 func releaseResourcesToDownloads(

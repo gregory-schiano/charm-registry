@@ -119,13 +119,11 @@ func (s *Service) ListReleases(ctx context.Context, identity core.Identity, char
 		return nil, err
 	}
 	channelMap := make([]map[string]any, 0, len(releases))
-	revisionsMap := map[int]core.Revision{}
+	revisionsMap, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, uniqueRevisionNumbers(releases))
+	if err != nil {
+		return nil, err
+	}
 	for _, release := range releases {
-		rev, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-		if err != nil {
-			return nil, err
-		}
-		revisionsMap[rev.Revision] = rev
 		channelMap = append(channelMap, map[string]any{
 			"base":            release.Base,
 			"channel":         release.Channel,

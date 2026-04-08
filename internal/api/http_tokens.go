@@ -115,6 +115,10 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, invalidRequestError(err))
 		return
 	}
+	if identity.Authenticated && !a.tokenLimiter.Allow(identity.Account.ID) {
+		writeError(w, r, apiErrorf(http.StatusTooManyRequests, "rate-limit-exceeded", "too many token issuances"))
+		return
+	}
 	raw, _, err := a.svc.IssueStoreToken(r.Context(), identity, req)
 	if err != nil {
 		writeError(w, r, err)

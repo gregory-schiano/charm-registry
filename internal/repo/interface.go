@@ -38,6 +38,7 @@ type Repository interface {
 
 	CreateRevision(ctx context.Context, revision core.Revision) error
 	ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error)
+	ListRevisionsByNumbers(ctx context.Context, packageID string, revisions []int) (map[int]core.Revision, error)
 	GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error)
 	GetLatestRevision(ctx context.Context, packageID string) (core.Revision, error)
 

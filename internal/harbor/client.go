@@ -29,6 +29,7 @@ var invalidNamePattern = regexp.MustCompile(`[^a-z0-9-]+`)
 
 type Client struct {
 	http            *http.Client
+	transport       *http.Transport
 	requestTimeout  time.Duration
 	apiURL          string
 	publicRegistry  string
@@ -57,12 +58,12 @@ func New(cfg config.Config) (*Client, error) {
 		}
 		tlsConfig.RootCAs = rootCAs
 	}
+	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	return &Client{
 		http: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
+			Transport: transport,
 		},
+		transport:       transport,
 		requestTimeout:  15 * time.Second,
 		apiURL:          cfg.HarborAPIURL,
 		publicRegistry:  cfg.PublicRegistryURL,
@@ -73,6 +74,14 @@ func New(cfg config.Config) (*Client, error) {
 		pushRobotPrefix: cfg.HarborPushRobotPrefix,
 		secretKey:       deriveKey(cfg.HarborSecretKey),
 	}, nil
+}
+
+// Close releases idle HTTP connections held by the Harbor client transport.
+func (c *Client) Close() error {
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
+	return nil
 }
 
 func (c *Client) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {

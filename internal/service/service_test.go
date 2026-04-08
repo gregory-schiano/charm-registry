@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"testing"
@@ -1056,6 +1057,39 @@ func TestDownloadResource(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("debug: true\n"), payload)
+}
+
+func TestDownloadResourceReturnsOCIError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
+		testOCIRegistry: testOCIRegistry{},
+		credentialsErr:  errors.New("boom"),
+	})
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID, Type: "oci-image",
+	})
+	require.NoError(t, err)
+
+	pkg, err := svc.GetPackage(ctx, owner, "my-charm", true)
+	require.NoError(t, err)
+
+	_, err = svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
 }
 
 func TestDownloadResourceNotFound(t *testing.T) {

@@ -112,49 +112,87 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 func TestEnvBoolInvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_BOOL", "not-a-bool")
 
-	assert.True(t, envBool("TEST_BOOL", true))
-	assert.False(t, envBool("TEST_BOOL", false))
+	_, err := envBool("TEST_BOOL", true)
+	require.Error(t, err)
 }
 
 func TestEnvBoolValid(t *testing.T) {
 	t.Setenv("TEST_BOOL_T", "true")
 	t.Setenv("TEST_BOOL_F", "false")
 
-	assert.True(t, envBool("TEST_BOOL_T", false))
-	assert.False(t, envBool("TEST_BOOL_F", true))
+	valueTrue, err := envBool("TEST_BOOL_T", false)
+	require.NoError(t, err)
+	assert.True(t, valueTrue)
+	valueFalse, err := envBool("TEST_BOOL_F", true)
+	require.NoError(t, err)
+	assert.False(t, valueFalse)
 }
 
 func TestEnvIntInvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_INT", "not-a-number")
-	assert.Equal(t, 42, envInt("TEST_INT", 42))
+	_, err := envInt("TEST_INT", 42)
+	require.Error(t, err)
 }
 
 func TestEnvInt64InvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_INT64", "not-a-number")
-	assert.Equal(t, int64(42), envInt64("TEST_INT64", 42))
+	_, err := envInt64("TEST_INT64", 42)
+	require.Error(t, err)
 }
 
 func TestEnvDurationInvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_DUR", "not-a-duration")
-	assert.Equal(t, 10*time.Second, envDuration("TEST_DUR", 10*time.Second))
+	_, err := envDuration("TEST_DUR", 10*time.Second)
+	require.Error(t, err)
 }
 
 func TestEnvMissingKeyFallsBack(t *testing.T) {
 	assert.Equal(t, "fallback", env("NONEXISTENT_KEY_XYZZY_12345", "fallback"))
-	assert.True(t, envBool("NONEXISTENT_KEY_XYZZY_12345", true))
-	assert.Equal(t, 99, envInt("NONEXISTENT_KEY_XYZZY_12345", 99))
-	assert.Equal(t, int64(99), envInt64("NONEXISTENT_KEY_XYZZY_12345", 99))
-	assert.Equal(t, 5*time.Second, envDuration("NONEXISTENT_KEY_XYZZY_12345", 5*time.Second))
+	boolValue, err := envBool("NONEXISTENT_KEY_XYZZY_12345", true)
+	require.NoError(t, err)
+	assert.True(t, boolValue)
+	intValue, err := envInt("NONEXISTENT_KEY_XYZZY_12345", 99)
+	require.NoError(t, err)
+	assert.Equal(t, 99, intValue)
+	int64Value, err := envInt64("NONEXISTENT_KEY_XYZZY_12345", 99)
+	require.NoError(t, err)
+	assert.Equal(t, int64(99), int64Value)
+	durationValue, err := envDuration("NONEXISTENT_KEY_XYZZY_12345", 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, durationValue)
 }
 
 func TestEnvEmptyValueFallsBack(t *testing.T) {
 	t.Setenv("EMPTY_VAL", "")
 
 	assert.Equal(t, "fallback", env("EMPTY_VAL", "fallback"))
-	assert.True(t, envBool("EMPTY_VAL", true))
-	assert.Equal(t, 7, envInt("EMPTY_VAL", 7))
-	assert.Equal(t, int64(7), envInt64("EMPTY_VAL", 7))
-	assert.Equal(t, 3*time.Second, envDuration("EMPTY_VAL", 3*time.Second))
+	boolValue, err := envBool("EMPTY_VAL", true)
+	require.NoError(t, err)
+	assert.True(t, boolValue)
+	intValue, err := envInt("EMPTY_VAL", 7)
+	require.NoError(t, err)
+	assert.Equal(t, 7, intValue)
+	int64Value, err := envInt64("EMPTY_VAL", 7)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), int64Value)
+	durationValue, err := envDuration("EMPTY_VAL", 3*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Second, durationValue)
+}
+
+func TestLoadRejectsInvalidConfiguredValues(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
+	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "abc")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CHARM_REGISTRY_MAX_UPLOAD_BYTES")
 }
 
 func TestLoadTrimsHarborPrefixes(t *testing.T) {

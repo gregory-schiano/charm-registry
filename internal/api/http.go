@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -23,17 +25,24 @@ import (
 
 // API is the HTTP handler for the registry.
 type API struct {
-	cfg  config.Config
-	svc  *service.Service
-	auth *auth.Authenticator
+	cfg          config.Config
+	svc          *service.Service
+	auth         *auth.Authenticator
+	tokenLimiter *tokenIssueLimiter
 }
 
 // New builds the HTTP handler for the registry API.
 func New(cfg config.Config, svc *service.Service, authenticator *auth.Authenticator) http.Handler {
-	api := &API{cfg: cfg, svc: svc, auth: authenticator}
+	api := &API{
+		cfg:          cfg,
+		svc:          svc,
+		auth:         authenticator,
+		tokenLimiter: newTokenIssueLimiter(5, time.Minute),
+	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
 	router.Use(chimiddleware.RealIP)
+	router.Use(api.logRequests)
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
 
@@ -83,6 +92,46 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	return router
 }
 
+type tokenIssueLimiter struct {
+	mu      sync.Mutex
+	entries map[string][]time.Time
+	limit   int
+	window  time.Duration
+	now     func() time.Time
+}
+
+func newTokenIssueLimiter(limit int, window time.Duration) *tokenIssueLimiter {
+	return &tokenIssueLimiter{
+		entries: make(map[string][]time.Time),
+		limit:   limit,
+		window:  window,
+		now:     time.Now,
+	}
+}
+
+func (l *tokenIssueLimiter) Allow(key string) bool {
+	if l == nil || key == "" {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	cutoff := now.Add(-l.window)
+	timestamps := l.entries[key][:0]
+	for _, ts := range l.entries[key] {
+		if ts.After(cutoff) {
+			timestamps = append(timestamps, ts)
+		}
+	}
+	if len(timestamps) >= l.limit {
+		l.entries[key] = timestamps
+		return false
+	}
+	l.entries[key] = append(timestamps, now)
+	return true
+}
+
 func (a *API) identity(r *http.Request) (core.Identity, error) {
 	claims, token, err := a.auth.Authenticate(r)
 	if err != nil {
@@ -99,6 +148,23 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *API) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := chimiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		slog.InfoContext(r.Context(), "http request",
+			"request_id", chimiddleware.GetReqID(r.Context()),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.Status(),
+			"bytes", ww.BytesWritten(),
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote_addr", r.RemoteAddr,
+		)
 	})
 }
 

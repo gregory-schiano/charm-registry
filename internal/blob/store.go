@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -62,10 +63,11 @@ type s3API interface {
 }
 
 type S3Store struct {
-	client s3API
-	bucket string
-	region string
-	isS3   bool
+	client    s3API
+	bucket    string
+	region    string
+	isS3      bool
+	transport *http.Transport
 }
 
 // newS3StoreWithClient constructs an [S3Store] from an already-initialised client.
@@ -86,8 +88,11 @@ func newS3StoreWithClient(client s3API, bucket, region string, isS3 bool) *S3Sto
 // - Errors from loading the AWS SDK configuration.
 // - Errors from checking or creating the configured bucket.
 func NewS3Store(ctx context.Context, cfg config.Config) (*S3Store, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	httpClient := &http.Client{Transport: transport}
 	loadOptions := []func(*awscfg.LoadOptions) error{
 		awscfg.WithRegion(cfg.S3Region),
+		awscfg.WithHTTPClient(httpClient),
 	}
 	if cfg.S3AccessKeyID != "" || cfg.S3SecretAccessKey != "" {
 		loadOptions = append(loadOptions, awscfg.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
@@ -108,6 +113,7 @@ func NewS3Store(ctx context.Context, cfg config.Config) (*S3Store, error) {
 	})
 
 	store := newS3StoreWithClient(client, cfg.S3Bucket, cfg.S3Region, cfg.S3Endpoint == "")
+	store.transport = transport
 	if err := store.ensureBucket(ctx); err != nil {
 		return nil, err
 	}
@@ -168,6 +174,14 @@ func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+// Close releases idle HTTP connections held by the S3 client transport.
+func (s *S3Store) Close() error {
+	if s.transport != nil {
+		s.transport.CloseIdleConnections()
+	}
+	return nil
 }
 
 func s3BaseEndpoint(endpoint string, disableTLS bool) string {

@@ -28,6 +28,11 @@ func main() {
 		slog.Error("build application", "error", err)
 		os.Exit(1)
 	}
+	defer func() {
+		if err := application.Close(); err != nil {
+			slog.Error("close application", "error", err)
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,

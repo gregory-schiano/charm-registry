@@ -13,6 +13,8 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
+const maxArchiveFileSize = 10 << 20
+
 // ParseArchive extracts charm metadata from a charm archive payload.
 //
 // The following errors may be returned:
@@ -119,5 +121,13 @@ func readZipFile(file *zip.File) ([]byte, error) {
 		return nil, fmt.Errorf("open %s: %w", file.Name, err)
 	}
 	defer reader.Close()
-	return io.ReadAll(reader)
+	limited := io.LimitReader(reader, maxArchiveFileSize+1)
+	payload, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", file.Name, err)
+	}
+	if len(payload) > maxArchiveFileSize {
+		return nil, fmt.Errorf("%s exceeds %d bytes", file.Name, maxArchiveFileSize)
+	}
+	return payload, nil
 }

@@ -250,19 +250,20 @@ func (s *Service) Info(ctx context.Context, identity core.Identity, charmName st
 	if err != nil {
 		return nil, err
 	}
-	// Cache loaded revisions so we don't re-fetch the same revision number for
-	// multiple channel-map entries (e.g. when the same revision is released to
-	// several channels).
-	revisionCache := map[int]core.Revision{defaultRelease.Revision: defaultRevision}
+	revisionNumbers := uniqueRevisionNumbers(releases)
+	if len(revisionNumbers) == 0 {
+		revisionNumbers = append(revisionNumbers, defaultRelease.Revision)
+	}
+	revisionCache, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, revisionNumbers)
+	if err != nil {
+		return nil, err
+	}
+	revisionCache[defaultRelease.Revision] = defaultRevision
 	channelMap := make([]map[string]any, 0, len(releases))
 	for _, release := range releases {
 		rev, ok := revisionCache[release.Revision]
 		if !ok {
-			rev, err = s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-			if err != nil {
-				continue
-			}
-			revisionCache[release.Revision] = rev
+			continue
 		}
 		chInfo := splitChannel(release.Channel)
 		channelMap = append(channelMap, map[string]any{
@@ -389,4 +390,17 @@ func (s *Service) enrichPackage(ctx context.Context, pkg core.Package) (core.Pac
 	pkg.Tracks = tracks
 	pkg.Store = s.cfg.PublicAPIURL + "/charms/" + pkg.Name
 	return pkg, nil
+}
+
+func uniqueRevisionNumbers(releases []core.Release) []int {
+	seen := make(map[int]struct{}, len(releases))
+	out := make([]int, 0, len(releases))
+	for _, release := range releases {
+		if _, ok := seen[release.Revision]; ok {
+			continue
+		}
+		seen[release.Revision] = struct{}{}
+		out = append(out, release.Revision)
+	}
+	return out
 }
