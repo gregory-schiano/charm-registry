@@ -276,7 +276,7 @@ func (s *Service) resolveReleaseAndRevision(
 	pkg core.Package,
 	action RefreshAction,
 ) (core.Release, core.Revision, string, string, error) {
-	channel := channelOrDefault(action.Channel)
+	channel := normalizeChannel(channelOrDefault(action.Channel))
 	redirect := channel
 
 	if action.Revision != nil && *action.Revision > 0 {
@@ -415,6 +415,16 @@ func splitChannel(channel string) channelParts {
 		return channelParts{track: "latest", risk: parts[0]}
 	}
 	return channelParts{track: parts[0], risk: parts[1]}
+}
+
+// normalizeChannel expands a bare risk name (e.g. "stable") to its fully
+// qualified form ("latest/stable"). Fully-qualified channels ("2.0/stable")
+// are returned unchanged. An empty string is returned as-is.
+func normalizeChannel(channel string) string {
+	if channel == "" || strings.Contains(channel, "/") {
+		return channel
+	}
+	return "latest/" + channel
 }
 
 func packageChannels(tracks []core.Track) []map[string]any {

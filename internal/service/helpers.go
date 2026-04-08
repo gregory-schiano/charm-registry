@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -153,25 +152,14 @@ func registryImageName(cfg config.Config, charmName, resourceName string) string
 
 func extractBases(manifest core.CharmManifest) []core.Base {
 	var bases []core.Base
-	type manifestBase struct {
-		Architectures []string `yaml:"architectures"`
-		Architecture  string   `yaml:"architecture"`
-		Channel       string   `yaml:"channel"`
-		Name          string   `yaml:"name"`
-	}
-	var raw struct {
-		Bases []manifestBase `yaml:"bases"`
-	}
-	payload, _ := json.Marshal(manifest)
-	_ = json.Unmarshal(payload, &raw)
-	if len(raw.Bases) > 0 {
-		for _, base := range raw.Bases {
-			if len(base.Architectures) > 0 {
-				for _, arch := range base.Architectures {
-					bases = append(bases, core.Base{Name: base.Name, Channel: base.Channel, Architecture: arch})
-				}
-				continue
+	for _, base := range manifest.Bases {
+		if len(base.Architectures) > 0 {
+			for _, arch := range base.Architectures {
+				bases = append(bases, core.Base{Name: base.Name, Channel: base.Channel, Architecture: arch})
 			}
+			continue
+		}
+		if base.Architecture != "" {
 			bases = append(bases, core.Base{Name: base.Name, Channel: base.Channel, Architecture: base.Architecture})
 		}
 	}

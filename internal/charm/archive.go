@@ -35,6 +35,8 @@ func ParseArchive(payload []byte) (core.CharmArchive, error) {
 		switch {
 		case strings.EqualFold(name, "metadata.yaml"):
 			archive.MetadataYAML = string(content)
+		case strings.EqualFold(name, "manifest.yaml"):
+			archive.ManifestYAML = string(content)
 		case strings.EqualFold(name, "config.yaml"):
 			archive.ConfigYAML = string(content)
 		case strings.EqualFold(name, "actions.yaml"):
@@ -51,6 +53,17 @@ func ParseArchive(payload []byte) (core.CharmArchive, error) {
 	}
 	if err := yaml.Unmarshal([]byte(archive.MetadataYAML), &archive.Manifest); err != nil {
 		return core.CharmArchive{}, fmt.Errorf("parse metadata.yaml: %w", err)
+	}
+	// manifest.yaml holds the bases/platforms for the charm (separate from
+	// metadata.yaml).  Parse it after metadata so it always wins over any
+	// stale "bases" key that may appear in older metadata.yaml files.
+	if archive.ManifestYAML != "" {
+		var m struct {
+			Bases []core.CharmBase `yaml:"bases"`
+		}
+		if err := yaml.Unmarshal([]byte(archive.ManifestYAML), &m); err == nil {
+			archive.Manifest.Bases = m.Bases
+		}
 	}
 	populateContainerResources(&archive.Manifest)
 	return archive, nil

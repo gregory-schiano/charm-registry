@@ -203,6 +203,7 @@ type Identity struct {
 
 type CharmArchive struct {
 	MetadataYAML string
+	ManifestYAML string
 	ConfigYAML   string
 	ActionsYAML  string
 	BundleYAML   string
@@ -210,9 +211,16 @@ type CharmArchive struct {
 	Manifest     CharmManifest
 }
 
+type CharmBase struct {
+	Name          string   `yaml:"name"`
+	Channel       string   `yaml:"channel"`
+	Architecture  string   `yaml:"architecture"`
+	Architectures []string `yaml:"architectures"`
+}
+
 type CharmManifest struct {
 	Name        string
-	DisplayName string `yaml:"display-name"`
+	DisplayName string      `yaml:"display-name"`
 	Summary     string
 	Description string
 	Docs        string
@@ -220,6 +228,7 @@ type CharmManifest struct {
 	Source      string
 	Website     any
 	Subordinate bool
+	Bases       []CharmBase `yaml:"bases"`
 	Resources   map[string]CharmResourceDeclaration
 	Containers  map[string]CharmContainer
 	Provides    map[string]Relation
