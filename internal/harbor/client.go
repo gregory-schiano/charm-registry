@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,7 @@ var invalidNamePattern = regexp.MustCompile(`[^a-z0-9-]+`)
 
 type Client struct {
 	http            *http.Client
+	requestTimeout  time.Duration
 	apiURL          string
 	publicRegistry  string
 	adminUsername   string
@@ -57,11 +59,11 @@ func New(cfg config.Config) (*Client, error) {
 	}
 	return &Client{
 		http: &http.Client{
-			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
 			},
 		},
+		requestTimeout:  15 * time.Second,
 		apiURL:          cfg.HarborAPIURL,
 		publicRegistry:  cfg.PublicRegistryURL,
 		adminUsername:   cfg.HarborAdminUsername,
@@ -238,6 +240,11 @@ func (e *apiError) Error() string {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, out ...any) error {
+	if c.requestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.requestTimeout)
+		defer cancel()
+	}
 	var body io.Reader
 	if reqBody != nil {
 		payload, err := json.Marshal(reqBody)
@@ -342,10 +349,5 @@ func (c *Client) decrypt(encrypted string) (string, error) {
 }
 
 func errorAs(err error, target **apiError) bool {
-	apiErr, ok := err.(*apiError)
-	if !ok {
-		return false
-	}
-	*target = apiErr
-	return true
+	return errors.As(err, target)
 }

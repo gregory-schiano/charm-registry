@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -96,7 +97,7 @@ func NewS3Store(ctx context.Context, cfg config.Config) (*S3Store, error) {
 		)))
 	}
 	if cfg.S3Endpoint != "" {
-		loadOptions = append(loadOptions, awscfg.WithBaseEndpoint(cfg.S3Endpoint))
+		loadOptions = append(loadOptions, awscfg.WithBaseEndpoint(s3BaseEndpoint(cfg.S3Endpoint, cfg.S3DisableTLS)))
 	}
 	awsConfig, err := awscfg.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
@@ -167,4 +168,28 @@ func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+func s3BaseEndpoint(endpoint string, disableTLS bool) string {
+	if endpoint == "" {
+		return ""
+	}
+	if !strings.Contains(endpoint, "://") {
+		if disableTLS {
+			return "http://" + endpoint
+		}
+		return "https://" + endpoint
+	}
+	if !disableTLS {
+		return endpoint
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	if parsed.Scheme == "" {
+		return "http://" + endpoint
+	}
+	parsed.Scheme = "http"
+	return parsed.String()
 }

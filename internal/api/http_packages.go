@@ -11,7 +11,7 @@ import (
 func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req struct {
@@ -20,7 +20,7 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 		Type    string `json:"type"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	private := false
@@ -29,7 +29,7 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	pkg, err := a.svc.RegisterPackage(r.Context(), identity, req.Name, req.Type, private)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": pkg.ID})
@@ -38,7 +38,7 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	packages, err := a.svc.ListRegisteredPackages(
@@ -47,7 +47,7 @@ func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("include-collaborations") == "true",
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	results := make([]map[string]any, 0, len(packages))
@@ -60,12 +60,12 @@ func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	pkg, err := a.svc.GetPackage(r.Context(), identity, chi.URLParam(r, "name"), true)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
@@ -74,17 +74,17 @@ func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var patch service.MetadataPatch
 	if err := a.decodeJSON(w, r, &patch); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	pkg, err := a.svc.UpdatePackage(r.Context(), identity, chi.URLParam(r, "name"), patch)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
@@ -93,12 +93,12 @@ func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	packageID, err := a.svc.UnregisterPackage(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"package-id": packageID})

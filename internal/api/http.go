@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -38,6 +38,8 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Use(api.securityHeaders)
 
 	router.Get("/", api.handleRoot)
+	router.Get("/healthz", api.handleHealthz)
+	router.Get("/readyz", api.handleReadyz)
 	router.Get("/openapi.yaml", api.handleOpenAPI)
 	router.Get("/docs", api.handleDocs)
 
@@ -84,9 +86,7 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 func (a *API) identity(r *http.Request) (core.Identity, error) {
 	claims, token, err := a.auth.Authenticate(r)
 	if err != nil {
-		// Use a static message — the internal error detail (e.g. JWT parse
-		// errors, OIDC provider messages) must not be forwarded to clients.
-		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	return a.svc.ResolveIdentity(r.Context(), claims, token)
 }
@@ -130,13 +130,23 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func writeError(w http.ResponseWriter, err error) {
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if err == nil {
+		return
+	}
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		writeJSON(w, apiErr.Status, map[string]any{
+			"error-list": []map[string]any{{
+				"code":    apiErr.Code,
+				"message": apiErr.Message,
+			}},
+		})
 		return
 	}
 	var serviceErr *service.Error
 	if errors.As(err, &serviceErr) {
-		writeJSON(w, serviceErr.Status, map[string]any{
+		writeJSON(w, serviceErrorStatus(serviceErr), map[string]any{
 			"error-list": []map[string]any{{
 				"code":    serviceErr.Code,
 				"message": serviceErr.Message,
@@ -150,22 +160,58 @@ func writeError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
-	log.Printf("internal error: %v", err)
+	slog.ErrorContext(r.Context(), "internal error",
+		"request_id", chimiddleware.GetReqID(r.Context()),
+		"error", err,
+	)
 	writeJSON(w, http.StatusInternalServerError, map[string]any{
 		"error-list": []map[string]any{{"code": "internal-error", "message": "internal server error"}},
 	})
 }
 
+type apiError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+func apiErrorf(status int, code, message string) error {
+	return &apiError{Status: status, Code: code, Message: message}
+}
+
 func serviceError(status int, code, message string) error {
-	return &service.Error{Status: status, Code: code, Message: message}
+	return apiErrorf(status, code, message)
 }
 
 func invalidRequestError(err error) error {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return err
+	}
 	var serviceErr *service.Error
 	if errors.As(err, &serviceErr) {
 		return err
 	}
 	return serviceError(http.StatusBadRequest, "invalid-request", err.Error())
+}
+
+func serviceErrorStatus(err *service.Error) int {
+	switch err.Kind {
+	case service.ErrorKindUnauthorized:
+		return http.StatusUnauthorized
+	case service.ErrorKindForbidden:
+		return http.StatusForbidden
+	case service.ErrorKindNotFound:
+		return http.StatusNotFound
+	case service.ErrorKindConflict:
+		return http.StatusConflict
+	default:
+		return http.StatusBadRequest
+	}
 }
 
 func packageMetadata(pkg core.Package) map[string]any {

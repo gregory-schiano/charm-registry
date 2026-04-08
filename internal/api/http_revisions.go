@@ -13,21 +13,21 @@ import (
 func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var revision *int
 	if raw := r.URL.Query().Get("revision"); raw != "" {
 		value, parseErr := strconv.Atoi(raw)
 		if parseErr != nil {
-			writeError(w, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+			writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 			return
 		}
 		revision = &value
 	}
 	revisions, err := a.svc.ListRevisions(r.Context(), identity, chi.URLParam(r, "name"), revision)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(revisions))
@@ -50,17 +50,17 @@ func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req service.PushRevisionRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	statusURL, err := a.svc.PushRevision(r.Context(), identity, chi.URLParam(r, "name"), req)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status-url": statusURL})
@@ -69,12 +69,12 @@ func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.ReviewUpload(r.Context(), identity, chi.URLParam(r, "name"), r.URL.Query().Get("upload-id"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -83,11 +83,11 @@ func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	if err := a.svc.AuthorizeUpload(identity); err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadBytes)
@@ -118,17 +118,17 @@ func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleCharmDownload(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	packageID, revision, parseErr := parseCharmDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
-		writeError(w, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+		writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
 	payload, err := a.svc.DownloadCharm(r.Context(), identity, packageID, revision)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="artifact.charm"`)

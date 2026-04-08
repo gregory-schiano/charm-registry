@@ -17,7 +17,7 @@ import (
 
 func (s *Service) requireAuth(identity core.Identity) error {
 	if !identity.Authenticated {
-		return newError(401, "unauthorized", "authentication required")
+		return newError(ErrorKindUnauthorized, "unauthorized", "authentication required")
 	}
 	return nil
 }
@@ -37,7 +37,7 @@ func (s *Service) requirePermission(identity core.Identity, permission string) e
 			return nil
 		}
 	}
-	return newError(403, "forbidden", "token does not grant required permission")
+	return newError(ErrorKindForbidden, "forbidden", "token does not grant required permission")
 }
 
 func (s *Service) requirePermissionOrAnonymous(identity core.Identity, permission string) error {
@@ -73,10 +73,10 @@ func (s *Service) requirePackageView(
 		return err
 	}
 	if !allowed {
-		return newError(403, "forbidden", "package is private")
+		return newError(ErrorKindForbidden, "forbidden", "package is private")
 	}
 	if identity.Token != nil && len(identity.Token.Packages) > 0 && !tokenAllowsPackage(identity.Token, pkg) {
-		return newError(403, "forbidden", "token does not allow this package")
+		return newError(ErrorKindForbidden, "forbidden", "token does not allow this package")
 	}
 	if requireTokenPermission {
 		return s.requirePermission(identity, permPackageView)
@@ -101,10 +101,10 @@ func (s *Service) requirePackageManage(
 		return err
 	}
 	if !allowed {
-		return newError(403, "forbidden", "package management is not allowed")
+		return newError(ErrorKindForbidden, "forbidden", "package management is not allowed")
 	}
 	if identity.Token != nil && len(identity.Token.Packages) > 0 && !tokenAllowsPackage(identity.Token, pkg) {
-		return newError(403, "forbidden", "token does not allow this package")
+		return newError(ErrorKindForbidden, "forbidden", "token does not allow this package")
 	}
 	return nil
 }
@@ -118,7 +118,7 @@ func (s *Service) enforceChannelRestriction(identity core.Identity, channel stri
 			return nil
 		}
 	}
-	return newError(403, "forbidden", "token does not allow this channel")
+	return newError(ErrorKindForbidden, "forbidden", "token does not allow this channel")
 }
 
 func (s *Service) canSeePackage(ctx context.Context, identity core.Identity, pkg core.Package) bool {
@@ -275,11 +275,9 @@ func translateRepoError(err error, message string) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, repo.ErrNotFound):
-		return newError(404, "not-found", message)
+		return newError(ErrorKindNotFound, "not-found", message)
 	case errors.Is(err, repo.ErrConflict):
-		// HTTP 409 with the Charmhub-specified error code for duplicate
-		// registration.
-		return newError(409, "already-registered", message)
+		return newError(ErrorKindConflict, "already-registered", message)
 	default:
 		return err
 	}

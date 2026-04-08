@@ -2,6 +2,7 @@ package repo
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/gschiano/charm-registry/internal/core"
 )
@@ -27,26 +28,32 @@ func scanToken(row interface{ Scan(dest ...any) error }) (core.StoreToken, error
 	if err != nil {
 		return core.StoreToken{}, err
 	}
-	unmarshalJSON(packagesJSON, &token.Packages)
-	unmarshalJSON(channelsJSON, &token.Channels)
-	unmarshalJSON(permissionsJSON, &token.Permissions)
+	if err := unmarshalJSON(packagesJSON, &token.Packages); err != nil {
+		return core.StoreToken{}, fmt.Errorf("unmarshal token packages: %w", err)
+	}
+	if err := unmarshalJSON(channelsJSON, &token.Channels); err != nil {
+		return core.StoreToken{}, fmt.Errorf("unmarshal token channels: %w", err)
+	}
+	if err := unmarshalJSON(permissionsJSON, &token.Permissions); err != nil {
+		return core.StoreToken{}, fmt.Errorf("unmarshal token permissions: %w", err)
+	}
 	return token, nil
 }
 
-func mustJSON(value any) []byte {
+func marshalJSON(value any) ([]byte, error) {
 	if value == nil {
-		return []byte("null")
+		return []byte("null"), nil
 	}
 	payload, err := json.Marshal(value)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return payload
+	return payload, nil
 }
 
-func unmarshalJSON(payload []byte, target any) {
+func unmarshalJSON(payload []byte, target any) error {
 	if len(payload) == 0 || string(payload) == "null" {
-		return
+		return nil
 	}
-	_ = json.Unmarshal(payload, target)
+	return json.Unmarshal(payload, target)
 }

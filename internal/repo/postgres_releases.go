@@ -11,7 +11,15 @@ import (
 
 // ReplaceRelease is part of the [Repository] interface.
 func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release core.Release) error {
-	_, err := p.pool.Exec(
+	baseJSON, err := marshalJSON(release.Base)
+	if err != nil {
+		return err
+	}
+	resourcesJSON, err := marshalJSON(release.Resources)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(
 		ctx,
 		`
 		INSERT INTO releases (id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive)
@@ -28,8 +36,8 @@ func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release
 		packageID,
 		release.Channel,
 		release.Revision,
-		mustJSON(release.Base),
-		mustJSON(release.Resources),
+		baseJSON,
+		resourcesJSON,
 		release.When,
 		release.ExpirationDate,
 		release.Progressive,
@@ -39,7 +47,7 @@ func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release
 
 // ListReleases is part of the [Repository] interface.
 func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
-	rows, err := p.pool.Query(ctx, `
+	rows, err := p.db.Query(ctx, `
 		SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
 		FROM releases WHERE package_id = $1 ORDER BY channel ASC
 	`, packageID)
@@ -60,7 +68,7 @@ func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.R
 
 // ResolveRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
 		FROM releases WHERE package_id = $1 AND channel = $2
 	`, packageID, channel)
@@ -73,7 +81,7 @@ func (p *Postgres) ResolveRelease(ctx context.Context, packageID string, channel
 
 // ResolveDefaultRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT
 			r.id, r.package_id, r.channel, r.revision, r.base, r.resources,
 			r.when_created, r.expiration_date, r.progressive
@@ -87,7 +95,7 @@ func (p *Postgres) ResolveDefaultRelease(ctx context.Context, packageID string) 
 	`, packageID)
 	release, err := scanRelease(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		rows, err := p.pool.Query(ctx, `
+		rows, err := p.db.Query(ctx, `
 			SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
 			FROM releases WHERE package_id = $1 ORDER BY when_created DESC LIMIT 1
 		`, packageID)
@@ -123,9 +131,13 @@ func scanRelease(row interface{ Scan(dest ...any) error }) (core.Release, error)
 	}
 	if string(baseJSON) != "null" && len(baseJSON) != 0 {
 		var base core.Base
-		unmarshalJSON(baseJSON, &base)
+		if err := unmarshalJSON(baseJSON, &base); err != nil {
+			return core.Release{}, err
+		}
 		release.Base = &base
 	}
-	unmarshalJSON(resourcesJSON, &release.Resources)
+	if err := unmarshalJSON(resourcesJSON, &release.Resources); err != nil {
+		return core.Release{}, err
+	}
 	return release, nil
 }

@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -15,14 +16,17 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		slog.Error("load config", "error", err)
+		os.Exit(1)
 	}
 	application, err := app.New(ctx, cfg)
 	if err != nil {
-		log.Fatalf("build application: %v", err)
+		slog.Error("build application", "error", err)
+		os.Exit(1)
 	}
 
 	server := &http.Server{
@@ -44,8 +48,9 @@ func main() {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("private charm registry listening on %s", cfg.ListenAddress)
+	slog.Info("private charm registry listening", "listen_address", cfg.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("serve: %v", err)
+		slog.Error("serve", "error", err)
+		os.Exit(1)
 	}
 }

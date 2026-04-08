@@ -13,12 +13,12 @@ import (
 func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.ListReleases(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -27,7 +27,7 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req []struct {
@@ -36,7 +36,7 @@ func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
 		Resources []core.ReleaseResourceRef `json:"resources"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	requests := make([]core.Release, 0, len(req))
@@ -50,7 +50,7 @@ func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	released, err := a.svc.Release(r.Context(), identity, chi.URLParam(r, "name"), requests)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"released": released})
@@ -59,17 +59,17 @@ func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleCreateTracks(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req []core.Track
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	created, err := a.svc.CreateTracks(r.Context(), identity, chi.URLParam(r, "name"), req)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"num-tracks-created": created})
@@ -78,12 +78,12 @@ func (a *API) handleCreateTracks(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleFind(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.Find(r.Context(), identity, r.URL.Query().Get("q"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -92,20 +92,20 @@ func (a *API) handleFind(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.Info(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
 		var serviceErr *service.Error
-		if errors.As(err, &serviceErr) && serviceErr.Status == http.StatusNotFound {
+		if errors.As(err, &serviceErr) && serviceErr.Kind == service.ErrorKindNotFound {
 			writeJSON(w, http.StatusNotFound, map[string]any{
 				"code":    serviceErr.Code,
 				"message": serviceErr.Message,
 			})
 			return
 		}
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -114,17 +114,17 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req service.RefreshRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	payload, err := a.svc.Refresh(r.Context(), identity, req)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)

@@ -15,6 +15,23 @@ func (a *API) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, a.svc.RootDocument())
 }
 
+func (a *API) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if err := a.svc.Ready(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error-list": []map[string]any{{
+				"code":    "not-ready",
+				"message": "service dependencies are not ready",
+			}},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
 func (a *API) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml")
 	_, _ = io.WriteString(w, openAPISpec)
@@ -36,7 +53,7 @@ func (a *API) handleDocs(w http.ResponseWriter, _ *http.Request) {
 func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	if !identity.Authenticated {
@@ -45,7 +62,7 @@ func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	tokens, err := a.svc.ListStoreTokens(r.Context(), identity, r.URL.Query().Get("include-inactive") == "true")
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	type tokenView struct {
@@ -73,7 +90,7 @@ func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	// charmcraft login calls POST /v1/tokens with no credentials: it expects
@@ -89,18 +106,18 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 			Email:       "developer@example.invalid",
 		}, nil)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, r, err)
 			return
 		}
 	}
 	var req service.IssueTokenRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	raw, _, err := a.svc.IssueStoreToken(r.Context(), identity, req)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	// Wrap the opaque token in a pymacaroons-compatible JSON structure so that
@@ -113,17 +130,17 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	identity, err = a.resolveExchangeIdentity(r, identity)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	raw, err := a.svc.ExchangeStoreToken(r.Context(), identity, nil)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"macaroon": raw})
@@ -151,19 +168,19 @@ func (a *API) resolveExchangeIdentity(r *http.Request, identity core.Identity) (
 func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req struct {
 		ClientDescription *string `json:"client-description"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	raw, err := a.svc.ExchangeStoreToken(r.Context(), identity, req.ClientDescription)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"macaroon": raw})
@@ -172,23 +189,23 @@ func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req struct {
 		SessionID string `json:"session-id"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	if err := a.svc.RevokeStoreToken(r.Context(), identity, req.SessionID); err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	tokens, err := a.svc.ListStoreTokens(r.Context(), identity, true)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"macaroons": tokens})
@@ -197,12 +214,12 @@ func (a *API) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleTokenWhoAmI(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.MacaroonInfo(identity)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -211,12 +228,12 @@ func (a *API) handleTokenWhoAmI(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.DeprecatedWhoAmI(identity)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)

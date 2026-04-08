@@ -26,6 +26,10 @@ type Memory struct {
 }
 
 // NewMemory returns an in-memory [Repository] implementation.
+//
+// This is a test-oriented approximation of the repository contract, not the
+// canonical source of access-control behavior. PostgreSQL remains the
+// production reference implementation.
 func NewMemory() *Memory {
 	return &Memory{
 		accounts:          map[string]core.Account{},
@@ -39,6 +43,16 @@ func NewMemory() *Memory {
 		resourceRevisions: map[string][]core.ResourceRevision{},
 		releases:          map[string]map[string]core.Release{},
 	}
+}
+
+// Ping is part of the [Repository] interface.
+func (m *Memory) Ping(_ context.Context) error {
+	return nil
+}
+
+// WithinTransaction is part of the [Repository] interface.
+func (m *Memory) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
+	return fn(m)
 }
 
 // EnsureAccount is part of the [Repository] interface.
@@ -276,6 +290,22 @@ func (m *Memory) ListTracks(_ context.Context, packageID string) ([]core.Track, 
 		return nil, ErrNotFound
 	}
 	return append([]core.Track(nil), pkg.Tracks...), nil
+}
+
+// ListTracksForPackages is part of the [Repository] interface.
+func (m *Memory) ListTracksForPackages(_ context.Context, packageIDs []string) (map[string][]core.Track, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string][]core.Track, len(packageIDs))
+	for _, packageID := range packageIDs {
+		pkg, ok := m.packagesByID[packageID]
+		if !ok {
+			out[packageID] = nil
+			continue
+		}
+		out[packageID] = append([]core.Track(nil), pkg.Tracks...)
+	}
+	return out, nil
 }
 
 // CreateUpload is part of the [Repository] interface.

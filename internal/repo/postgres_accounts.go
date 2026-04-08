@@ -23,7 +23,7 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 		RETURNING id, subject, username, display_name, email, validation, is_admin, created_at
 	`
 	var stored core.Account
-	err := p.pool.QueryRow(ctx, query,
+	err := p.db.QueryRow(ctx, query,
 		account.ID,
 		account.Subject,
 		account.Username,
@@ -47,7 +47,7 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 
 // GetAccountByID is part of the [Repository] interface.
 func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.Account, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT id, subject, username, display_name, email, validation, is_admin, created_at
 		FROM accounts WHERE id = $1
 	`, accountID)
@@ -70,7 +70,19 @@ func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.A
 
 // CreateStoreToken is part of the [Repository] interface.
 func (p *Postgres) CreateStoreToken(ctx context.Context, token core.StoreToken) error {
-	_, err := p.pool.Exec(ctx, `
+	packagesJSON, err := marshalJSON(token.Packages)
+	if err != nil {
+		return err
+	}
+	channelsJSON, err := marshalJSON(token.Channels)
+	if err != nil {
+		return err
+	}
+	permissionsJSON, err := marshalJSON(token.Permissions)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(ctx, `
 		INSERT INTO store_tokens (
 			session_id, token_hash, account_id, description, packages, channels, permissions,
 			valid_since, valid_until, revoked_at, revoked_by
@@ -80,9 +92,9 @@ func (p *Postgres) CreateStoreToken(ctx context.Context, token core.StoreToken) 
 		token.TokenHash,
 		token.AccountID,
 		token.Description,
-		mustJSON(token.Packages),
-		mustJSON(token.Channels),
-		mustJSON(token.Permissions),
+		packagesJSON,
+		channelsJSON,
+		permissionsJSON,
 		token.ValidSince,
 		token.ValidUntil,
 		token.RevokedAt,
@@ -106,7 +118,7 @@ func (p *Postgres) ListStoreTokens(
 		query += ` AND revoked_at IS NULL AND valid_until > NOW()`
 	}
 	query += ` ORDER BY valid_since ASC`
-	rows, err := p.pool.Query(ctx, query, accountID)
+	rows, err := p.db.Query(ctx, query, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +136,7 @@ func (p *Postgres) ListStoreTokens(
 
 // RevokeStoreToken is part of the [Repository] interface.
 func (p *Postgres) RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error {
-	tag, err := p.pool.Exec(ctx, `
+	tag, err := p.db.Exec(ctx, `
 		UPDATE store_tokens
 		SET revoked_at = NOW(), revoked_by = $3
 		WHERE account_id = $1 AND session_id = $2
@@ -140,7 +152,7 @@ func (p *Postgres) RevokeStoreToken(ctx context.Context, accountID, sessionID, r
 
 // FindStoreTokenByHash is part of the [Repository] interface.
 func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT
 			t.session_id, t.token_hash, t.account_id, t.description, t.packages, t.channels, t.permissions,
 			t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
@@ -181,8 +193,14 @@ func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.
 	if err != nil {
 		return core.StoreToken{}, core.Account{}, err
 	}
-	unmarshalJSON(packagesJSON, &token.Packages)
-	unmarshalJSON(channelsJSON, &token.Channels)
-	unmarshalJSON(permissionsJSON, &token.Permissions)
+	if err := unmarshalJSON(packagesJSON, &token.Packages); err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
+	if err := unmarshalJSON(channelsJSON, &token.Channels); err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
+	if err := unmarshalJSON(permissionsJSON, &token.Permissions); err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
 	return token, account, nil
 }

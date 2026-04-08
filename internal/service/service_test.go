@@ -132,7 +132,45 @@ func TestPrivatePackagesRequireAuthentication(t *testing.T) {
 	require.Error(t, err)
 	var svcErr *Error
 	require.ErrorAs(t, err, &svcErr) // guards svcErr field access below
-	assert.Equal(t, 401, svcErr.Status)
+	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+}
+
+func TestRegisterPackageOCISyncFailureDoesNotPersistPackage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, repository := newTestServiceWithOCI(failingOCIRegistry{
+		syncErr: fmt.Errorf("harbor unavailable"),
+	})
+	owner := newIdentity("owner-oci", "owner-oci")
+
+	_, err := svc.RegisterPackage(ctx, owner, "broken-charm", "charm", true)
+	require.Error(t, err)
+
+	_, err = repository.GetPackageByName(ctx, "broken-charm")
+	require.ErrorIs(t, err, repo.ErrNotFound)
+}
+
+func TestOCIImageUploadCredentialsPropagatesCredentialFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
+		credentialsErr: fmt.Errorf("robot credentials unavailable"),
+	})
+	owner := newIdentity("owner-creds", "owner-creds")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "cred-charm", "charm", true)
+	require.NoError(t, err)
+
+	upload, err := svc.CreateUpload(ctx, "cred-charm.charm", buildCharmArchive(t, "cred-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, pkg.Name, "workload-image")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "robot credentials unavailable")
 }
 
 func TestIssueStoreTokenAndAuthenticate(t *testing.T) {
@@ -1310,7 +1348,7 @@ func TestUpdatePackageDefaultTrack(t *testing.T) {
 func TestServiceErrorString(t *testing.T) {
 	t.Parallel()
 
-	err := &Error{Status: 404, Code: "not-found", Message: "package not found"}
+	err := &Error{Kind: ErrorKindNotFound, Code: "not-found", Message: "package not found"}
 
 	assert.Equal(t, "not-found: package not found", err.Error())
 }
@@ -2835,10 +2873,10 @@ func TestFindPublicPackageWithMultipleTracks(t *testing.T) {
 func TestNewError(t *testing.T) {
 	t.Parallel()
 
-	err := newError(400, "bad-request", "invalid input")
+	err := newError(ErrorKindInvalidRequest, "bad-request", "invalid input")
 	var svcErr *Error
 	require.ErrorAs(t, err, &svcErr)
-	assert.Equal(t, 400, svcErr.Status)
+	assert.Equal(t, ErrorKindInvalidRequest, svcErr.Kind)
 	assert.Equal(t, "bad-request", svcErr.Code)
 	assert.Equal(t, "invalid input", svcErr.Message)
 	assert.Equal(t, "bad-request: invalid input", svcErr.Error())
@@ -2849,7 +2887,18 @@ func assertServiceError(t *testing.T, err error, expectedStatus int) {
 	require.Error(t, err)
 	var svcErr *Error
 	require.ErrorAs(t, err, &svcErr)
-	assert.Equal(t, expectedStatus, svcErr.Status)
+	expectedKind := ErrorKindInvalidRequest
+	switch expectedStatus {
+	case 401:
+		expectedKind = ErrorKindUnauthorized
+	case 403:
+		expectedKind = ErrorKindForbidden
+	case 404:
+		expectedKind = ErrorKindNotFound
+	case 409:
+		expectedKind = ErrorKindConflict
+	}
+	assert.Equal(t, expectedKind, svcErr.Kind)
 }
 
 // assertRefreshActionError verifies that a per-action error is embedded in the
@@ -2877,8 +2926,12 @@ func boolPtr(v bool) *bool {
 }
 
 func newTestService() (*Service, repo.Repository) {
+	return newTestServiceWithOCI(testOCIRegistry{})
+}
+
+func newTestServiceWithOCI(oci OCIRegistry) (*Service, repo.Repository) {
 	repository := repo.NewMemory()
-	return New(testConfig(), repository, blob.NewMemoryStore(), testOCIRegistry{}), repository
+	return New(testConfig(), repository, blob.NewMemoryStore(), oci), repository
 }
 
 func newIdentity(id, username string) core.Identity {
@@ -2938,6 +2991,34 @@ func (testOCIRegistry) Credentials(pkg core.Package, pull bool) (string, string,
 		return pkg.HarborPullRobot.Username, "pull-secret", nil
 	}
 	return pkg.HarborPushRobot.Username, "push-secret", nil
+}
+
+type failingOCIRegistry struct {
+	testOCIRegistry
+	syncErr        error
+	imageRefErr    error
+	credentialsErr error
+}
+
+func (o failingOCIRegistry) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
+	if o.syncErr != nil {
+		return core.Package{}, o.syncErr
+	}
+	return o.testOCIRegistry.SyncPackage(ctx, pkg)
+}
+
+func (o failingOCIRegistry) ImageReference(pkg core.Package, resourceName string) (string, error) {
+	if o.imageRefErr != nil {
+		return "", o.imageRefErr
+	}
+	return o.testOCIRegistry.ImageReference(pkg, resourceName)
+}
+
+func (o failingOCIRegistry) Credentials(pkg core.Package, pull bool) (string, string, error) {
+	if o.credentialsErr != nil {
+		return "", "", o.credentialsErr
+	}
+	return o.testOCIRegistry.Credentials(pkg, pull)
 }
 
 func buildCharmArchive(t *testing.T, name string) []byte {

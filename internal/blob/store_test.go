@@ -235,6 +235,19 @@ func TestS3StoreEnsureBucketCreateError(t *testing.T) {
 	assert.ErrorIs(t, err, createErr)
 }
 
+func TestS3BaseEndpointKeepsTLSByDefault(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "https://s3.example.test", s3BaseEndpoint("https://s3.example.test", false))
+}
+
+func TestS3BaseEndpointDisablesTLS(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "http://s3.example.test", s3BaseEndpoint("https://s3.example.test", true))
+	assert.Equal(t, "http://minio:9000", s3BaseEndpoint("minio:9000", true))
+}
+
 func TestS3StorePutSuccess(t *testing.T) {
 	t.Parallel()
 

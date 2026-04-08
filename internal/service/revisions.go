@@ -82,7 +82,7 @@ func (s *Service) PushRevision(
 	if err != nil {
 		reviewErr := []core.APIError{{Code: "invalid-archive", Message: err.Error()}}
 		_ = s.repo.ApproveUpload(ctx, upload.ID, nil, reviewErr)
-		return "", newError(400, "invalid-archive", err.Error())
+		return "", newError(ErrorKindInvalidRequest, "invalid-archive", err.Error())
 	}
 	latest, err := s.repo.GetLatestRevision(ctx, pkg.ID)
 	revisionNumber := 1
@@ -121,12 +121,6 @@ func (s *Service) PushRevision(
 		},
 		Subordinate: archive.Manifest.Subordinate,
 	}
-	if err := s.repo.CreateRevision(ctx, rev); err != nil {
-		return "", err
-	}
-	if err := s.repo.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
-		return "", err
-	}
 	pkg.Status = "published"
 	pkg.Title = stringPtr(firstNonEmpty(archive.Manifest.DisplayName, archive.Manifest.Name, pkg.Name))
 	pkg.Summary = stringPtr(archive.Manifest.Summary)
@@ -137,23 +131,33 @@ func (s *Service) PushRevision(
 		pkg.Website = &websites[0]
 	}
 	pkg.UpdatedAt = now
-	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
-		return "", err
-	}
-	for name, resource := range archive.Manifest.Resources {
-		_, err := s.repo.UpsertResourceDefinition(ctx, core.ResourceDefinition{
-			ID:          uuid.NewString(),
-			PackageID:   pkg.ID,
-			Name:        name,
-			Type:        resource.Type,
-			Description: resource.Description,
-			Filename:    resource.Filename,
-			Optional:    false,
-			CreatedAt:   now,
-		})
-		if err != nil {
-			return "", err
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.Repository) error {
+		if err := repository.CreateRevision(ctx, rev); err != nil {
+			return err
 		}
+		if err := repository.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
+			return err
+		}
+		if err := repository.UpdatePackage(ctx, pkg); err != nil {
+			return err
+		}
+		for name, resource := range archive.Manifest.Resources {
+			if _, err := repository.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+				ID:          uuid.NewString(),
+				PackageID:   pkg.ID,
+				Name:        name,
+				Type:        resource.Type,
+				Description: resource.Description,
+				Filename:    resource.Filename,
+				Optional:    false,
+				CreatedAt:   now,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("/v1/charm/%s/revisions/review?upload-id=%s", charmName, upload.ID), nil
 }

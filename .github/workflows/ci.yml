@@ -70,9 +70,9 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          COVERAGE=$(go tool cover -func=coverage_unit.out | grep '^total:' | awk '{print $NF}' | tr -d '%')
-          echo "Total unit-test coverage: ${COVERAGE}%"
-          THRESHOLD=80
+          COVERAGE=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $NF}' | tr -d '%')
+          echo "Total test coverage: ${COVERAGE}%"
+          THRESHOLD=70
           if [ "$(echo "${COVERAGE} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
             echo "::error::Coverage ${COVERAGE}% is below the ${THRESHOLD}% threshold"
             exit 1

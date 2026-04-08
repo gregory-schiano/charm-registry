@@ -127,6 +127,15 @@ func New(cfg config.Config, repository repo.Repository, blobs blob.Store, oci OC
 	return &Service{cfg: cfg, repo: repository, blobs: blobs, oci: oci}
 }
 
+func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.Repository) error) error {
+	return s.repo.WithinTransaction(ctx, fn)
+}
+
+// Ready reports whether the service dependencies are ready to serve requests.
+func (s *Service) Ready(ctx context.Context) error {
+	return s.repo.Ping(ctx)
+}
+
 // RootDocument returns the top-level service metadata document.
 func (s *Service) RootDocument() map[string]any {
 	return map[string]any{

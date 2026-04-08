@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -11,7 +12,11 @@ import (
 
 // CreateUpload is part of the [Repository] interface.
 func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
-	_, err := p.pool.Exec(
+	errorsJSON, err := marshalJSON(upload.Errors)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(
 		ctx,
 		`
 		INSERT INTO uploads (
@@ -31,14 +36,14 @@ func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 		upload.CreatedAt,
 		upload.ApprovedAt,
 		upload.Revision,
-		mustJSON(upload.Errors),
+		errorsJSON,
 	)
 	return err
 }
 
 // GetUpload is part of the [Repository] interface.
 func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT id, filename, object_key, size, sha256, sha384, status, kind, created_at, approved_at, revision, errors
 		FROM uploads WHERE id = $1
 	`, uploadID)
@@ -64,7 +69,9 @@ func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload,
 	if err != nil {
 		return core.Upload{}, err
 	}
-	unmarshalJSON(errorsJSON, &upload.Errors)
+	if err := unmarshalJSON(errorsJSON, &upload.Errors); err != nil {
+		return core.Upload{}, fmt.Errorf("unmarshal upload errors: %w", err)
+	}
 	return upload, nil
 }
 
@@ -74,10 +81,14 @@ func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision 
 	if len(apiErrors) > 0 {
 		status = "rejected"
 	}
-	tag, err := p.pool.Exec(ctx, `
+	errorsJSON, err := marshalJSON(apiErrors)
+	if err != nil {
+		return err
+	}
+	tag, err := p.db.Exec(ctx, `
 		UPDATE uploads SET approved_at = NOW(), revision = $2, errors = $3, status = $4
 		WHERE id = $1
-	`, uploadID, revision, mustJSON(apiErrors), status)
+	`, uploadID, revision, errorsJSON, status)
 	if err != nil {
 		return err
 	}
@@ -89,7 +100,19 @@ func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision 
 
 // CreateRevision is part of the [Repository] interface.
 func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) error {
-	_, err := p.pool.Exec(
+	basesJSON, err := marshalJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	attributesJSON, err := marshalJSON(revision.Attributes)
+	if err != nil {
+		return err
+	}
+	relationsJSON, err := marshalJSON(revision.Relations)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(
 		ctx,
 		`
 		INSERT INTO revisions (
@@ -114,9 +137,9 @@ func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) e
 		revision.ActionsYAML,
 		revision.BundleYAML,
 		revision.ReadmeMD,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Attributes),
-		mustJSON(revision.Relations),
+		basesJSON,
+		attributesJSON,
+		relationsJSON,
 		revision.Subordinate,
 	)
 	return err
@@ -136,7 +159,7 @@ func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision
 		args = append(args, *revision)
 	}
 	query += ` ORDER BY revision DESC`
-	rows, err := p.pool.Query(ctx, query, args...)
+	rows, err := p.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -146,14 +169,24 @@ func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision
 
 // GetRevisionByNumber is part of the [Repository] interface.
 func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
-	rows, err := p.ListRevisions(ctx, packageID, &revision)
+	rows, err := p.db.Query(ctx, `
+		SELECT id, package_id, revision, version, status, created_at, created_by, size,
+		       sha256, sha384, object_key, metadata_yaml, config_yaml, actions_yaml,
+		       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+		FROM revisions WHERE package_id = $1 AND revision = $2
+	`, packageID, revision)
 	if err != nil {
 		return core.Revision{}, err
 	}
-	if len(rows) == 0 {
+	defer rows.Close()
+	items, err := scanRevisions(rows)
+	if err != nil {
+		return core.Revision{}, err
+	}
+	if len(items) == 0 {
 		return core.Revision{}, ErrNotFound
 	}
-	return rows[0], nil
+	return items[0], nil
 }
 
 // GetLatestRevision is part of the [Repository] interface.
@@ -199,9 +232,15 @@ func scanRevisions(rows pgx.Rows) ([]core.Revision, error) {
 		); err != nil {
 			return nil, err
 		}
-		unmarshalJSON(basesJSON, &item.Bases)
-		unmarshalJSON(attributesJSON, &item.Attributes)
-		unmarshalJSON(relationsJSON, &item.Relations)
+		if err := unmarshalJSON(basesJSON, &item.Bases); err != nil {
+			return nil, fmt.Errorf("unmarshal revision bases: %w", err)
+		}
+		if err := unmarshalJSON(attributesJSON, &item.Attributes); err != nil {
+			return nil, fmt.Errorf("unmarshal revision attributes: %w", err)
+		}
+		if err := unmarshalJSON(relationsJSON, &item.Relations); err != nil {
+			return nil, fmt.Errorf("unmarshal revision relations: %w", err)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()

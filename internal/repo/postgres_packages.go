@@ -13,7 +13,19 @@ import (
 
 // CreatePackage is part of the [Repository] interface.
 func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
-	_, err := p.pool.Exec(
+	linksJSON, err := marshalJSON(pkg.Links)
+	if err != nil {
+		return err
+	}
+	mediaJSON, err := marshalJSON(pkg.Media)
+	if err != nil {
+		return err
+	}
+	guardrailsJSON, err := marshalJSON(pkg.TrackGuardrails)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(
 		ctx,
 		`
 			INSERT INTO packages (
@@ -45,9 +57,9 @@ func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 		pkg.Summary,
 		pkg.Title,
 		pkg.Website,
-		mustJSON(pkg.Links),
-		mustJSON(pkg.Media),
-		mustJSON(pkg.TrackGuardrails),
+		linksJSON,
+		mediaJSON,
+		guardrailsJSON,
 		pkg.CreatedAt,
 		pkg.UpdatedAt,
 	)
@@ -59,7 +71,19 @@ func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 
 // UpdatePackage is part of the [Repository] interface.
 func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
-	tag, err := p.pool.Exec(
+	linksJSON, err := marshalJSON(pkg.Links)
+	if err != nil {
+		return err
+	}
+	mediaJSON, err := marshalJSON(pkg.Media)
+	if err != nil {
+		return err
+	}
+	guardrailsJSON, err := marshalJSON(pkg.TrackGuardrails)
+	if err != nil {
+		return err
+	}
+	tag, err := p.db.Exec(
 		ctx,
 		`
 			UPDATE packages SET
@@ -104,9 +128,9 @@ func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
 		pkg.Summary,
 		pkg.Title,
 		pkg.Website,
-		mustJSON(pkg.Links),
-		mustJSON(pkg.Media),
-		mustJSON(pkg.TrackGuardrails),
+		linksJSON,
+		mediaJSON,
+		guardrailsJSON,
 		pkg.UpdatedAt,
 	)
 	if err != nil {
@@ -120,7 +144,7 @@ func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
 
 // DeletePackage is part of the [Repository] interface.
 func (p *Postgres) DeletePackage(ctx context.Context, packageID string) error {
-	tag, err := p.pool.Exec(ctx, `DELETE FROM packages WHERE id = $1`, packageID)
+	tag, err := p.db.Exec(ctx, `DELETE FROM packages WHERE id = $1`, packageID)
 	if err != nil {
 		return err
 	}
@@ -132,7 +156,7 @@ func (p *Postgres) DeletePackage(ctx context.Context, packageID string) error {
 
 // GetPackageByName is part of the [Repository] interface.
 func (p *Postgres) GetPackageByName(ctx context.Context, name string) (core.Package, error) {
-	row := p.pool.QueryRow(ctx, packageQuery(`WHERE p.name = $1`), name)
+	row := p.db.QueryRow(ctx, packageQuery(`WHERE p.name = $1`), name)
 	pkg, err := scanPackage(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return core.Package{}, ErrNotFound
@@ -142,7 +166,7 @@ func (p *Postgres) GetPackageByName(ctx context.Context, name string) (core.Pack
 
 // GetPackageByID is part of the [Repository] interface.
 func (p *Postgres) GetPackageByID(ctx context.Context, packageID string) (core.Package, error) {
-	row := p.pool.QueryRow(ctx, packageQuery(`WHERE p.id = $1`), packageID)
+	row := p.db.QueryRow(ctx, packageQuery(`WHERE p.id = $1`), packageID)
 	pkg, err := scanPackage(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return core.Package{}, ErrNotFound
@@ -169,7 +193,7 @@ func (p *Postgres) ListPackagesForAccount(
 			   )
 		`)
 	}
-	rows, err := p.pool.Query(ctx, query, accountID)
+	rows, err := p.db.Query(ctx, query, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +207,7 @@ func (p *Postgres) SearchPackages(ctx context.Context, query string) ([]core.Pac
 	if trimmed := strings.TrimSpace(query); trimmed != "" {
 		pattern = "%" + trimmed + "%"
 	}
-	rows, err := p.pool.Query(ctx, packageQuery(`WHERE p.name ILIKE $1 ORDER BY p.name ASC`), pattern)
+	rows, err := p.db.Query(ctx, packageQuery(`WHERE p.name ILIKE $1 ORDER BY p.name ASC`), pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +228,7 @@ func (p *Postgres) CanManagePackage(ctx context.Context, packageID, accountID st
 func (p *Postgres) canAccess(ctx context.Context, packageID, accountID string, manage bool) (bool, error) {
 	var private bool
 	var ownerID string
-	err := p.pool.QueryRow(ctx, `SELECT private, owner_account_id FROM packages WHERE id = $1`, packageID).
+	err := p.db.QueryRow(ctx, `SELECT private, owner_account_id FROM packages WHERE id = $1`, packageID).
 		Scan(&private, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
@@ -229,7 +253,7 @@ func (p *Postgres) canAccess(ctx context.Context, packageID, accountID string, m
 		roles = []string{"editor", "owner"}
 	}
 	var allowed bool
-	err = p.pool.QueryRow(ctx, `
+	err = p.db.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM package_acl acl
 			LEFT JOIN account_group_members gm
@@ -317,9 +341,15 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (core.Package, error)
 	}
 	pkg.HarborPushRobot = newRobotCredential(harborPushRobotID, harborPushRobotName, harborPushRobotSecret)
 	pkg.HarborPullRobot = newRobotCredential(harborPullRobotID, harborPullRobotName, harborPullRobotSecret)
-	unmarshalJSON(linksJSON, &pkg.Links)
-	unmarshalJSON(mediaJSON, &pkg.Media)
-	unmarshalJSON(guardrailsJSON, &pkg.TrackGuardrails)
+	if err := unmarshalJSON(linksJSON, &pkg.Links); err != nil {
+		return core.Package{}, fmt.Errorf("unmarshal package links: %w", err)
+	}
+	if err := unmarshalJSON(mediaJSON, &pkg.Media); err != nil {
+		return core.Package{}, fmt.Errorf("unmarshal package media: %w", err)
+	}
+	if err := unmarshalJSON(guardrailsJSON, &pkg.TrackGuardrails); err != nil {
+		return core.Package{}, fmt.Errorf("unmarshal package track guardrails: %w", err)
+	}
 	pkg.Store = ""
 	return pkg, nil
 }

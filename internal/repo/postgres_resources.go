@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -14,7 +15,7 @@ func (p *Postgres) UpsertResourceDefinition(
 	ctx context.Context,
 	resource core.ResourceDefinition,
 ) (core.ResourceDefinition, error) {
-	row := p.pool.QueryRow(
+	row := p.db.QueryRow(
 		ctx,
 		`
 		INSERT INTO resource_definitions (id, package_id, name, type, description, filename, optional, created_at)
@@ -54,7 +55,7 @@ func (p *Postgres) GetResourceDefinition(
 	ctx context.Context,
 	packageID, resourceName string,
 ) (core.ResourceDefinition, error) {
-	row := p.pool.QueryRow(ctx, `
+	row := p.db.QueryRow(ctx, `
 		SELECT id, package_id, name, type, description, filename, optional, created_at
 		FROM resource_definitions WHERE package_id = $1 AND name = $2
 	`, packageID, resourceName)
@@ -77,7 +78,7 @@ func (p *Postgres) GetResourceDefinition(
 
 // ListResourceDefinitions is part of the [Repository] interface.
 func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string) ([]core.ResourceDefinition, error) {
-	rows, err := p.pool.Query(ctx, `
+	rows, err := p.db.Query(ctx, `
 		SELECT id, package_id, name, type, description, filename, optional, created_at
 		FROM resource_definitions WHERE package_id = $1 ORDER BY name ASC
 	`, packageID)
@@ -107,7 +108,15 @@ func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string
 
 // CreateResourceRevision is part of the [Repository] interface.
 func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	_, err := p.pool.Exec(
+	basesJSON, err := marshalJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	architecturesJSON, err := marshalJSON(revision.Architectures)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.Exec(
 		ctx,
 		`
 		INSERT INTO resource_revisions (
@@ -130,8 +139,8 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 		revision.SHA512,
 		revision.SHA3384,
 		revision.ObjectKey,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Architectures),
+		basesJSON,
+		architecturesJSON,
 		revision.OCIImageDigest,
 		revision.OCIImageBlob,
 	)
@@ -140,7 +149,15 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 
 // UpdateResourceRevision is part of the [Repository] interface.
 func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	tag, err := p.pool.Exec(
+	basesJSON, err := marshalJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	architecturesJSON, err := marshalJSON(revision.Architectures)
+	if err != nil {
+		return err
+	}
+	tag, err := p.db.Exec(
 		ctx,
 		`
 		UPDATE resource_revisions
@@ -151,8 +168,8 @@ func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.Res
 		revision.ResourceID,
 		revision.Revision,
 		revision.ID,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Architectures),
+		basesJSON,
+		architecturesJSON,
 		revision.OCIImageDigest,
 		revision.OCIImageBlob,
 	)
@@ -167,7 +184,7 @@ func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.Res
 
 // ListResourceRevisions is part of the [Repository] interface.
 func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error) {
-	rows, err := p.pool.Query(ctx, `
+	rows, err := p.db.Query(ctx, `
 		SELECT id, resource_id, revision, package_revision, name, type, description, filename, created_at, size,
 		       sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
 		FROM resource_revisions WHERE resource_id = $1 ORDER BY revision DESC
@@ -185,16 +202,23 @@ func (p *Postgres) GetResourceRevision(
 	resourceID string,
 	revision int,
 ) (core.ResourceRevision, error) {
-	rows, err := p.ListResourceRevisions(ctx, resourceID)
+	rows, err := p.db.Query(ctx, `
+		SELECT id, resource_id, revision, package_revision, name, type, description, filename, created_at, size,
+		       sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
+		FROM resource_revisions WHERE resource_id = $1 AND revision = $2
+	`, resourceID, revision)
 	if err != nil {
 		return core.ResourceRevision{}, err
 	}
-	for _, item := range rows {
-		if item.Revision == revision {
-			return item, nil
-		}
+	defer rows.Close()
+	items, err := scanResourceRevisions(rows)
+	if err != nil {
+		return core.ResourceRevision{}, err
 	}
-	return core.ResourceRevision{}, ErrNotFound
+	if len(items) == 0 {
+		return core.ResourceRevision{}, ErrNotFound
+	}
+	return items[0], nil
 }
 
 func scanResourceRevisions(rows pgx.Rows) ([]core.ResourceRevision, error) {
@@ -211,8 +235,12 @@ func scanResourceRevisions(rows pgx.Rows) ([]core.ResourceRevision, error) {
 		); err != nil {
 			return nil, err
 		}
-		unmarshalJSON(basesJSON, &item.Bases)
-		unmarshalJSON(archJSON, &item.Architectures)
+		if err := unmarshalJSON(basesJSON, &item.Bases); err != nil {
+			return nil, fmt.Errorf("unmarshal resource revision bases: %w", err)
+		}
+		if err := unmarshalJSON(archJSON, &item.Architectures); err != nil {
+			return nil, fmt.Errorf("unmarshal resource revision architectures: %w", err)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()

@@ -46,14 +46,22 @@ func (s *Service) RegisterPackage(
 			CreatedAt: now,
 		}},
 	}
-	if err := s.repo.CreatePackage(ctx, pkg); err != nil {
-		return core.Package{}, translateRepoError(err, "package already exists")
+	var err error
+	if s.oci != nil {
+		pkg, err = s.oci.SyncPackage(ctx, pkg)
+		if err != nil {
+			return core.Package{}, err
+		}
 	}
-	if _, err := s.repo.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
-		return core.Package{}, err
-	}
-	pkg, err := s.syncOCIPackage(ctx, pkg)
-	if err != nil {
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.Repository) error {
+		if err := repository.CreatePackage(ctx, pkg); err != nil {
+			return translateRepoError(err, "package already exists")
+		}
+		if _, err := repository.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
+			return err
+		}
+		return repository.UpdatePackage(ctx, pkg)
+	}); err != nil {
 		return core.Package{}, err
 	}
 	return pkg, nil
@@ -174,7 +182,7 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 		// The caller is authorised — the business rule (not a permission
 		// violation) prevents deletion.  HTTP 400 / "invalid-request" matches
 		// the Charmhub API contract; 403 is reserved for auth failures.
-		return "", newError(400, "invalid-request", "cannot unregister a package with existing revisions")
+		return "", newError(ErrorKindInvalidRequest, "invalid-request", "cannot unregister a package with existing revisions")
 	}
 	if err := s.repo.DeletePackage(ctx, pkg.ID); err != nil {
 		return "", err
@@ -353,13 +361,22 @@ func packageResult(pkg core.Package) map[string]any {
 }
 
 func (s *Service) enrichPackages(ctx context.Context, packages []core.Package) ([]core.Package, error) {
+	if len(packages) == 0 {
+		return []core.Package{}, nil
+	}
+	packageIDs := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		packageIDs = append(packageIDs, pkg.ID)
+	}
+	tracksByPackage, err := s.repo.ListTracksForPackages(ctx, packageIDs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]core.Package, 0, len(packages))
 	for _, pkg := range packages {
-		enriched, err := s.enrichPackage(ctx, pkg)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, enriched)
+		pkg.Tracks = tracksByPackage[pkg.ID]
+		pkg.Store = s.cfg.PublicAPIURL + "/charms/" + pkg.Name
+		out = append(out, pkg)
 	}
 	return out, nil
 }

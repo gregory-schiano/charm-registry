@@ -12,12 +12,12 @@ import (
 func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	resources, err := a.svc.ListResources(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
@@ -26,7 +26,7 @@ func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	revisions, err := a.svc.ListResourceRevisions(
@@ -36,7 +36,7 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 		chi.URLParam(r, "resource"),
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	rows := make([]map[string]any, 0, len(revisions))
@@ -57,12 +57,12 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req service.PushResourceRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	statusURL, err := a.svc.PushResource(
@@ -73,7 +73,7 @@ func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 		req,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status-url": statusURL})
@@ -82,12 +82,12 @@ func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req service.UpdateResourceRevisionRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	updated, err := a.svc.UpdateResourceRevisions(
@@ -98,7 +98,7 @@ func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Reque
 		req,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"num-resource-revisions-updated": updated})
@@ -107,7 +107,7 @@ func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Reque
 func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	payload, err := a.svc.OCIImageUploadCredentials(
@@ -117,7 +117,7 @@ func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request)
 		chi.URLParam(r, "resource"),
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -126,14 +126,14 @@ func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request)
 func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	var req struct {
 		ImageDigest string `json:"image-digest"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	content, err := a.svc.OCIImageBlob(
@@ -144,7 +144,7 @@ func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 		req.ImageDigest,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="oci-image-blob.json"`)
@@ -156,17 +156,17 @@ func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request) {
 	identity, err := a.identity(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	packageID, resourceName, revision, parseErr := parseResourceDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
-		writeError(w, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+		writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
 	payload, err := a.svc.DownloadResource(r.Context(), identity, packageID, resourceName, revision)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="resource.bin"`)

@@ -5,6 +5,8 @@ import (
 	"embed"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,6 +16,13 @@ var migrationsFS embed.FS
 // Postgres is a PostgreSQL-backed [Repository].
 type Postgres struct {
 	pool *pgxpool.Pool
+	db   postgresDB
+}
+
+type postgresDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // NewPostgres opens a PostgreSQL-backed [Repository].
@@ -25,7 +34,7 @@ func NewPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Postgres{pool: pool}, nil
+	return &Postgres{pool: pool, db: pool}, nil
 }
 
 // Migrate applies the embedded repository schema migrations.
@@ -48,4 +57,23 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Ping is part of the [Repository] interface.
+func (p *Postgres) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
+}
+
+// WithinTransaction is part of the [Repository] interface.
+func (p *Postgres) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	txRepo := &Postgres{pool: p.pool, db: tx}
+	if err := fn(txRepo); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }

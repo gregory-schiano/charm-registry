@@ -123,7 +123,7 @@ func (s *Service) PushResource(
 			Digest string `json:"Digest"`
 		}
 		if err := json.Unmarshal(payload, &descriptor); err != nil {
-			return "", newError(400, "invalid-request", "invalid OCI image blob payload")
+			return "", newError(ErrorKindInvalidRequest, "invalid-request", "invalid OCI image blob payload")
 		}
 		resourceRevision.OCIImageDigest = descriptor.Digest
 		resourceRevision.ObjectKey = ""

@@ -9,6 +9,9 @@ import (
 type Repository interface {
 	coreTokenFinder
 
+	Ping(ctx context.Context) error
+	WithinTransaction(ctx context.Context, fn func(Repository) error) error
+
 	EnsureAccount(ctx context.Context, account core.Account) (core.Account, error)
 	GetAccountByID(ctx context.Context, accountID string) (core.Account, error)
 
@@ -27,6 +30,7 @@ type Repository interface {
 	CanManagePackage(ctx context.Context, packageID, accountID string) (bool, error)
 	CreateTracks(ctx context.Context, packageID string, tracks []core.Track) (int, error)
 	ListTracks(ctx context.Context, packageID string) ([]core.Track, error)
+	ListTracksForPackages(ctx context.Context, packageIDs []string) (map[string][]core.Track, error)
 
 	CreateUpload(ctx context.Context, upload core.Upload) error
 	GetUpload(ctx context.Context, uploadID string) (core.Upload, error)

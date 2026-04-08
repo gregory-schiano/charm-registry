@@ -3,9 +3,11 @@ package harbor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,4 +138,44 @@ func mustEncrypt(t *testing.T, client *Client, secret string) string {
 	encrypted, err := client.encrypt(secret)
 	require.NoError(t, err)
 	return encrypted
+}
+
+func TestErrorAsMatchesWrappedAPIError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := fmt.Errorf("wrapped: %w", &apiError{StatusCode: http.StatusConflict, Body: "conflict"})
+	var target *apiError
+
+	require.True(t, errorAs(wrapped, &target))
+	require.NotNil(t, target)
+	assert.Equal(t, http.StatusConflict, target.StatusCode)
+}
+
+func TestDoJSONUsesRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client, err := New(config.Config{
+		PublicRegistryURL:     "https://oci.example.test",
+		HarborURL:             server.URL,
+		HarborAPIURL:          server.URL,
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "harbor-secret",
+	})
+	require.NoError(t, err)
+	client.requestTimeout = 20 * time.Millisecond
+
+	start := time.Now()
+	err = client.doJSON(context.Background(), http.MethodGet, "/projects", nil, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
 }

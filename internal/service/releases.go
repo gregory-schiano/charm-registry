@@ -35,7 +35,7 @@ func (s *Service) Release(
 	var released []core.Release
 	for _, request := range requests {
 		if request.Channel == "" {
-			return nil, newError(400, "invalid-request", "channel is required")
+			return nil, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
 		}
 		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, request.Revision); err != nil {
 			return nil, translateRepoError(err, "revision not found")
@@ -85,7 +85,7 @@ func (s *Service) validateReleaseResources(
 		}
 		if resourceRevision.PackageRevision != nil && *resourceRevision.PackageRevision != packageRevision {
 			return newError(
-				400,
+				ErrorKindInvalidRequest,
 				"invalid-request",
 				fmt.Sprintf("resource %q revision %d is not compatible with package revision %d",
 					ref.Name,
@@ -281,7 +281,7 @@ func (s *Service) resolvePackageForRefresh(ctx context.Context, action RefreshAc
 		pkg, err := s.repo.GetPackageByID(ctx, *action.ID)
 		return pkg, translateRepoError(err, "package not found")
 	}
-	return core.Package{}, newError(400, "invalid-request", "refresh action must include id or name")
+	return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", "refresh action must include id or name")
 }
 
 func (s *Service) resolveRefreshSelection(

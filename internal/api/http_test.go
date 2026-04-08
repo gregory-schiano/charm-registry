@@ -69,6 +69,28 @@ func TestRootReturnsJSON(t *testing.T) {
 	assert.Equal(t, "private-charm-registry", body["service-name"])
 }
 
+func TestHealthz(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/healthz", nil, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "ok", body["status"])
+}
+
+func TestReadyz(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/readyz", nil, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "ready", body["status"])
+}
+
 func TestOpenAPIEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -1549,6 +1571,37 @@ func TestRegisterPackageWithPrivateFlag(t *testing.T) {
 		map[string]any{"name": "public-charm", "private": false}, "Bearer dev:alice:alice")
 
 	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+func TestGetPrivatePackageForbiddenForDifferentUser(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "alice-private", "private": true}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doRequest(t, handler, "GET", "/v1/charm/alice-private", nil, "Bearer dev:bob:bob")
+
+	assert.Equal(t, http.StatusForbidden, resp.Code)
+	assert.Contains(t, resp.Body.String(), "forbidden")
+}
+
+func TestPatchPackageForbiddenForDifferentUser(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "alice-owned"}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doRequest(t, handler, "PATCH", "/v1/charm/alice-owned",
+		map[string]any{"title": "bob edit"}, "Bearer dev:bob:bob")
+
+	assert.Equal(t, http.StatusForbidden, resp.Code)
+	assert.Contains(t, resp.Body.String(), "forbidden")
 }
 
 // --- helpers ---

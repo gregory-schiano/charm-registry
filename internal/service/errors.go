@@ -4,16 +4,26 @@ import "fmt"
 
 // Error describes an API error response.
 type Error struct {
-	Status  int
+	Kind    ErrorKind
 	Code    string
 	Message string
 }
+
+type ErrorKind string
+
+const (
+	ErrorKindInvalidRequest ErrorKind = "invalid-request"
+	ErrorKindUnauthorized   ErrorKind = "unauthorized"
+	ErrorKindForbidden      ErrorKind = "forbidden"
+	ErrorKindNotFound       ErrorKind = "not-found"
+	ErrorKindConflict       ErrorKind = "conflict"
+)
 
 // Error implements the [error] interface.
 func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-func newError(status int, code, message string) error {
-	return &Error{Status: status, Code: code, Message: message}
+func newError(kind ErrorKind, code, message string) error {
+	return &Error{Kind: kind, Code: code, Message: message}
 }

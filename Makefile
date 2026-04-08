@@ -58,8 +58,7 @@ test-race:
 coverage:
 	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | \
 		xargs $(GO) test -race -coverprofile=coverage.out -covermode=atomic
-	grep -v 'internal/repo/postgres' coverage.out > coverage_unit.out
-	$(GO) tool cover -func=coverage_unit.out
+	$(GO) tool cover -func=coverage.out
 
 vet:
 	$(GO) vet ./...
