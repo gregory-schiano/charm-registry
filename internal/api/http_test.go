@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,34 @@ func TestRootReturnsJSON(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Equal(t, "private-charm-registry", body["service-name"])
+}
+
+func TestNotFoundRequestsAreLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/does-not-exist", nil, "")
+
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+	assert.Contains(t, logBuf.String(), "path=/does-not-exist")
+	assert.Contains(t, logBuf.String(), "status=404")
+}
+
+func TestMethodNotAllowedRequestsAreLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "PUT", "/v1/charm", nil, "")
+
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.Code)
+	assert.Contains(t, logBuf.String(), "path=/v1/charm")
+	assert.Contains(t, logBuf.String(), "status=405")
 }
 
 func TestHealthz(t *testing.T) {
@@ -608,6 +637,13 @@ func TestResourceEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	revisions := body["revisions"].([]any)
+	assert.Len(t, revisions, 1)
+
+	// Charmhub-compatible resource revisions path used by Juju.
+	resp = doRequest(t, handler, "GET", "/v2/charms/resources/res-charm/config/revisions", nil, authHeader)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body = decodeJSON(t, resp)
+	revisions = body["revisions"].([]any)
 	assert.Len(t, revisions, 1)
 
 	// Update resource revision metadata
@@ -1577,6 +1613,37 @@ func TestFullPublishAndDownloadWithResources(t *testing.T) {
 		}},
 	}, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+func TestInfoEndpointSupportsChannelQuery(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "chan-info-charm"}, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doMultipartUpload(t, handler, buildTestCharmArchiveWithResources(t, "chan-info-charm"), "chan-info-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+
+	resp = doRequest(t, handler, "POST", "/v1/charm/chan-info-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doJSONRequest(t, handler, "POST", "/v1/charm/chan-info-charm/releases",
+		`[{"channel":"latest/edge","revision":1}]`, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	resp = doRequest(t, handler, "GET", "/v2/charms/info/chan-info-charm?channel=latest/edge", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	body := decodeJSON(t, resp)
+	defaultRelease := body["default-release"].(map[string]any)
+	channel := defaultRelease["channel"].(map[string]any)
+	assert.Equal(t, "latest/edge", channel["name"])
 }
 
 func TestRegisterPackageWithPrivateFlag(t *testing.T) {

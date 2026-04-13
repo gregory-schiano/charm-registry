@@ -96,6 +96,9 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload, err := a.svc.Info(r.Context(), identity, chi.URLParam(r, "name"))
+	if channel := r.URL.Query().Get("channel"); channel != "" {
+		payload, err = a.svc.InfoForChannel(r.Context(), identity, chi.URLParam(r, "name"), channel)
+	}
 	if err != nil {
 		var serviceErr *service.Error
 		if errors.As(err, &serviceErr) && serviceErr.Kind == service.ErrorKindNotFound {

@@ -236,27 +236,27 @@ func (s *Service) DownloadCharm(
 	return s.blobs.Get(ctx, revision.ObjectKey)
 }
 
-func revisionToInfo(revision core.Revision, packageID string, cfg config.Config) map[string]any {
-	return map[string]any{
-		"actions-yaml": revision.ActionsYAML,
-		"attributes":   revision.Attributes,
-		"bases":        revision.Bases,
-		"bundle-yaml":  revision.BundleYAML,
-		"config-yaml":  revision.ConfigYAML,
-		"created-at":   revision.CreatedAt,
-		"download": map[string]any{
-			"hash-sha-256": revision.SHA256,
-			"size":         revision.Size,
-			"url": cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf(
+func revisionToInfo(revision core.Revision, packageID string, cfg config.Config) infoRevisionResponse {
+	return infoRevisionResponse{
+		ActionsYAML: revision.ActionsYAML,
+		Attributes:  revision.Attributes,
+		Bases:       revision.Bases,
+		BundleYAML:  revision.BundleYAML,
+		ConfigYAML:  revision.ConfigYAML,
+		CreatedAt:   revision.CreatedAt,
+		Download: core.Download{
+			HashSHA256: revision.SHA256,
+			Size:       revision.Size,
+			URL: cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf(
 				"%d",
 				revision.Revision,
 			) + ".charm",
 		},
-		"metadata-yaml": revision.MetadataYAML,
-		"readme-md":     revision.ReadmeMD,
-		"relations":     revision.Relations,
-		"revision":      revision.Revision,
-		"subordinate":   revision.Subordinate,
-		"version":       revision.Version,
+		MetadataYAML: revision.MetadataYAML,
+		ReadmeMD:     revision.ReadmeMD,
+		Relations:    revision.Relations,
+		Revision:     revision.Revision,
+		Subordinate:  revision.Subordinate,
+		Version:      revision.Version,
 	}
 }

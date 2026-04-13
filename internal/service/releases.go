@@ -194,20 +194,20 @@ func (s *Service) CreateTracks(
 // entries inside "results" rather than turning the whole request into an HTTP
 // error response.  Only unexpected infrastructure errors (DB, blob storage)
 // are returned as a top-level error.
-func (s *Service) Refresh(ctx context.Context, identity core.Identity, request RefreshRequest) (map[string]any, error) {
-	results := make([]map[string]any, 0, len(request.Actions))
+func (s *Service) Refresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
+	results := make([]refreshActionResponse, 0, len(request.Actions))
 	for _, action := range request.Actions {
 		item, err := s.resolveRefreshAction(ctx, identity, action)
 		if err != nil {
 			// Unexpected infrastructure error — propagate so the API layer
 			// returns a top-level 500.
-			return nil, err
+			return refreshResponse{}, err
 		}
 		results = append(results, item)
 	}
-	return map[string]any{
-		"error-list": []any{},
-		"results":    results,
+	return refreshResponse{
+		ErrorList: []any{},
+		Results:   results,
 	}, nil
 }
 
@@ -219,12 +219,12 @@ func (s *Service) resolveRefreshAction(
 	ctx context.Context,
 	identity core.Identity,
 	action RefreshAction,
-) (map[string]any, error) {
-	errorResult := func(svcErr *Error) map[string]any {
-		return map[string]any{
-			"instance-key": action.InstanceKey,
-			"result":       "error",
-			"error":        core.APIError{Code: svcErr.Code, Message: svcErr.Message},
+) (refreshActionResponse, error) {
+	errorResult := func(svcErr *Error) refreshActionResponse {
+		return refreshActionResponse{
+			InstanceKey: action.InstanceKey,
+			Result:      "error",
+			Error:       &core.APIError{Code: svcErr.Code, Message: svcErr.Message},
 		}
 	}
 
@@ -234,7 +234,7 @@ func (s *Service) resolveRefreshAction(
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
 	if err := s.requirePackageView(ctx, identity, pkg, false); err != nil {
@@ -242,7 +242,7 @@ func (s *Service) resolveRefreshAction(
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
 	release, revision, resources, effectiveChannel, redirectChannel, err := s.resolveRefreshSelection(ctx, pkg, action)
@@ -251,21 +251,22 @@ func (s *Service) resolveRefreshAction(
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
 	revision.Resources = resources
-	item := map[string]any{
-		"charm":             refreshEntity(pkg, revision, resources, s.cfg),
-		"effective-channel": effectiveChannel,
-		"id":                pkg.ID,
-		"instance-key":      action.InstanceKey,
-		"name":              pkg.Name,
-		"released-at":       release.When,
-		"result":            action.Action,
+	charm := refreshEntityResponseFrom(pkg, revision, resources, s.cfg)
+	item := refreshActionResponse{
+		Charm:            &charm,
+		EffectiveChannel: effectiveChannel,
+		ID:               pkg.ID,
+		InstanceKey:      action.InstanceKey,
+		Name:             pkg.Name,
+		ReleasedAt:       &release.When,
+		Result:           action.Action,
 	}
 	if redirectChannel != "" {
-		item["redirect-channel"] = redirectChannel
+		item.RedirectChannel = redirectChannel
 	}
 	return item, nil
 }
@@ -366,6 +367,7 @@ func (s *Service) applyResourceOverrides(
 			lookup[ref.Name] = *ref.Revision
 		}
 	}
+	resolvedDefs := make(map[string]core.ResourceDefinition, len(lookup))
 	for idx, item := range resources {
 		revisionNumber, ok := lookup[item.Name]
 		if !ok {
@@ -375,11 +377,28 @@ func (s *Service) applyResourceOverrides(
 		if err != nil {
 			return nil, err
 		}
+		resolvedDefs[item.Name] = def
 		overrideItem, err := s.repo.GetResourceRevision(ctx, def.ID, revisionNumber)
 		if err != nil {
 			return nil, err
 		}
 		resources[idx] = s.attachResourceDownload(packageID, overrideItem)
+		delete(lookup, item.Name)
+	}
+	for resourceName, revisionNumber := range lookup {
+		def, ok := resolvedDefs[resourceName]
+		if !ok {
+			var err error
+			def, err = s.repo.GetResourceDefinition(ctx, packageID, resourceName)
+			if err != nil {
+				return nil, err
+			}
+		}
+		overrideItem, err := s.repo.GetResourceRevision(ctx, def.ID, revisionNumber)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, s.attachResourceDownload(packageID, overrideItem))
 	}
 	return resources, nil
 }
@@ -408,34 +427,34 @@ func (s *Service) resolveReleaseResources(
 	return out, nil
 }
 
-func refreshEntity(
+func refreshEntityResponseFrom(
 	pkg core.Package,
 	revision core.Revision,
 	resources []core.ResourceRevision,
 	cfg config.Config,
-) map[string]any {
-	return map[string]any{
-		"created-at": revision.CreatedAt,
-		"download": map[string]any{
-			"hash-sha-256": revision.SHA256,
-			"size":         revision.Size,
-			"url": cfg.PublicAPIURL + "/api/v1/charms/download/" + pkg.ID + "_" + fmt.Sprintf(
+) refreshEntityResponse {
+	return refreshEntityResponse{
+		CreatedAt: revision.CreatedAt,
+		Download: core.Download{
+			HashSHA256: revision.SHA256,
+			Size:       revision.Size,
+			URL: cfg.PublicAPIURL + "/api/v1/charms/download/" + pkg.ID + "_" + fmt.Sprintf(
 				"%d",
 				revision.Revision,
 			) + ".charm",
 		},
-		"id":            pkg.ID,
-		"license":       "",
-		"name":          pkg.Name,
-		"publisher":     pkg.Publisher,
-		"resources":     releaseResourcesToDownloads(pkg.ID, resources, cfg),
-		"revision":      revision.Revision,
-		"summary":       stringValue(pkg.Summary),
-		"type":          pkg.Type,
-		"version":       revision.Version,
-		"bases":         revision.Bases,
-		"config-yaml":   revision.ConfigYAML,
-		"metadata-yaml": revision.MetadataYAML,
+		ID:           pkg.ID,
+		License:      "",
+		Name:         pkg.Name,
+		Publisher:    pkg.Publisher,
+		Resources:    resources,
+		Revision:     revision.Revision,
+		Summary:      stringValue(pkg.Summary),
+		Type:         pkg.Type,
+		Version:      revision.Version,
+		Bases:        revision.Bases,
+		ConfigYAML:   revision.ConfigYAML,
+		MetadataYAML: revision.MetadataYAML,
 	}
 }
 

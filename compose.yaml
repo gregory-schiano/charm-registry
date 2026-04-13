@@ -118,8 +118,8 @@ services:
         condition: service_completed_successfully
     environment:
       CHARM_REGISTRY_LISTEN: ":8080"
-      CHARM_REGISTRY_PUBLIC_API_URL: "http://localhost:8080"
-      CHARM_REGISTRY_PUBLIC_STORAGE_URL: "http://localhost:8080"
+      CHARM_REGISTRY_PUBLIC_API_URL: "${CHARM_REGISTRY_PUBLIC_API_URL:-http://localhost:8080}"
+      CHARM_REGISTRY_PUBLIC_STORAGE_URL: "${CHARM_REGISTRY_PUBLIC_STORAGE_URL:-http://localhost:8080}"
       CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "${CHARM_REGISTRY_PUBLIC_REGISTRY_URL:-https://localhost:9443}"
       CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
       CHARM_REGISTRY_S3_BUCKET: "${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}"

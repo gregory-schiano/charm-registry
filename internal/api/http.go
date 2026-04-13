@@ -45,6 +45,8 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Use(api.logRequests)
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
+	router.NotFound(api.handleNotFound)
+	router.MethodNotAllowed(api.handleMethodNotAllowed)
 
 	router.Get("/", api.handleRoot)
 	router.Get("/healthz", api.handleHealthz)
@@ -86,6 +88,7 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Get("/v2/charms/find", api.handleFind)
 	router.Get("/v2/charms/info/{name}", api.handleInfo)
 	router.Post("/v2/charms/refresh", api.handleRefresh)
+	router.Get("/v2/charms/resources/{name}/{resource}/revisions", api.handleListResourceRevisions)
 
 	router.Get("/api/v1/charms/download/{filename}", api.handleCharmDownload)
 	router.Get("/api/v1/resources/download/{filename}", api.handleResourceDownload)
@@ -251,6 +254,24 @@ func apiErrorf(status int, code, message string) error {
 
 func serviceError(status int, code, message string) error {
 	return apiErrorf(status, code, message)
+}
+
+func (a *API) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, map[string]any{
+		"error-list": []map[string]any{{
+			"code":    "not-found",
+			"message": "endpoint not found",
+		}},
+	})
+}
+
+func (a *API) handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
+		"error-list": []map[string]any{{
+			"code":    "method-not-allowed",
+			"message": "method not allowed",
+		}},
+	})
 }
 
 func invalidRequestError(err error) error {

@@ -2,113 +2,79 @@ package repo
 
 import (
 	"context"
-	"errors"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/gschiano/charm-registry/internal/core"
+	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
 // ReplaceRelease is part of the [Repository] interface.
 func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release core.Release) error {
-	baseJSON, err := marshalJSON(release.Base)
+	baseJSON, err := rawJSON(release.Base)
 	if err != nil {
 		return err
 	}
-	resourcesJSON, err := marshalJSON(release.Resources)
+	resourcesJSON, err := rawJSON(release.Resources)
 	if err != nil {
 		return err
 	}
-	_, err = p.db.Exec(
-		ctx,
-		`
-		INSERT INTO releases (id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		ON CONFLICT (package_id, channel) DO UPDATE SET
-			revision = EXCLUDED.revision,
-			base = EXCLUDED.base,
-			resources = EXCLUDED.resources,
-			when_created = EXCLUDED.when_created,
-			expiration_date = EXCLUDED.expiration_date,
-			progressive = EXCLUDED.progressive
-	`,
-		release.ID,
-		packageID,
-		release.Channel,
-		release.Revision,
-		baseJSON,
-		resourcesJSON,
-		release.When,
-		release.ExpirationDate,
-		release.Progressive,
-	)
-	return err
+	return p.queries().ReplaceRelease(ctx, sqlcdb.ReplaceReleaseParams{
+		ID:             release.ID,
+		PackageID:      packageID,
+		Channel:        release.Channel,
+		Revision:       int32(release.Revision),
+		Base:           baseJSON,
+		Resources:      resourcesJSON,
+		WhenCreated:    release.When,
+		ExpirationDate: timestamptzPtr(release.ExpirationDate),
+		Progressive:    release.Progressive,
+	})
 }
 
 // ListReleases is part of the [Repository] interface.
 func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
-	rows, err := p.db.Query(ctx, `
-		SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
-		FROM releases WHERE package_id = $1 ORDER BY channel ASC
-	`, packageID)
+	rows, err := p.queries().ListReleases(ctx, packageID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []core.Release
-	for rows.Next() {
-		release, err := scanRelease(rows)
+	out := make([]core.Release, 0, len(rows))
+	for _, row := range rows {
+		release, err := releaseFromSQLC(row)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, release)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ResolveRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error) {
-	row := p.db.QueryRow(ctx, `
-		SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
-		FROM releases WHERE package_id = $1 AND channel = $2
-	`, packageID, channel)
-	release, err := scanRelease(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	row, err := p.queries().ResolveRelease(ctx, sqlcdb.ResolveReleaseParams{
+		PackageID: packageID,
+		Channel:   channel,
+	})
+	if pgxNotFound(err) {
 		return core.Release{}, ErrNotFound
 	}
-	return release, err
+	if err != nil {
+		return core.Release{}, err
+	}
+	return releaseFromSQLC(row)
 }
 
 // ResolveDefaultRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error) {
-	row := p.db.QueryRow(ctx, `
-		SELECT
-			r.id, r.package_id, r.channel, r.revision, r.base, r.resources,
-			r.when_created, r.expiration_date, r.progressive
-		FROM packages p
-		JOIN releases r ON r.package_id = p.id
-		WHERE p.id = $1 AND (
-			(p.default_track IS NOT NULL AND r.channel = p.default_track || '/stable') OR
-			(p.default_track IS NULL AND r.channel = 'latest/stable')
-		)
-		ORDER BY r.when_created DESC LIMIT 1
-	`, packageID)
-	release, err := scanRelease(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		rows, err := p.db.Query(ctx, `
-			SELECT id, package_id, channel, revision, base, resources, when_created, expiration_date, progressive
-			FROM releases WHERE package_id = $1 ORDER BY when_created DESC LIMIT 1
-		`, packageID)
-		if err != nil {
-			return core.Release{}, err
-		}
-		defer rows.Close()
-		if !rows.Next() {
+	release, err := p.queries().ResolveDefaultRelease(ctx, packageID)
+	if pgxNotFound(err) {
+		release, err = p.queries().ResolveLatestRelease(ctx, packageID)
+		if pgxNotFound(err) {
 			return core.Release{}, ErrNotFound
 		}
-		return scanRelease(rows)
 	}
-	return release, err
+	if err != nil {
+		return core.Release{}, err
+	}
+	return releaseFromSQLC(release)
 }
 
 func scanRelease(row interface{ Scan(dest ...any) error }) (core.Release, error) {

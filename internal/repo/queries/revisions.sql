@@ -40,6 +40,26 @@ FROM revisions
 WHERE package_id = $1
 ORDER BY revision DESC;
 
+-- name: GetLatestRevision :one
+SELECT id, package_id, revision, version, status,
+       created_at, created_by, size, sha256, sha384,
+       object_key, metadata_yaml, config_yaml, actions_yaml,
+       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+FROM revisions
+WHERE package_id = $1
+ORDER BY revision DESC
+LIMIT 1;
+
+-- name: ListRevisionsByNumbers :many
+SELECT id, package_id, revision, version, status,
+       created_at, created_by, size, sha256, sha384,
+       object_key, metadata_yaml, config_yaml, actions_yaml,
+       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+FROM revisions
+WHERE package_id = $1
+  AND revision = ANY($2::int4[])
+ORDER BY revision DESC;
+
 -- name: GetRevisionByNumber :one
 SELECT id, package_id, revision, version, status,
        created_at, created_by, size, sha256, sha384,

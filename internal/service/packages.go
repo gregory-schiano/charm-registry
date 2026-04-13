@@ -46,13 +46,6 @@ func (s *Service) RegisterPackage(
 			CreatedAt: now,
 		}},
 	}
-	var err error
-	if s.oci != nil {
-		pkg, err = s.oci.SyncPackage(ctx, pkg)
-		if err != nil {
-			return core.Package{}, err
-		}
-	}
 	if err := s.withRepositoryTransaction(ctx, func(repository repo.Repository) error {
 		if err := repository.CreatePackage(ctx, pkg); err != nil {
 			return translateRepoError(err, "package already exists")
@@ -224,31 +217,48 @@ func (s *Service) Find(ctx context.Context, identity core.Identity, query string
 //
 // The following errors may be returned:
 // - Authorization or repository lookup errors.
-func (s *Service) Info(ctx context.Context, identity core.Identity, charmName string) (map[string]any, error) {
+func (s *Service) Info(ctx context.Context, identity core.Identity, charmName string) (infoResponse, error) {
+	return s.info(ctx, identity, charmName, "")
+}
+
+func (s *Service) InfoForChannel(
+	ctx context.Context,
+	identity core.Identity,
+	charmName, channel string,
+) (infoResponse, error) {
+	return s.info(ctx, identity, charmName, channel)
+}
+
+func (s *Service) info(ctx context.Context, identity core.Identity, charmName, channel string) (infoResponse, error) {
 	pkg, err := s.GetPackage(ctx, identity, charmName, false)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
-	defaultRelease, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
+	var defaultRelease core.Release
+	if channel != "" {
+		defaultRelease, err = s.repo.ResolveRelease(ctx, pkg.ID, channel)
+	} else {
+		defaultRelease, err = s.repo.ResolveDefaultRelease(ctx, pkg.ID)
+	}
 	if err != nil {
-		return nil, translateRepoError(err, "no released revisions found")
+		return infoResponse{}, translateRepoError(err, "no released revisions found")
 	}
 	defaultRevision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, defaultRelease.Revision)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	resourceDefs, err := s.repo.ListResourceDefinitions(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	resources, err := s.resolveReleaseResources(ctx, pkg.ID, resourceDefs, defaultRelease)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	defaultRevision.Resources = resources
 	releases, err := s.repo.ListReleases(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	revisionNumbers := uniqueRevisionNumbers(releases)
 	if len(revisionNumbers) == 0 {
@@ -256,45 +266,45 @@ func (s *Service) Info(ctx context.Context, identity core.Identity, charmName st
 	}
 	revisionCache, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, revisionNumbers)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	revisionCache[defaultRelease.Revision] = defaultRevision
-	channelMap := make([]map[string]any, 0, len(releases))
+	channelMap := make([]infoChannelMapItem, 0, len(releases))
 	for _, release := range releases {
 		rev, ok := revisionCache[release.Revision]
 		if !ok {
 			continue
 		}
 		chInfo := splitChannel(release.Channel)
-		channelMap = append(channelMap, map[string]any{
-			"channel": map[string]any{
-				"base":        release.Base,
-				"name":        release.Channel,
-				"released-at": release.When,
-				"risk":        chInfo.risk,
-				"track":       chInfo.track,
+		channelMap = append(channelMap, infoChannelMapItem{
+			Channel: infoChannelResponse{
+				Base:       release.Base,
+				Name:       release.Channel,
+				ReleasedAt: release.When,
+				Risk:       chInfo.risk,
+				Track:      chInfo.track,
 			},
-			"revision": revisionToInfo(rev, pkg.ID, s.cfg),
+			Revision: revisionToInfo(rev, pkg.ID, s.cfg),
 		})
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
-	return map[string]any{
-		"id":   pkg.ID,
-		"name": pkg.Name,
-		"type": pkg.Type,
-		"default-release": map[string]any{
-			"channel": map[string]any{
-				"base":        defaultRelease.Base,
-				"name":        defaultRelease.Channel,
-				"released-at": defaultRelease.When,
-				"risk":        channelInfo.risk,
-				"track":       channelInfo.track,
+	return infoResponse{
+		ID:   pkg.ID,
+		Name: pkg.Name,
+		Type: pkg.Type,
+		DefaultRelease: infoReleaseResponse{
+			Channel: infoChannelResponse{
+				Base:       defaultRelease.Base,
+				Name:       defaultRelease.Channel,
+				ReleasedAt: defaultRelease.When,
+				Risk:       channelInfo.risk,
+				Track:      channelInfo.track,
 			},
-			"resources": releaseResourcesToDownloads(pkg.ID, resources, s.cfg),
-			"revision":  revisionToInfo(defaultRevision, pkg.ID, s.cfg),
+			Resources: resources,
+			Revision:  revisionToInfo(defaultRevision, pkg.ID, s.cfg),
 		},
-		"channel-map": channelMap,
-		"result":      packageResult(pkg),
+		ChannelMap: channelMap,
+		Result:     packageResult(pkg),
 	}, nil
 }
 
@@ -337,27 +347,27 @@ func (s *Service) packageFindResult(ctx context.Context, pkg core.Package) (map[
 	}, nil
 }
 
-func packageResult(pkg core.Package) map[string]any {
+func packageResult(pkg core.Package) packageResultResponse {
 	website := ""
 	if pkg.Website != nil {
 		website = *pkg.Website
 	}
-	return map[string]any{
-		"bugs-url":      firstLink(pkg.Links["issues"]),
-		"categories":    []any{},
-		"deployable-on": []string{},
-		"description":   stringValue(pkg.Description),
-		"license":       "",
-		"links":         pkg.Links,
-		"media":         pkg.Media,
-		"publisher":     pkg.Publisher,
-		"store-url":     firstNonEmpty(website, pkg.Store),
-		"store-url-old": "",
-		"summary":       stringValue(pkg.Summary),
-		"title":         stringValue(pkg.Title),
-		"unlisted":      pkg.Private,
-		"used-by":       []any{},
-		"website":       website,
+	return packageResultResponse{
+		BugsURL:      firstLink(pkg.Links["issues"]),
+		Categories:   []any{},
+		DeployableOn: []string{},
+		Description:  stringValue(pkg.Description),
+		License:      "",
+		Links:        pkg.Links,
+		Media:        pkg.Media,
+		Publisher:    pkg.Publisher,
+		StoreURL:     firstNonEmpty(website, pkg.Store),
+		StoreURLOld:  "",
+		Summary:      stringValue(pkg.Summary),
+		Title:        stringValue(pkg.Title),
+		Unlisted:     pkg.Private,
+		UsedBy:       []any{},
+		Website:      website,
 	}
 }
 

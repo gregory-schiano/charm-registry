@@ -2,52 +2,41 @@ package repo
 
 import (
 	"context"
-	"slices"
 
 	"github.com/gschiano/charm-registry/internal/core"
+	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
 // CreateTracks is part of the [Repository] interface.
 func (p *Postgres) CreateTracks(ctx context.Context, packageID string, tracks []core.Track) (int, error) {
 	var created int
 	for _, track := range tracks {
-		tag, err := p.db.Exec(ctx, `
-			INSERT INTO tracks (package_id, name, version_pattern, automatic_phasing_percentage, created_at)
-			VALUES ($1,$2,$3,$4,$5)
-			ON CONFLICT DO NOTHING
-		`, packageID, track.Name, track.VersionPattern, track.AutomaticPhasingPercentage, track.CreatedAt)
+		rowsAffected, err := p.queries().CreateTrack(ctx, sqlcdb.CreateTrackParams{
+			PackageID:                  packageID,
+			Name:                       track.Name,
+			VersionPattern:             track.VersionPattern,
+			AutomaticPhasingPercentage: track.AutomaticPhasingPercentage,
+			CreatedAt:                  track.CreatedAt,
+		})
 		if err != nil {
 			return created, err
 		}
-		created += int(tag.RowsAffected())
+		created += int(rowsAffected)
 	}
 	return created, nil
 }
 
 // ListTracks is part of the [Repository] interface.
 func (p *Postgres) ListTracks(ctx context.Context, packageID string) ([]core.Track, error) {
-	rows, err := p.db.Query(ctx, `
-		SELECT name, version_pattern, automatic_phasing_percentage, created_at
-		FROM tracks WHERE package_id = $1 ORDER BY created_at ASC
-	`, packageID)
+	rows, err := p.queries().ListTracks(ctx, packageID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []core.Track
-	for rows.Next() {
-		var track core.Track
-		if err := rows.Scan(
-			&track.Name,
-			&track.VersionPattern,
-			&track.AutomaticPhasingPercentage,
-			&track.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		out = append(out, track)
+	out := make([]core.Track, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, trackFromSQLC(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListTracksForPackages is part of the [Repository] interface.
@@ -56,34 +45,19 @@ func (p *Postgres) ListTracksForPackages(ctx context.Context, packageIDs []strin
 	if len(packageIDs) == 0 {
 		return out, nil
 	}
-	rows, err := p.db.Query(ctx, `
-		SELECT package_id, name, version_pattern, automatic_phasing_percentage, created_at
-		FROM tracks WHERE package_id = ANY($1) ORDER BY created_at ASC
-	`, packageIDs)
+	rows, err := p.queries().ListTracksForPackages(ctx, packageIDs)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			packageID string
-			track     core.Track
-		)
-		if err := rows.Scan(
-			&packageID,
-			&track.Name,
-			&track.VersionPattern,
-			&track.AutomaticPhasingPercentage,
-			&track.CreatedAt,
-		); err != nil {
-			return nil, err
+	seen := make(map[string]struct{}, len(packageIDs))
+	for _, row := range rows {
+		out[row.PackageID] = append(out[row.PackageID], trackBatchFromSQLC(row))
+	}
+	for _, packageID := range packageIDs {
+		if _, ok := seen[packageID]; ok {
+			continue
 		}
-		out[packageID] = append(out[packageID], track)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	for _, packageID := range slices.Compact(packageIDs) {
+		seen[packageID] = struct{}{}
 		if _, ok := out[packageID]; !ok {
 			out[packageID] = nil
 		}

@@ -45,7 +45,9 @@ The compose stack includes:
 
 The API is exposed at [http://localhost:8080](http://localhost:8080), MinIO at [http://localhost:9001](http://localhost:9001), and Harbor at [https://localhost:9443](https://localhost:9443).
 
-On first run, `make up` generates a local CA and a TLS certificate for Harbor and writes them to `./certs/`. Install the CA once so that skopeo and other container tools trust Harbor:
+If Juju or another client runs outside the Docker host, set `CHARM_REGISTRY_PUBLIC_API_URL` and `CHARM_REGISTRY_PUBLIC_STORAGE_URL` to a host/IP that is reachable from that client. Leaving them at `localhost` will cause the registry to hand out download URLs that only work on the registry host itself.
+
+On first run, `make up` generates a local CA and a TLS certificate for Harbor and writes them to `./certs/`. The Harbor leaf certificate SANs are derived from `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` and `CHARM_REGISTRY_HARBOR_URL`, so if you point those at a reachable host/IP before bootstrapping, the generated cert will cover that address. If those values change later, rerun `make harbor-prepare` or `make up` to reissue the Harbor leaf certificate. Install the CA once so that skopeo and other container tools trust Harbor:
 
 ```bash
 make install-cert   # requires sudo; supports Ubuntu/Debian and Fedora/RHEL

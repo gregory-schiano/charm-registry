@@ -72,13 +72,13 @@ func TestPublishInfoAndRefreshFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assert: info reflects released revision and resources
-	assert.Equal(t, pkg.ID, info["id"])
-	defaultRelease := info["default-release"].(map[string]any)
-	defaultRevision := defaultRelease["revision"].(map[string]any)
-	assert.Equal(t, 1, defaultRevision["revision"])
-	defaultResources := defaultRelease["resources"].([]map[string]any)
+	assert.Equal(t, pkg.ID, info.ID)
+	defaultRelease := info.DefaultRelease
+	defaultRevision := defaultRelease.Revision
+	assert.Equal(t, 1, defaultRevision.Revision)
+	defaultResources := defaultRelease.Resources
 	require.Len(t, defaultResources, 1) // guards index access below
-	assert.Equal(t, "config", defaultResources[0]["name"])
+	assert.Equal(t, "config", defaultResources[0].Name)
 
 	// Act: refresh
 	refresh, err := svc.Refresh(ctx, owner, RefreshRequest{
@@ -92,13 +92,14 @@ func TestPublishInfoAndRefreshFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assert: refresh returns the released revision
-	results := refresh["results"].([]map[string]any)
+	results := refresh.Results
 	require.Len(t, results, 1) // guards index access below
-	assert.Equal(t, pkg.ID, results[0]["id"])
-	charmEntity := results[0]["charm"].(map[string]any)
-	assert.Equal(t, "demo-charm", charmEntity["name"])
-	assert.Equal(t, 1, charmEntity["revision"])
-	assert.Len(t, charmEntity["resources"].([]map[string]any), 1)
+	assert.Equal(t, pkg.ID, results[0].ID)
+	require.NotNil(t, results[0].Charm)
+	charmEntity := results[0].Charm
+	assert.Equal(t, "demo-charm", charmEntity.Name)
+	assert.Equal(t, 1, charmEntity.Revision)
+	assert.Len(t, charmEntity.Resources, 1)
 
 	// Act: OCI image operations
 	creds, err := svc.OCIImageUploadCredentials(ctx, owner, pkg.Name, "workload-image")
@@ -136,7 +137,7 @@ func TestPrivatePackagesRequireAuthentication(t *testing.T) {
 	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
 }
 
-func TestRegisterPackageOCISyncFailureDoesNotPersistPackage(t *testing.T) {
+func TestRegisterPackageDoesNotRequireOCIProvisioning(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -145,11 +146,13 @@ func TestRegisterPackageOCISyncFailureDoesNotPersistPackage(t *testing.T) {
 	})
 	owner := newIdentity("owner-oci", "owner-oci")
 
-	_, err := svc.RegisterPackage(ctx, owner, "broken-charm", "charm", true)
-	require.Error(t, err)
+	pkg, err := svc.RegisterPackage(ctx, owner, "broken-charm", "charm", true)
+	require.NoError(t, err)
 
-	_, err = repository.GetPackageByName(ctx, "broken-charm")
-	require.ErrorIs(t, err, repo.ErrNotFound)
+	stored, err := repository.GetPackageByName(ctx, "broken-charm")
+	require.NoError(t, err)
+	assert.Equal(t, pkg.ID, stored.ID)
+	assert.Empty(t, stored.HarborProject)
 }
 
 func TestOCIImageUploadCredentialsPropagatesCredentialFailure(t *testing.T) {
@@ -1063,10 +1066,45 @@ func TestDownloadResourceReturnsOCIError(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID, Type: "oci-image",
+	})
+	require.NoError(t, err)
+
+	pkg, err := svc.GetPackage(ctx, owner, "my-charm", true)
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+	require.NoError(t, err)
+
+	svc.oci = failingOCIRegistry{
 		testOCIRegistry: testOCIRegistry{},
 		credentialsErr:  errors.New("boom"),
-	})
+	}
+
+	_, err = svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestDownloadResourceOCIImageRequiresProvisionedPackage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
 	owner := newIdentity("acc-1", "alice")
 	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
 	require.NoError(t, err)
@@ -1088,8 +1126,10 @@ func TestDownloadResourceReturnsOCIError(t *testing.T) {
 
 	_, err = svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "boom")
+	assertServiceError(t, err, 409)
+	var svcErr *Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, "oci-not-provisioned", svcErr.Code)
 }
 
 func TestDownloadResourceNotFound(t *testing.T) {
@@ -1227,9 +1267,9 @@ func TestRefreshByID(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	require.Len(t, results, 1)
-	assert.Equal(t, pkg.ID, results[0]["id"])
+	assert.Equal(t, pkg.ID, results[0].ID)
 }
 
 func TestRefreshByRevision(t *testing.T) {
@@ -1256,7 +1296,7 @@ func TestRefreshByRevision(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	require.Len(t, results, 1)
 }
 
@@ -1277,12 +1317,11 @@ func TestRefreshMissingIDAndName(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	require.Len(t, results, 1)
-	assert.Equal(t, "error", results[0]["result"])
-	apiErr, ok := results[0]["error"].(core.APIError)
-	require.True(t, ok)
-	assert.Equal(t, "invalid-request", apiErr.Code)
+	assert.Equal(t, "error", results[0].Result)
+	require.NotNil(t, results[0].Error)
+	assert.Equal(t, "invalid-request", results[0].Error.Code)
 }
 
 func TestOCIImageUploadCredentialsNonExistentPackage(t *testing.T) {
@@ -1430,9 +1469,9 @@ func TestRefreshDefaultRelease(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	require.Len(t, results, 1)
-	assert.Equal(t, "latest/stable", results[0]["effective-channel"])
+	assert.Equal(t, "latest/stable", results[0].EffectiveChannel)
 }
 
 func TestListResourcesNoResources(t *testing.T) {
@@ -1607,6 +1646,47 @@ func TestDownloadResourceOCIImage(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+	require.NoError(t, err)
+
+	pkg, err := svc.GetPackage(ctx, owner, "my-charm", true)
+	require.NoError(t, err)
+	payload, err := svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
+
+	require.NoError(t, err)
+	assert.Contains(t, string(payload), `"Digest":"sha256:test"`)
+	assert.Contains(t, string(payload), `"Username":"robot$pull-`)
+}
+
+func TestDownloadResourceOCIImageUsesStoredCredentialsWithoutResync(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID, Type: "oci-image",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+	require.NoError(t, err)
+
+	svc.oci = failingOCIRegistry{
+		testOCIRegistry: testOCIRegistry{},
+		syncErr:         errors.New("harbor unavailable"),
+	}
+
 	pkg, err := svc.GetPackage(ctx, owner, "my-charm", true)
 	require.NoError(t, err)
 	payload, err := svc.DownloadResource(ctx, owner, pkg.ID, "workload-image", 1)
@@ -1676,8 +1756,110 @@ func TestRefreshWithResourceRevisionOverride(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	assert.Len(t, results, 1)
+}
+
+func TestRefreshWithDirectRevisionAndResourceOverrideWithoutReleaseResources(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID,
+		Type:     "oci-image",
+	})
+	require.NoError(t, err)
+
+	result, err := svc.Refresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "refresh",
+			InstanceKey: "app/0",
+			ID:          stringPtr(pkg.ID),
+			Name:        stringPtr("my-charm"),
+			Revision:    intPtr(1),
+			Channel:     stringPtr("latest/stable"),
+			ResourceRevisions: []core.ReleaseResourceRef{
+				{Name: "workload-image", Revision: intPtr(1)},
+			},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.NotNil(t, result.Results[0].Charm)
+	require.Len(t, result.Results[0].Charm.Resources, 1)
+	assert.Equal(t, "workload-image", result.Results[0].Charm.Resources[0].Name)
+	assert.Equal(t, 1, result.Results[0].Charm.Resources[0].Revision)
+	assert.Equal(t, "oci-image", result.Results[0].Charm.Resources[0].Type)
+	assert.NotEmpty(t, result.Results[0].Charm.Resources[0].Download.URL)
+}
+
+func TestRefreshWithDirectRevisionAndResourceOverrideUsesAttachedReleaseResource(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	ociBlob := []byte(`{"ImageName":"oci.example.test/charm-my-charm/workload-image","Digest":"sha256:test"}`)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", ociBlob)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "my-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID,
+		Type:     "oci-image",
+	})
+	require.NoError(t, err)
+
+	_, err = svc.Release(ctx, owner, "my-charm", []core.Release{{
+		Channel:  "latest/stable",
+		Revision: 1,
+		Resources: []core.ReleaseResourceRef{
+			{Name: "workload-image", Revision: intPtr(1)},
+		},
+	}})
+	require.NoError(t, err)
+
+	result, err := svc.Refresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "download",
+			InstanceKey: "app/0",
+			ID:          stringPtr(pkg.ID),
+			Revision:    intPtr(1),
+			ResourceRevisions: []core.ReleaseResourceRef{
+				{Name: "workload-image", Revision: intPtr(1)},
+			},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.NotNil(t, result.Results[0].Charm)
+	require.Len(t, result.Results[0].Charm.Resources, 1)
+	assert.Equal(t, "workload-image", result.Results[0].Charm.Resources[0].Name)
+	assert.Equal(t, 1, result.Results[0].Charm.Resources[0].Revision)
+	assert.Equal(t, "oci-image", result.Results[0].Charm.Resources[0].Type)
 }
 
 func TestListRegisteredPackagesUnauthenticated(t *testing.T) {
@@ -2102,8 +2284,8 @@ func TestReleaseWithResourceRefs(t *testing.T) {
 	// Assert: info shows the resource
 	info, err := svc.Info(ctx, owner, "my-charm")
 	require.NoError(t, err)
-	defaultRelease := info["default-release"].(map[string]any)
-	resources := defaultRelease["resources"].([]map[string]any)
+	defaultRelease := info.DefaultRelease
+	resources := defaultRelease.Resources
 	assert.Len(t, resources, 1)
 }
 
@@ -2179,6 +2361,58 @@ func TestOCIImageUploadCredentialsSuccess(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
 	require.NoError(t, err)
+
+	creds, err := svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+
+	require.NoError(t, err)
+	assert.Contains(t, creds["image-name"].(string), "workload-image")
+	assert.NotEmpty(t, creds["username"])
+	assert.NotEmpty(t, creds["password"])
+}
+
+func TestOCIImageUploadCredentialsProvisioningFailureReturnsServiceError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
+		syncErr: fmt.Errorf("harbor unavailable"),
+	})
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+
+	assertServiceError(t, err, 409)
+	var svcErr *Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, "oci-provisioning-unavailable", svcErr.Code)
+}
+
+func TestOCIImageUploadCredentialsUsesStoredCredentialsWithoutResync(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
+	require.NoError(t, err)
+
+	svc.oci = failingOCIRegistry{
+		testOCIRegistry: testOCIRegistry{},
+		syncErr:         errors.New("harbor unavailable"),
+	}
 
 	creds, err := svc.OCIImageUploadCredentials(ctx, owner, "my-charm", "workload-image")
 
@@ -2438,10 +2672,10 @@ func TestReleaseSinglePartChannel(t *testing.T) {
 	// Info should parse the single-part channel correctly
 	info, err := svc.Info(ctx, owner, "my-charm")
 	require.NoError(t, err)
-	defaultRelease := info["default-release"].(map[string]any)
-	channel := defaultRelease["channel"].(map[string]any)
-	assert.Equal(t, "latest", channel["track"])
-	assert.Equal(t, "stable", channel["risk"])
+	defaultRelease := info.DefaultRelease
+	channel := defaultRelease.Channel
+	assert.Equal(t, "latest", channel.Track)
+	assert.Equal(t, "stable", channel.Risk)
 }
 
 func TestFindPackageWithoutRelease(t *testing.T) {
@@ -2521,10 +2755,10 @@ func TestInfoWithMultipleReleasesAndResources(t *testing.T) {
 	info, err := svc.Info(ctx, owner, "my-charm")
 
 	require.NoError(t, err)
-	channelMap := info["channel-map"].([]map[string]any)
+	channelMap := info.ChannelMap
 	assert.Len(t, channelMap, 2)
-	defaultRelease := info["default-release"].(map[string]any)
-	resources := defaultRelease["resources"].([]map[string]any)
+	defaultRelease := info.DefaultRelease
+	resources := defaultRelease.Resources
 	assert.Len(t, resources, 1)
 }
 
@@ -2831,7 +3065,7 @@ func TestInfoWithNilResourceRevision(t *testing.T) {
 	info, err := svc.Info(ctx, owner, "my-charm")
 
 	require.NoError(t, err)
-	assert.NotNil(t, info["default-release"])
+	assert.NotZero(t, info.DefaultRelease)
 }
 
 func TestRefreshWithDefaultReleaseAndResources(t *testing.T) {
@@ -2870,10 +3104,11 @@ func TestRefreshWithDefaultReleaseAndResources(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	results := result["results"].([]map[string]any)
+	results := result.Results
 	require.Len(t, results, 1)
-	charmEntity := results[0]["charm"].(map[string]any)
-	resources := charmEntity["resources"].([]map[string]any)
+	require.NotNil(t, results[0].Charm)
+	charmEntity := results[0].Charm
+	resources := charmEntity.Resources
 	assert.Len(t, resources, 1)
 }
 
@@ -2937,20 +3172,17 @@ func assertServiceError(t *testing.T, err error, expectedStatus int) {
 
 // assertRefreshActionError verifies that a per-action error is embedded in the
 // Refresh results map for the given instanceKey with the expected error code.
-func assertRefreshActionError(t *testing.T, result map[string]any, instanceKey, expectedCode string) {
+func assertRefreshActionError(t *testing.T, result refreshResponse, instanceKey, expectedCode string) {
 	t.Helper()
-	results, ok := result["results"].([]map[string]any)
-	require.True(t, ok, "results should be []map[string]any")
 	var found bool
-	for _, item := range results {
-		if item["instance-key"] != instanceKey {
+	for _, item := range result.Results {
+		if item.InstanceKey != instanceKey {
 			continue
 		}
 		found = true
-		assert.Equal(t, "error", item["result"], "result should be 'error'")
-		apiErr, ok := item["error"].(core.APIError)
-		require.True(t, ok, "error should be core.APIError")
-		assert.Equal(t, expectedCode, apiErr.Code)
+		assert.Equal(t, "error", item.Result, "result should be 'error'")
+		require.NotNil(t, item.Error)
+		assert.Equal(t, expectedCode, item.Error.Code)
 	}
 	require.True(t, found, "no result found for instance-key %q", instanceKey)
 }

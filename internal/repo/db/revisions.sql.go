@@ -145,6 +145,45 @@ func (q *Queries) CreateUpload(ctx context.Context, arg CreateUploadParams) erro
 	return err
 }
 
+const getLatestRevision = `-- name: GetLatestRevision :one
+SELECT id, package_id, revision, version, status,
+       created_at, created_by, size, sha256, sha384,
+       object_key, metadata_yaml, config_yaml, actions_yaml,
+       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+FROM revisions
+WHERE package_id = $1
+ORDER BY revision DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestRevision(ctx context.Context, packageID string) (Revision, error) {
+	row := q.db.QueryRow(ctx, getLatestRevision, packageID)
+	var i Revision
+	err := row.Scan(
+		&i.ID,
+		&i.PackageID,
+		&i.Revision,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+		&i.CreatedBy,
+		&i.Size,
+		&i.Sha256,
+		&i.Sha384,
+		&i.ObjectKey,
+		&i.MetadataYaml,
+		&i.ConfigYaml,
+		&i.ActionsYaml,
+		&i.BundleYaml,
+		&i.ReadmeMd,
+		&i.Bases,
+		&i.Attributes,
+		&i.Relations,
+		&i.Subordinate,
+	)
+	return i, err
+}
+
 const getRevisionByNumber = `-- name: GetRevisionByNumber :one
 SELECT id, package_id, revision, version, status,
        created_at, created_by, size, sha256, sha384,
@@ -227,6 +266,63 @@ ORDER BY revision DESC
 
 func (q *Queries) ListRevisions(ctx context.Context, packageID string) ([]Revision, error) {
 	rows, err := q.db.Query(ctx, listRevisions, packageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Revision{}
+	for rows.Next() {
+		var i Revision
+		if err := rows.Scan(
+			&i.ID,
+			&i.PackageID,
+			&i.Revision,
+			&i.Version,
+			&i.Status,
+			&i.CreatedAt,
+			&i.CreatedBy,
+			&i.Size,
+			&i.Sha256,
+			&i.Sha384,
+			&i.ObjectKey,
+			&i.MetadataYaml,
+			&i.ConfigYaml,
+			&i.ActionsYaml,
+			&i.BundleYaml,
+			&i.ReadmeMd,
+			&i.Bases,
+			&i.Attributes,
+			&i.Relations,
+			&i.Subordinate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRevisionsByNumbers = `-- name: ListRevisionsByNumbers :many
+SELECT id, package_id, revision, version, status,
+       created_at, created_by, size, sha256, sha384,
+       object_key, metadata_yaml, config_yaml, actions_yaml,
+       bundle_yaml, readme_md, bases, attributes, relations, subordinate
+FROM revisions
+WHERE package_id = $1
+  AND revision = ANY($2::int4[])
+ORDER BY revision DESC
+`
+
+type ListRevisionsByNumbersParams struct {
+	PackageID string
+	Column2   []int32
+}
+
+func (q *Queries) ListRevisionsByNumbers(ctx context.Context, arg ListRevisionsByNumbersParams) ([]Revision, error) {
+	rows, err := q.db.Query(ctx, listRevisionsByNumbers, arg.PackageID, arg.Column2)
 	if err != nil {
 		return nil, err
 	}

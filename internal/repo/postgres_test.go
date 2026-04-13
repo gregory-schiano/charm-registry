@@ -252,6 +252,35 @@ func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
+	repository := newPostgresIntegrationRepository(t)
+	ctx := context.Background()
+
+	owner := ensureTestAccount(t, repository, "owner-search", "owner-search")
+	createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-percent",
+		Name: "literal%name",
+	})
+	createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-underscore",
+		Name: "literal_name",
+	})
+	createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-plain",
+		Name: "literalxname",
+	})
+
+	percentMatches, err := repository.SearchPackages(ctx, "%")
+	require.NoError(t, err)
+	require.Len(t, percentMatches, 1)
+	assert.Equal(t, "literal%name", percentMatches[0].Name)
+
+	underscoreMatches, err := repository.SearchPackages(ctx, "_")
+	require.NoError(t, err)
+	require.Len(t, underscoreMatches, 1)
+	assert.Equal(t, "literal_name", underscoreMatches[0].Name)
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

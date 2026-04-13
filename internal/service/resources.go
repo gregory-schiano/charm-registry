@@ -221,7 +221,7 @@ func (s *Service) OCIImageUploadCredentials(
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
 		return nil, translateRepoError(err, "resource not found")
 	}
-	pkg, err = s.syncOCIPackage(ctx, pkg)
+	pkg, err = s.ensureOCIProvisioned(ctx, pkg)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func (s *Service) OCIImageBlob(
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
 		return "", translateRepoError(err, "resource not found")
 	}
-	pkg, err = s.syncOCIPackage(ctx, pkg)
+	pkg, err = s.ensureOCIProvisioned(ctx, pkg)
 	if err != nil {
 		return "", err
 	}
@@ -293,8 +293,7 @@ func (s *Service) DownloadResource(
 		return nil, translateRepoError(err, "resource revision not found")
 	}
 	if revision.ObjectKey == "" {
-		pkg, err = s.syncOCIPackage(ctx, pkg)
-		if err != nil {
+		if err := s.requireOCIPackageReady(pkg, true); err != nil {
 			return nil, err
 		}
 		return s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)

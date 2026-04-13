@@ -2,6 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ENV_FILE="${ROOT_DIR}/.env"
+
+if [[ -f "${ENV_FILE}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "${ENV_FILE}"
+    set +a
+fi
+
 HARBOR_VERSION="${HARBOR_VERSION:-v2.14.1}"
 VENDOR_DIR="${ROOT_DIR}/deploy/harbor/vendor"
 INSTALLER_DIR="${VENDOR_DIR}/harbor"
