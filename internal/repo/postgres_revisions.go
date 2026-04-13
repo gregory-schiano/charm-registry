@@ -14,6 +14,10 @@ func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 	if err != nil {
 		return err
 	}
+	revision, err := int32Ptr(upload.Revision)
+	if err != nil {
+		return err
+	}
 	return p.queries().CreateUpload(ctx, sqlcdb.CreateUploadParams{
 		ID:         upload.ID,
 		Filename:   upload.Filename,
@@ -25,7 +29,7 @@ func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 		Kind:       upload.Kind,
 		CreatedAt:  upload.CreatedAt,
 		ApprovedAt: timestamptzPtr(upload.ApprovedAt),
-		Revision:   int32Ptr(upload.Revision),
+		Revision:   revision,
 		Errors:     errorsJSON,
 	})
 }
@@ -52,9 +56,13 @@ func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision 
 	if err != nil {
 		return err
 	}
+	approvedRevision, err := int32Ptr(revision)
+	if err != nil {
+		return err
+	}
 	rowsAffected, err := p.queries().ApproveUpload(ctx, sqlcdb.ApproveUploadParams{
 		ID:       uploadID,
-		Revision: int32Ptr(revision),
+		Revision: approvedRevision,
 		Errors:   errorsJSON,
 		Status:   status,
 	})
@@ -81,10 +89,14 @@ func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) e
 	if err != nil {
 		return err
 	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
 	return p.queries().CreateRevision(ctx, sqlcdb.CreateRevisionParams{
 		ID:           revision.ID,
 		PackageID:    revision.PackageID,
-		Revision:     int32(revision.Revision),
+		Revision:     revisionNumber,
 		Version:      revision.Version,
 		Status:       revision.Status,
 		CreatedAt:    revision.CreatedAt,
@@ -141,9 +153,9 @@ func (p *Postgres) ListRevisionsByNumbers(
 	if len(revisions) == 0 {
 		return map[int]core.Revision{}, nil
 	}
-	numbers := make([]int32, 0, len(revisions))
-	for _, revision := range revisions {
-		numbers = append(numbers, int32(revision))
+	numbers, err := int32Slice(revisions)
+	if err != nil {
+		return nil, err
 	}
 	rows, err := p.queries().ListRevisionsByNumbers(ctx, sqlcdb.ListRevisionsByNumbersParams{
 		PackageID: packageID,
@@ -165,9 +177,13 @@ func (p *Postgres) ListRevisionsByNumbers(
 
 // GetRevisionByNumber is part of the [Repository] interface.
 func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return core.Revision{}, err
+	}
 	item, err := p.queries().GetRevisionByNumber(ctx, sqlcdb.GetRevisionByNumberParams{
 		PackageID: packageID,
-		Revision:  int32(revision),
+		Revision:  revisionNumber,
 	})
 	if pgxNotFound(err) {
 		return core.Revision{}, ErrNotFound

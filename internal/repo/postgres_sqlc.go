@@ -24,12 +24,38 @@ func timestamptzPtr(value *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: *value, Valid: true}
 }
 
-func int32Ptr(value *int) *int32 {
-	if value == nil {
-		return nil
+func toInt32(value int) (int32, error) {
+	const (
+		maxInt32 = 1<<31 - 1
+		minInt32 = -1 << 31
+	)
+	if value < minInt32 || value > maxInt32 {
+		return 0, fmt.Errorf("cannot convert %d to int32: out of range", value)
 	}
-	out := int32(*value)
-	return &out
+	return int32(value), nil
+}
+
+func int32Ptr(value *int) (*int32, error) {
+	if value == nil {
+		return nil, nil
+	}
+	out, err := toInt32(*value)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func int32Slice(values []int) ([]int32, error) {
+	out := make([]int32, 0, len(values))
+	for _, value := range values {
+		item, err := toInt32(value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func nullInt64(robot *core.RobotCredential) *int64 {

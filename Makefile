@@ -29,7 +29,7 @@ help:
 		"make down         - stop the local compose stack"
 
 fmt:
-	$(GO) fmt ./...
+	$(GO) fmt $(_GO_PKGS)
 
 tidy:
 	$(GO) mod tidy
@@ -49,6 +49,11 @@ tidy-check:
 # requires live external services, and sqlc-generated code (internal/repo/db).
 _UNIT_PKGS = $(shell $(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$')
 
+# Repository Go packages. `./...` walks into vendored Harbor runtime
+# data under deploy/, which includes unreadable directories in local setups.
+_GO_PKGS = ./cmd/... ./internal/...
+_LINT_PKGS = $(_GO_PKGS)
+
 test:
 	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | xargs $(GO) test
 
@@ -61,7 +66,7 @@ coverage:
 	$(GO) tool cover -func=coverage.out
 
 vet:
-	$(GO) vet ./...
+	$(GO) vet $(_GO_PKGS)
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -71,15 +76,15 @@ run:
 	$(GO) run ./cmd/charm-registry
 
 lint:
-	$(GO) tool golangci-lint run
+	$(GO) tool golangci-lint run $(_LINT_PKGS)
 
 vuln:
-	$(GO) tool govulncheck ./...
+	$(GO) tool govulncheck $(_GO_PKGS)
 
 # internal/repo/db is sqlc-generated; G101 false-positives on SQL string
 # constants are suppressed by excluding the directory from the scan.
 gosec:
-	$(GO) tool gosec -exclude-dir=internal/repo/db ./...
+	$(GO) tool gosec -exclude-dir=internal/repo/db $(_GO_PKGS)
 
 sqlc-diff:
 	$(GO) tool sqlc diff

@@ -14,11 +14,11 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
-// Release assigns revisions to channels for a package.
+// CreateRelease assigns revisions to channels for a package.
 //
 // The following errors may be returned:
 // - Authorization, validation, or repository errors.
-func (s *Service) Release(
+func (s *Service) CreateRelease(
 	ctx context.Context,
 	identity core.Identity,
 	charmName string,
@@ -102,62 +102,62 @@ func (s *Service) validateReleaseResources(
 //
 // The following errors may be returned:
 // - Authorization or repository lookup errors.
-func (s *Service) ListReleases(ctx context.Context, identity core.Identity, charmName string) (map[string]any, error) {
+func (s *Service) ListReleases(ctx context.Context, identity core.Identity, charmName string) (listReleasesResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return listReleasesResponse{}, translateRepoError(err, "package not found")
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
 	pkg, err = s.enrichPackage(ctx, pkg)
 	if err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
 	releases, err := s.repo.ListReleases(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
-	channelMap := make([]map[string]any, 0, len(releases))
+	channelMap := make([]listReleaseChannelMapItem, 0, len(releases))
 	revisionsMap, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, uniqueRevisionNumbers(releases))
 	if err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
 	for _, release := range releases {
-		channelMap = append(channelMap, map[string]any{
-			"base":            release.Base,
-			"channel":         release.Channel,
-			"expiration-date": release.ExpirationDate,
-			"resources":       release.Resources,
-			"revision":        release.Revision,
-			"when":            release.When,
+		channelMap = append(channelMap, listReleaseChannelMapItem{
+			Base:           release.Base,
+			Channel:        release.Channel,
+			ExpirationDate: release.ExpirationDate,
+			Resources:      release.Resources,
+			Revision:       release.Revision,
+			When:           release.When,
 		})
 	}
-	var revisions []map[string]any
+	revisions := make([]listReleasesRevisionRow, 0, len(revisionsMap))
 	for _, revision := range revisionsMap {
-		revisions = append(revisions, map[string]any{
-			"bases":      revision.Bases,
-			"created-at": revision.CreatedAt,
-			"created-by": revision.CreatedBy,
-			"errors":     []any{},
-			"revision":   revision.Revision,
-			"sha3-384":   revision.SHA384,
-			"size":       revision.Size,
-			"status":     revision.Status,
-			"version":    revision.Version,
+		revisions = append(revisions, listReleasesRevisionRow{
+			Bases:     revision.Bases,
+			CreatedAt: revision.CreatedAt,
+			CreatedBy: revision.CreatedBy,
+			Errors:    []any{},
+			Revision:  revision.Revision,
+			SHA384:    revision.SHA384,
+			Size:      revision.Size,
+			Status:    revision.Status,
+			Version:   revision.Version,
 		})
 	}
 	sort.Slice(
 		revisions,
-		func(i, j int) bool { return revisions[i]["revision"].(int) < revisions[j]["revision"].(int) },
+		func(i, j int) bool { return revisions[i].Revision < revisions[j].Revision },
 	)
-	return map[string]any{
-		"channel-map":       channelMap,
-		"craft-channel-map": []any{},
-		"package": map[string]any{
-			"channels": packageChannels(pkg.Tracks),
+	return listReleasesResponse{
+		ChannelMap:      channelMap,
+		CraftChannelMap: []any{},
+		Package: listReleasesPackageResponse{
+			Channels: packageChannels(pkg.Tracks),
 		},
-		"revisions": revisions,
+		Revisions: revisions,
 	}, nil
 }
 
@@ -187,14 +187,14 @@ func (s *Service) CreateTracks(
 	return s.repo.CreateTracks(ctx, pkg.ID, tracks)
 }
 
-// Refresh resolves refresh actions for one or more packages.
+// ResolveRefresh resolves refresh actions for one or more packages.
 //
 // Per the Charmhub API contract, errors that apply to a single action (e.g.
 // package not found, permission denied) are embedded as per-action error
 // entries inside "results" rather than turning the whole request into an HTTP
 // error response.  Only unexpected infrastructure errors (DB, blob storage)
 // are returned as a top-level error.
-func (s *Service) Refresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
+func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
 	results := make([]refreshActionResponse, 0, len(request.Actions))
 	for _, action := range request.Actions {
 		item, err := s.resolveRefreshAction(ctx, identity, action)
@@ -481,11 +481,11 @@ func normalizeChannel(channel string) string {
 	return "latest/" + channel
 }
 
-func packageChannels(tracks []core.Track) []map[string]any {
+func packageChannels(tracks []core.Track) []releaseChannelDescriptorResponse {
 	if len(tracks) == 0 {
 		tracks = []core.Track{{Name: "latest"}}
 	}
-	var channels []map[string]any
+	channels := make([]releaseChannelDescriptorResponse, 0, len(tracks)*4)
 	for _, track := range tracks {
 		channels = append(channels,
 			channelDescriptor(track.Name, "stable", nil),
@@ -497,12 +497,12 @@ func packageChannels(tracks []core.Track) []map[string]any {
 	return channels
 }
 
-func channelDescriptor(track, risk string, fallback *string) map[string]any {
-	return map[string]any{
-		"name":     track + "/" + risk,
-		"track":    track,
-		"risk":     risk,
-		"branch":   nil,
-		"fallback": fallback,
+func channelDescriptor(track, risk string, fallback *string) releaseChannelDescriptorResponse {
+	return releaseChannelDescriptorResponse{
+		Name:     track + "/" + risk,
+		Track:    track,
+		Risk:     risk,
+		Branch:   nil,
+		Fallback: fallback,
 	}
 }

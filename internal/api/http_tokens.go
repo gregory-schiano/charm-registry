@@ -12,24 +12,19 @@ import (
 )
 
 func (a *API) handleRoot(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.svc.RootDocument())
+	writeJSON(w, http.StatusOK, a.svc.GetRootDocument())
 }
 
 func (a *API) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, statusResponse{Status: "ok"})
 }
 
 func (a *API) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	if err := a.svc.Ready(r.Context()); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error-list": []map[string]any{{
-				"code":    "not-ready",
-				"message": "service dependencies are not ready",
-			}},
-		})
+	if err := a.svc.CheckReady(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, newErrorListResponse("not-ready", "service dependencies are not ready"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, statusResponse{Status: "ready"})
 }
 
 func (a *API) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
@@ -156,15 +151,15 @@ func (a *API) resolveExchangeIdentity(r *http.Request, identity core.Identity) (
 	}
 	macaroonsHeader := r.Header.Get("Macaroons")
 	if macaroonsHeader == "" {
-		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	rawToken, err := auth.ExtractTokenFromMacaroons(macaroonsHeader)
 	if err != nil {
-		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	claims, storeToken, err := a.auth.AuthenticateToken(r.Context(), rawToken)
 	if err != nil {
-		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	return a.svc.ResolveIdentity(r.Context(), claims, storeToken)
 }

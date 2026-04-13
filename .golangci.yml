@@ -63,10 +63,19 @@ linters:
         - name: unexported-naming
           severity: error
           disabled: false
+        - name: var-naming
+          severity: error
+          disabled: false
+        - name: package-naming
+          severity: error
+          disabled: false
         - name: exported
           arguments:
             - disableStutteringCheck
             - sayRepetitiveInsteadOfStutters
+          severity: error
+          disabled: false
+        - name: error-strings
           severity: error
           disabled: false
         - name: atomic

@@ -20,7 +20,7 @@ func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
+	writeJSON(w, http.StatusOK, resourceListResponse{Resources: resources})
 }
 
 func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request) {
@@ -39,19 +39,19 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 		writeError(w, r, err)
 		return
 	}
-	rows := make([]map[string]any, 0, len(revisions))
+	rows := make([]resourceRevisionListItemResponse, 0, len(revisions))
 	for _, revision := range revisions {
-		rows = append(rows, map[string]any{
-			"architectures":    revision.Architectures,
-			"bases":            revision.Bases,
-			"created-at":       revision.CreatedAt,
-			"download":         revision.Download,
-			"filename":         revision.Filename,
-			"package-revision": revision.PackageRevision,
-			"revision":         revision.Revision,
+		rows = append(rows, resourceRevisionListItemResponse{
+			Architectures:   revision.Architectures,
+			Bases:           revision.Bases,
+			CreatedAt:       revision.CreatedAt,
+			Download:        revision.Download,
+			Filename:        revision.Filename,
+			PackageRevision: revision.PackageRevision,
+			Revision:        revision.Revision,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"revisions": rows})
+	writeJSON(w, http.StatusOK, resourceRevisionListResponse{Revisions: rows})
 }
 
 func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +76,7 @@ func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status-url": statusURL})
+	writeJSON(w, http.StatusOK, statusURLResponse{StatusURL: statusURL})
 }
 
 func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +101,7 @@ func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Reque
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"num-resource-revisions-updated": updated})
+	writeJSON(w, http.StatusOK, resourceRevisionUpdatesResponse{NumResourceRevisionsUpdated: updated})
 }
 
 func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +161,7 @@ func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	packageID, resourceName, revision, parseErr := parseResourceDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
-		writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+		writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
 	payload, err := a.svc.DownloadResource(r.Context(), identity, packageID, resourceName, revision)

@@ -26,9 +26,9 @@ func (s *Service) ResolveIdentity(
 	account, err := s.repo.EnsureAccount(ctx, core.Account{
 		ID:          uuid.NewString(),
 		Subject:     claims.Subject,
-		Username:    firstNonEmpty(claims.Username, strings.ReplaceAll(claims.Subject, "|", "_")),
-		DisplayName: firstNonEmpty(claims.DisplayName, claims.Username, claims.Subject),
-		Email:       firstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
+		Username:    core.FirstNonEmpty(claims.Username, strings.ReplaceAll(claims.Subject, "|", "_")),
+		DisplayName: core.FirstNonEmpty(claims.DisplayName, claims.Username, claims.Subject),
+		Email:       core.FirstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
 		Validation:  "verified",
 		IsAdmin:     s.cfg.IsAdminIdentity(claims.Subject, claims.Email, claims.Username),
 		CreatedAt:   time.Now().UTC(),
@@ -130,9 +130,9 @@ func (s *Service) RevokeStoreToken(ctx context.Context, identity core.Identity, 
 //
 // The following errors may be returned:
 // - Authentication errors.
-func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
+func (s *Service) MacaroonInfo(identity core.Identity) (macaroonInfoResponse, error) {
 	if err := s.requireAuth(identity); err != nil {
-		return nil, err
+		return macaroonInfoResponse{}, err
 	}
 	var packages []core.PackageSelector
 	var channels []string
@@ -142,18 +142,11 @@ func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
 		channels = identity.Token.Channels
 		permissions = identity.Token.Permissions
 	}
-	return map[string]any{
-		"account": map[string]any{
-			"display-name": identity.Account.DisplayName,
-			"email":        identity.Account.Email,
-			"id":           identity.Account.ID,
-			"is-admin":     identity.Account.IsAdmin,
-			"username":     identity.Account.Username,
-			"validation":   identity.Account.Validation,
-		},
-		"packages":    emptySliceIfNil(packages),
-		"channels":    emptySliceIfNil(channels),
-		"permissions": emptySliceIfNil(permissions),
+	return macaroonInfoResponse{
+		Account:     accountResponseFrom(identity.Account),
+		Packages:    emptySliceIfNil(packages),
+		Channels:    emptySliceIfNil(channels),
+		Permissions: emptySliceIfNil(permissions),
 	}, nil
 }
 
@@ -161,16 +154,20 @@ func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
 //
 // The following errors may be returned:
 // - Authentication errors.
-func (s *Service) DeprecatedWhoAmI(identity core.Identity) (map[string]any, error) {
+func (s *Service) DeprecatedWhoAmI(identity core.Identity) (accountResponse, error) {
 	if err := s.requireAuth(identity); err != nil {
-		return nil, err
+		return accountResponse{}, err
 	}
-	return map[string]any{
-		"display-name": identity.Account.DisplayName,
-		"email":        identity.Account.Email,
-		"id":           identity.Account.ID,
-		"is-admin":     identity.Account.IsAdmin,
-		"username":     identity.Account.Username,
-		"validation":   identity.Account.Validation,
-	}, nil
+	return accountResponseFrom(identity.Account), nil
+}
+
+func accountResponseFrom(account core.Account) accountResponse {
+	return accountResponse{
+		DisplayName: account.DisplayName,
+		Email:       account.Email,
+		ID:          account.ID,
+		IsAdmin:     account.IsAdmin,
+		Username:    account.Username,
+		Validation:  account.Validation,
+	}
 }

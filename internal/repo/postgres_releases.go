@@ -17,11 +17,15 @@ func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release
 	if err != nil {
 		return err
 	}
+	revision, err := toInt32(release.Revision)
+	if err != nil {
+		return err
+	}
 	return p.queries().ReplaceRelease(ctx, sqlcdb.ReplaceReleaseParams{
 		ID:             release.ID,
 		PackageID:      packageID,
 		Channel:        release.Channel,
-		Revision:       int32(release.Revision),
+		Revision:       revision,
 		Base:           baseJSON,
 		Resources:      resourcesJSON,
 		WhenCreated:    release.When,
@@ -75,35 +79,4 @@ func (p *Postgres) ResolveDefaultRelease(ctx context.Context, packageID string) 
 		return core.Release{}, err
 	}
 	return releaseFromSQLC(release)
-}
-
-func scanRelease(row interface{ Scan(dest ...any) error }) (core.Release, error) {
-	var release core.Release
-	var baseJSON []byte
-	var resourcesJSON []byte
-	err := row.Scan(
-		&release.ID,
-		&release.PackageID,
-		&release.Channel,
-		&release.Revision,
-		&baseJSON,
-		&resourcesJSON,
-		&release.When,
-		&release.ExpirationDate,
-		&release.Progressive,
-	)
-	if err != nil {
-		return core.Release{}, err
-	}
-	if string(baseJSON) != "null" && len(baseJSON) != 0 {
-		var base core.Base
-		if err := unmarshalJSON(baseJSON, &base); err != nil {
-			return core.Release{}, err
-		}
-		release.Base = &base
-	}
-	if err := unmarshalJSON(resourcesJSON, &release.Resources); err != nil {
-		return core.Release{}, err
-	}
-	return release, nil
 }

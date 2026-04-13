@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,19 +95,22 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 }
 
 type tokenIssueLimiter struct {
-	mu      sync.Mutex
-	entries map[string][]time.Time
-	limit   int
-	window  time.Duration
-	now     func() time.Time
+	mu              sync.Mutex
+	entries         map[string][]time.Time
+	limit           int
+	window          time.Duration
+	cleanupInterval time.Duration
+	lastCleanup     time.Time
+	now             func() time.Time
 }
 
 func newTokenIssueLimiter(limit int, window time.Duration) *tokenIssueLimiter {
 	return &tokenIssueLimiter{
-		entries: make(map[string][]time.Time),
-		limit:   limit,
-		window:  window,
-		now:     time.Now,
+		entries:         make(map[string][]time.Time),
+		limit:           limit,
+		window:          window,
+		cleanupInterval: window,
+		now:             time.Now,
 	}
 }
 
@@ -121,18 +123,39 @@ func (l *tokenIssueLimiter) Allow(key string) bool {
 
 	now := l.now()
 	cutoff := now.Add(-l.window)
+	if l.lastCleanup.IsZero() {
+		l.lastCleanup = now
+	} else if now.Sub(l.lastCleanup) >= l.cleanupInterval {
+		l.cleanup(cutoff)
+		l.lastCleanup = now
+	}
+	timestamps := l.pruneKey(key, cutoff)
+	if len(timestamps) >= l.limit {
+		return false
+	}
+	l.entries[key] = append(timestamps, now)
+	return true
+}
+
+func (l *tokenIssueLimiter) pruneKey(key string, cutoff time.Time) []time.Time {
 	timestamps := l.entries[key][:0]
 	for _, ts := range l.entries[key] {
 		if ts.After(cutoff) {
 			timestamps = append(timestamps, ts)
 		}
 	}
-	if len(timestamps) >= l.limit {
-		l.entries[key] = timestamps
-		return false
+	if len(timestamps) == 0 {
+		delete(l.entries, key)
+		return nil
 	}
-	l.entries[key] = append(timestamps, now)
-	return true
+	l.entries[key] = timestamps
+	return timestamps
+}
+
+func (l *tokenIssueLimiter) cleanup(cutoff time.Time) {
+	for key := range l.entries {
+		l.pruneKey(key, cutoff)
+	}
 }
 
 func (a *API) identity(r *http.Request) (core.Identity, error) {
@@ -179,7 +202,7 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) err
 	if err := decoder.Decode(target); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			return serviceError(
+			return apiErrorf(
 				http.StatusRequestEntityTooLarge,
 				"request-too-large",
 				fmt.Sprintf("request body exceeds %d bytes", a.cfg.MaxJSONBodyBytes),
@@ -205,37 +228,23 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
-		writeJSON(w, apiErr.Status, map[string]any{
-			"error-list": []map[string]any{{
-				"code":    apiErr.Code,
-				"message": apiErr.Message,
-			}},
-		})
+		writeJSON(w, apiErr.Status, newErrorListResponse(apiErr.Code, apiErr.Message))
 		return
 	}
 	var serviceErr *service.Error
 	if errors.As(err, &serviceErr) {
-		writeJSON(w, serviceErrorStatus(serviceErr), map[string]any{
-			"error-list": []map[string]any{{
-				"code":    serviceErr.Code,
-				"message": serviceErr.Message,
-			}},
-		})
+		writeJSON(w, serviceErrorStatus(serviceErr), newErrorListResponse(serviceErr.Code, serviceErr.Message))
 		return
 	}
 	if errors.Is(err, repo.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error-list": []map[string]any{{"code": "not-found", "message": "resource not found"}},
-		})
+		writeJSON(w, http.StatusNotFound, newErrorListResponse("not-found", "resource not found"))
 		return
 	}
 	slog.ErrorContext(r.Context(), "internal error",
 		"request_id", chimiddleware.GetReqID(r.Context()),
 		"error", err,
 	)
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"error-list": []map[string]any{{"code": "internal-error", "message": "internal server error"}},
-	})
+	writeJSON(w, http.StatusInternalServerError, newErrorListResponse("internal-error", "internal server error"))
 }
 
 type apiError struct {
@@ -252,26 +261,12 @@ func apiErrorf(status int, code, message string) error {
 	return &apiError{Status: status, Code: code, Message: message}
 }
 
-func serviceError(status int, code, message string) error {
-	return apiErrorf(status, code, message)
-}
-
 func (a *API) handleNotFound(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusNotFound, map[string]any{
-		"error-list": []map[string]any{{
-			"code":    "not-found",
-			"message": "endpoint not found",
-		}},
-	})
+	writeJSON(w, http.StatusNotFound, newErrorListResponse("not-found", "endpoint not found"))
 }
 
 func (a *API) handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
-		"error-list": []map[string]any{{
-			"code":    "method-not-allowed",
-			"message": "method not allowed",
-		}},
-	})
+	writeJSON(w, http.StatusMethodNotAllowed, newErrorListResponse("method-not-allowed", "method not allowed"))
 }
 
 func invalidRequestError(err error) error {
@@ -283,7 +278,7 @@ func invalidRequestError(err error) error {
 	if errors.As(err, &serviceErr) {
 		return err
 	}
-	return serviceError(http.StatusBadRequest, "invalid-request", err.Error())
+	return apiErrorf(http.StatusBadRequest, "invalid-request", err.Error())
 }
 
 func serviceErrorStatus(err *service.Error) int {
@@ -298,32 +293,6 @@ func serviceErrorStatus(err *service.Error) int {
 		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
-	}
-}
-
-func packageMetadata(pkg core.Package) map[string]any {
-	tracks := make([]core.Track, len(pkg.Tracks))
-	copy(tracks, pkg.Tracks)
-	sort.Slice(tracks, func(i, j int) bool { return tracks[i].Name < tracks[j].Name })
-	return map[string]any{
-		"authority":        pkg.Authority,
-		"contact":          pkg.Contact,
-		"default-track":    pkg.DefaultTrack,
-		"description":      pkg.Description,
-		"id":               pkg.ID,
-		"links":            pkg.Links,
-		"media":            pkg.Media,
-		"name":             pkg.Name,
-		"private":          pkg.Private,
-		"publisher":        pkg.Publisher,
-		"status":           pkg.Status,
-		"store":            pkg.Store,
-		"summary":          pkg.Summary,
-		"title":            pkg.Title,
-		"track-guardrails": pkg.TrackGuardrails,
-		"tracks":           tracks,
-		"type":             pkg.Type,
-		"website":          pkg.Website,
 	}
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -39,7 +40,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	storage, err := blob.NewS3Store(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot create blob store: %w", err)
 	}
 	if closer, ok := any(storage).(io.Closer); ok {
 		closers = append(closers, closer)
@@ -47,24 +48,24 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	repository, err := repo.NewPostgres(ctx, cfg.DatabaseURL)
 	if err != nil {
 		_ = closeAll()
-		return nil, err
+		return nil, fmt.Errorf("cannot open repository: %w", err)
 	}
 	if closer, ok := any(repository).(io.Closer); ok {
 		closers = append(closers, closer)
 	}
 	if err := repository.Migrate(ctx); err != nil {
 		_ = closeAll()
-		return nil, err
+		return nil, fmt.Errorf("cannot migrate repository: %w", err)
 	}
 	authenticator, err := auth.New(ctx, cfg, repository)
 	if err != nil {
 		_ = closeAll()
-		return nil, err
+		return nil, fmt.Errorf("cannot configure authentication: %w", err)
 	}
 	ociRegistry, err := harbor.New(cfg)
 	if err != nil {
 		_ = closeAll()
-		return nil, err
+		return nil, fmt.Errorf("cannot create OCI registry client: %w", err)
 	}
 	if closer, ok := any(ociRegistry).(io.Closer); ok {
 		closers = append(closers, closer)

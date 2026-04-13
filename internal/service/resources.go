@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
@@ -22,7 +21,7 @@ func (s *Service) ListResources(
 	ctx context.Context,
 	identity core.Identity,
 	charmName string,
-) ([]map[string]any, error) {
+) ([]ResourceListItemResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return nil, translateRepoError(err, "package not found")
@@ -34,7 +33,7 @@ func (s *Service) ListResources(
 	if err != nil {
 		return nil, err
 	}
-	var out []map[string]any
+	out := make([]ResourceListItemResponse, 0, len(defs))
 	for _, def := range defs {
 		revs, err := s.repo.ListResourceRevisions(ctx, def.ID)
 		if err != nil {
@@ -44,11 +43,11 @@ func (s *Service) ListResources(
 		if len(revs) > 0 {
 			currentRevision = revs[0].Revision
 		}
-		out = append(out, map[string]any{
-			"name":     def.Name,
-			"optional": def.Optional,
-			"revision": currentRevision,
-			"type":     def.Type,
+		out = append(out, ResourceListItemResponse{
+			Name:     def.Name,
+			Optional: def.Optional,
+			Revision: currentRevision,
+			Type:     def.Type,
 		})
 	}
 	return out, nil
@@ -103,9 +102,9 @@ func (s *Service) PushResource(
 		ID:              uuid.NewString(),
 		ResourceID:      resourceDef.ID,
 		Name:            resourceDef.Name,
-		Type:            firstNonEmpty(req.Type, resourceDef.Type),
+		Type:            core.FirstNonEmpty(req.Type, resourceDef.Type),
 		Description:     resourceDef.Description,
-		Filename:        firstNonEmpty(resourceDef.Filename, upload.Filename),
+		Filename:        core.FirstNonEmpty(resourceDef.Filename, upload.Filename),
 		Revision:        revisionNumber,
 		CreatedAt:       now,
 		Size:            int64(len(payload)),
@@ -210,33 +209,33 @@ func (s *Service) OCIImageUploadCredentials(
 	ctx context.Context,
 	identity core.Identity,
 	charmName, resourceName string,
-) (map[string]any, error) {
+) (ociImageUploadCredentialsResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return ociImageUploadCredentialsResponse{}, translateRepoError(err, "package not found")
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
-		return nil, err
+		return ociImageUploadCredentialsResponse{}, err
 	}
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
-		return nil, translateRepoError(err, "resource not found")
+		return ociImageUploadCredentialsResponse{}, translateRepoError(err, "resource not found")
 	}
 	pkg, err = s.ensureOCIProvisioned(ctx, pkg)
 	if err != nil {
-		return nil, err
+		return ociImageUploadCredentialsResponse{}, err
 	}
 	imageName, err := s.oci.ImageReference(pkg, resourceName)
 	if err != nil {
-		return nil, err
+		return ociImageUploadCredentialsResponse{}, err
 	}
 	username, password, err := s.oci.Credentials(pkg, false)
 	if err != nil {
-		return nil, err
+		return ociImageUploadCredentialsResponse{}, err
 	}
-	return map[string]any{
-		"image-name": imageName,
-		"username":   username,
-		"password":   password,
+	return ociImageUploadCredentialsResponse{
+		ImageName: imageName,
+		Username:  username,
+		Password:  password,
 	}, nil
 }
 
@@ -310,44 +309,19 @@ func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest stri
 	if err != nil {
 		return nil, err
 	}
-	payload := map[string]any{
-		"ImageName": imageName,
-		"Username":  username,
-		"Password":  password,
-		"Digest":    digest,
+	payload := struct {
+		ImageName string `json:"ImageName"`
+		Username  string `json:"Username"`
+		Password  string `json:"Password"`
+		Digest    string `json:"Digest"`
+	}{
+		ImageName: imageName,
+		Username:  username,
+		Password:  password,
+		Digest:    digest,
 	}
+	// #nosec G117 -- Charmcraft expects a Docker-style auth blob containing these credentials.
 	return json.Marshal(payload)
-}
-
-func releaseResourcesToDownloads(
-	packageID string,
-	resources []core.ResourceRevision,
-	cfg config.Config,
-) []map[string]any {
-	out := make([]map[string]any, 0, len(resources))
-	for _, resource := range resources {
-		out = append(out, map[string]any{
-			"name":             resource.Name,
-			"revision":         resource.Revision,
-			"type":             resource.Type,
-			"filename":         resource.Filename,
-			"description":      resource.Description,
-			"package-revision": resource.PackageRevision,
-			"download": map[string]any{
-				"url": cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resource.Name + "_" + fmt.Sprintf(
-					"%d",
-					resource.Revision,
-				),
-				"size":          resource.Size,
-				"hash-sha-256":  resource.SHA256,
-				"hash-sha-384":  resource.SHA384,
-				"hash-sha-512":  resource.SHA512,
-				"hash-sha3-384": resource.SHA3384,
-			},
-			"created-at": resource.CreatedAt,
-		})
-	}
-	return out
 }
 
 func (s *Service) attachResourceDownloads(

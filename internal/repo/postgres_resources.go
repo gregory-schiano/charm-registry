@@ -69,11 +69,19 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 	if err != nil {
 		return err
 	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
+	packageRevision, err := int32Ptr(revision.PackageRevision)
+	if err != nil {
+		return err
+	}
 	return p.queries().CreateResourceRevision(ctx, sqlcdb.CreateResourceRevisionParams{
 		ID:              revision.ID,
 		ResourceID:      revision.ResourceID,
-		Revision:        int32(revision.Revision),
-		PackageRevision: int32Ptr(revision.PackageRevision),
+		Revision:        revisionNumber,
+		PackageRevision: packageRevision,
 		Name:            revision.Name,
 		Type:            revision.Type,
 		Description:     revision.Description,
@@ -102,9 +110,13 @@ func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.Res
 	if err != nil {
 		return err
 	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
 	tag, err := p.queries().UpdateResourceRevision(ctx, sqlcdb.UpdateResourceRevisionParams{
 		ResourceID:     revision.ResourceID,
-		Revision:       int32(revision.Revision),
+		Revision:       revisionNumber,
 		ID:             revision.ID,
 		Bases:          basesJSON,
 		Architectures:  architecturesJSON,
@@ -143,9 +155,13 @@ func (p *Postgres) GetResourceRevision(
 	resourceID string,
 	revision int,
 ) (core.ResourceRevision, error) {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return core.ResourceRevision{}, err
+	}
 	item, err := p.queries().GetResourceRevision(ctx, sqlcdb.GetResourceRevisionParams{
 		ResourceID: resourceID,
-		Revision:   int32(revision),
+		Revision:   revisionNumber,
 	})
 	if pgxNotFound(err) {
 		return core.ResourceRevision{}, ErrNotFound

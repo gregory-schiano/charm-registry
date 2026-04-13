@@ -114,17 +114,17 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 
 	return Claims{
 		Subject: asString(rawClaims["sub"]),
-		Username: firstNonEmpty(
+		Username: core.FirstNonEmpty(
 			asString(rawClaims[a.config.OIDCUsernameClaim]),
 			asString(rawClaims["preferred_username"]),
 			asString(rawClaims["email"]),
 		),
-		DisplayName: firstNonEmpty(
+		DisplayName: core.FirstNonEmpty(
 			asString(rawClaims[a.config.OIDCDisplayNameClaim]),
 			asString(rawClaims["name"]),
 			asString(rawClaims["preferred_username"]),
 		),
-		Email: firstNonEmpty(asString(rawClaims[a.config.OIDCEmailClaim]), asString(rawClaims["email"])),
+		Email: core.FirstNonEmpty(asString(rawClaims[a.config.OIDCEmailClaim]), asString(rawClaims["email"])),
 	}, nil, nil
 }
 
@@ -174,15 +174,15 @@ func (a *Authenticator) parseInsecureToken(raw string) (Claims, bool) {
 	if !strings.HasPrefix(raw, "dev:") {
 		return Claims{}, false
 	}
-	parts := strings.Split(raw, ":")
-	if len(parts) < 3 {
+	parts := strings.SplitN(strings.TrimPrefix(raw, "dev:"), ":", 2)
+	if len(parts) < 2 {
 		return Claims{}, false
 	}
 	return Claims{
-		Subject:     parts[1],
-		Username:    parts[2],
-		DisplayName: parts[2],
-		Email:       parts[2] + "@example.invalid",
+		Subject:     parts[0],
+		Username:    parts[1],
+		DisplayName: parts[1],
+		Email:       parts[1] + "@example.invalid",
 	}, true
 }
 
@@ -192,15 +192,6 @@ func asString(value any) string {
 	}
 	if str, ok := value.(string); ok {
 		return str
-	}
-	return ""
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
 	}
 	return ""
 }

@@ -9,12 +9,13 @@ import (
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
+	"github.com/gschiano/charm-registry/internal/testutil"
 )
 
 func BenchmarkListRegisteredPackages(b *testing.B) {
 	ctx := context.Background()
 	repository := repo.NewMemory()
-	svc := New(testConfig(), repository, blob.NewMemoryStore(), testOCIRegistry{})
+	svc := New(testConfig(), repository, blob.NewMemoryStore(), testutil.OCIRegistry{})
 	owner := newIdentity("bench-owner", "bench-owner")
 	now := time.Now().UTC()
 

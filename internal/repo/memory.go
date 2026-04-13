@@ -150,7 +150,7 @@ func (m *Memory) CreatePackage(_ context.Context, pkg core.Package) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.packages[pkg.Name]; exists {
-		return fmt.Errorf("package already exists: %w", ErrConflict)
+		return fmt.Errorf("cannot create package: %w", ErrConflict)
 	}
 	m.packages[pkg.Name] = pkg
 	m.packagesByID[pkg.ID] = pkg

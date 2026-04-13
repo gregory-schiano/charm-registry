@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
@@ -116,33 +117,30 @@ type Service struct {
 	oci   OCIRegistry
 }
 
-type OCIRegistry interface {
-	SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error)
-	ImageReference(pkg core.Package, resourceName string) (string, error)
-	Credentials(pkg core.Package, pull bool) (username, password string, err error)
-}
-
 // New returns a [Service] backed by the provided repository and blob store.
 func New(cfg config.Config, repository repo.Repository, blobs blob.Store, oci OCIRegistry) *Service {
 	return &Service{cfg: cfg, repo: repository, blobs: blobs, oci: oci}
 }
 
 func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.Repository) error) error {
-	return s.repo.WithinTransaction(ctx, fn)
+	if err := s.repo.WithinTransaction(ctx, fn); err != nil {
+		return fmt.Errorf("cannot complete repository transaction: %w", err)
+	}
+	return nil
 }
 
-// Ready reports whether the service dependencies are ready to serve requests.
-func (s *Service) Ready(ctx context.Context) error {
+// CheckReady reports whether the service dependencies are ready to serve requests.
+func (s *Service) CheckReady(ctx context.Context) error {
 	return s.repo.Ping(ctx)
 }
 
-// RootDocument returns the top-level service metadata document.
-func (s *Service) RootDocument() map[string]any {
-	return map[string]any{
-		"service-name": "private-charm-registry",
-		"version":      "v1",
-		"api-url":      s.cfg.PublicAPIURL,
-		"storage-url":  s.cfg.PublicStorageURL,
-		"registry-url": s.cfg.PublicRegistryURL,
+// GetRootDocument returns the top-level service metadata document.
+func (s *Service) GetRootDocument() rootDocumentResponse {
+	return rootDocumentResponse{
+		ServiceName: "private-charm-registry",
+		Version:     "v1",
+		APIURL:      s.cfg.PublicAPIURL,
+		StorageURL:  s.cfg.PublicStorageURL,
+		RegistryURL: s.cfg.PublicRegistryURL,
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,7 +97,7 @@ func (s *Service) PushRevision(
 		ID:           uuid.NewString(),
 		PackageID:    pkg.ID,
 		Revision:     revisionNumber,
-		Version:      fmt.Sprintf("%d", revisionNumber),
+		Version:      strconv.Itoa(revisionNumber),
 		Status:       "approved",
 		CreatedAt:    now,
 		CreatedBy:    identity.Account.ID,
@@ -122,7 +123,7 @@ func (s *Service) PushRevision(
 		Subordinate: archive.Manifest.Subordinate,
 	}
 	pkg.Status = "published"
-	pkg.Title = stringPtr(firstNonEmpty(archive.Manifest.DisplayName, archive.Manifest.Name, pkg.Name))
+	pkg.Title = stringPtr(core.FirstNonEmpty(archive.Manifest.DisplayName, archive.Manifest.Name, pkg.Name))
 	pkg.Summary = stringPtr(archive.Manifest.Summary)
 	pkg.Description = stringPtr(archive.Manifest.Description)
 	websites := charm.ExtractWebsites(archive.Manifest.Website)
@@ -170,24 +171,24 @@ func (s *Service) ReviewUpload(
 	ctx context.Context,
 	identity core.Identity,
 	charmName, uploadID string,
-) (map[string]any, error) {
+) (reviewUploadResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return reviewUploadResponse{}, translateRepoError(err, "package not found")
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
-		return nil, err
+		return reviewUploadResponse{}, err
 	}
 	upload, err := s.repo.GetUpload(ctx, uploadID)
 	if err != nil {
-		return nil, translateRepoError(err, "upload not found")
+		return reviewUploadResponse{}, translateRepoError(err, "upload not found")
 	}
-	return map[string]any{
-		"revisions": []map[string]any{{
-			"errors":    nullIfEmpty(upload.Errors),
-			"revision":  upload.Revision,
-			"status":    upload.Status,
-			"upload-id": upload.ID,
+	return reviewUploadResponse{
+		Revisions: []uploadReviewResponse{{
+			Errors:   upload.Errors,
+			Revision: upload.Revision,
+			Status:   upload.Status,
+			UploadID: upload.ID,
 		}},
 	}, nil
 }
@@ -247,10 +248,7 @@ func revisionToInfo(revision core.Revision, packageID string, cfg config.Config)
 		Download: core.Download{
 			HashSHA256: revision.SHA256,
 			Size:       revision.Size,
-			URL: cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf(
-				"%d",
-				revision.Revision,
-			) + ".charm",
+			URL:        cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + strconv.Itoa(revision.Revision) + ".charm",
 		},
 		MetadataYAML: revision.MetadataYAML,
 		ReadmeMD:     revision.ReadmeMD,

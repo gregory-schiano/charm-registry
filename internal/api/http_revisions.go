@@ -20,7 +20,7 @@ func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("revision"); raw != "" {
 		value, parseErr := strconv.Atoi(raw)
 		if parseErr != nil {
-			writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+			writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 			return
 		}
 		revision = &value
@@ -30,21 +30,21 @@ func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	rows := make([]map[string]any, 0, len(revisions))
+	rows := make([]revisionListItemResponse, 0, len(revisions))
 	for _, revision := range revisions {
-		rows = append(rows, map[string]any{
-			"bases":      revision.Bases,
-			"created-at": revision.CreatedAt,
-			"created-by": revision.CreatedBy,
-			"errors":     []any{},
-			"revision":   revision.Revision,
-			"sha3-384":   revision.SHA384,
-			"size":       revision.Size,
-			"status":     revision.Status,
-			"version":    revision.Version,
+		rows = append(rows, revisionListItemResponse{
+			Bases:     revision.Bases,
+			CreatedAt: revision.CreatedAt,
+			CreatedBy: revision.CreatedBy,
+			Errors:    []any{},
+			Revision:  revision.Revision,
+			SHA384:    revision.SHA384,
+			Size:      revision.Size,
+			Status:    revision.Status,
+			Version:   revision.Version,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"revisions": rows})
+	writeJSON(w, http.StatusOK, revisionListResponse{Revisions: rows})
 }
 
 func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +63,7 @@ func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status-url": statusURL})
+	writeJSON(w, http.StatusOK, statusURLResponse{StatusURL: statusURL})
 }
 
 func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
@@ -93,26 +93,26 @@ func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadBytes)
 	// #nosec G120 -- MaxBytesReader bounds the multipart body size.
 	if err := r.ParseMultipartForm(a.cfg.MaxUploadBytes); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"successful": false, "upload_id": nil})
+		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
 		return
 	}
 	file, header, err := r.FormFile("binary")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"successful": false, "upload_id": nil})
+		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
 		return
 	}
 	defer file.Close()
 	payload, err := io.ReadAll(file)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"successful": false, "upload_id": nil})
+		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
 		return
 	}
 	upload, err := a.svc.CreateUpload(r.Context(), header.Filename, payload)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"successful": false, "upload_id": nil})
+		writeJSON(w, http.StatusInternalServerError, uploadResultResponse{Successful: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"successful": true, "upload_id": upload.ID})
+	writeJSON(w, http.StatusOK, uploadResultResponse{Successful: true, UploadID: &upload.ID})
 }
 
 func (a *API) handleCharmDownload(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +123,7 @@ func (a *API) handleCharmDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	packageID, revision, parseErr := parseCharmDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
-		writeError(w, r, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+		writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
 	payload, err := a.svc.DownloadCharm(r.Context(), identity, packageID, revision)

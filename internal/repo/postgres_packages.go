@@ -2,8 +2,11 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/gschiano/charm-registry/internal/core"
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
@@ -51,10 +54,14 @@ func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 		CreatedAt:             pkg.CreatedAt,
 		UpdatedAt:             pkg.UpdatedAt,
 	})
-	if err != nil && strings.Contains(err.Error(), "duplicate key") {
-		return fmt.Errorf("package already exists: %w", ErrConflict)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("cannot create package: %w", ErrConflict)
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 // UpdatePackage is part of the [Repository] interface.

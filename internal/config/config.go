@@ -50,56 +50,27 @@ type Config struct {
 	MaxUploadBytes          int64
 }
 
+type parsedConfig struct {
+	s3UsePathStyle          bool
+	s3DisableTLS            bool
+	enableInsecureDevAuth   bool
+	harborInsecureTLS       bool
+	serverReadHeaderTimeout time.Duration
+	serverReadTimeout       time.Duration
+	serverWriteTimeout      time.Duration
+	serverIdleTimeout       time.Duration
+	serverShutdownTimeout   time.Duration
+	serverMaxHeaderBytes    int
+	maxJSONBodyBytes        int64
+	maxUploadBytes          int64
+}
+
 // Load reads the registry configuration from environment variables.
 //
 // The following errors may be returned:
 // - `CHARM_REGISTRY_DATABASE_URL` is not set.
 func Load() (Config, error) {
-	s3UsePathStyle, err := envBool("CHARM_REGISTRY_S3_USE_PATH_STYLE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	s3DisableTLS, err := envBool("CHARM_REGISTRY_S3_DISABLE_TLS", false)
-	if err != nil {
-		return Config{}, err
-	}
-	enableInsecureDevAuth, err := envBool("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", false)
-	if err != nil {
-		return Config{}, err
-	}
-	harborInsecureTLS, err := envBool("CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY", false)
-	if err != nil {
-		return Config{}, err
-	}
-	serverReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	serverReadTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	serverWriteTimeout, err := envDuration("CHARM_REGISTRY_SERVER_WRITE_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	serverIdleTimeout, err := envDuration("CHARM_REGISTRY_SERVER_IDLE_TIMEOUT", 120*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	serverShutdownTimeout, err := envDuration("CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return Config{}, err
-	}
-	serverMaxHeaderBytes, err := envInt("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
-	if err != nil {
-		return Config{}, err
-	}
-	maxJSONBodyBytes, err := envInt64("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", 1<<20)
-	if err != nil {
-		return Config{}, err
-	}
-	maxUploadBytes, err := envInt64("CHARM_REGISTRY_MAX_UPLOAD_BYTES", 64<<20)
+	parsed, err := loadParsedConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -121,8 +92,8 @@ func Load() (Config, error) {
 		S3Endpoint:              strings.TrimRight(os.Getenv("CHARM_REGISTRY_S3_ENDPOINT"), "/"),
 		S3AccessKeyID:           os.Getenv("CHARM_REGISTRY_S3_ACCESS_KEY_ID"),
 		S3SecretAccessKey:       os.Getenv("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY"),
-		S3UsePathStyle:          s3UsePathStyle,
-		S3DisableTLS:            s3DisableTLS,
+		S3UsePathStyle:          parsed.s3UsePathStyle,
+		S3DisableTLS:            parsed.s3DisableTLS,
 		OIDCIssuerURL:           strings.TrimRight(os.Getenv("CHARM_REGISTRY_OIDC_ISSUER_URL"), "/"),
 		OIDCClientID:            os.Getenv("CHARM_REGISTRY_OIDC_CLIENT_ID"),
 		OIDCUsernameClaim:       env("CHARM_REGISTRY_OIDC_USERNAME_CLAIM", "preferred_username"),
@@ -131,7 +102,7 @@ func Load() (Config, error) {
 		AdminSubjects:           envCSV("CHARM_REGISTRY_ADMIN_SUBJECTS"),
 		AdminEmails:             envCSV("CHARM_REGISTRY_ADMIN_EMAILS"),
 		AdminUsernames:          envCSV("CHARM_REGISTRY_ADMIN_USERNAMES"),
-		EnableInsecureDevAuth:   enableInsecureDevAuth,
+		EnableInsecureDevAuth:   parsed.enableInsecureDevAuth,
 		HarborURL:               strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_URL"), "/"),
 		HarborAPIURL:            strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_API_URL"), "/"),
 		HarborAdminUsername:     os.Getenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME"),
@@ -141,43 +112,113 @@ func Load() (Config, error) {
 		HarborPushRobotPrefix:   strings.Trim(env("CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX", "push"), "-"),
 		HarborSecretKey:         os.Getenv("CHARM_REGISTRY_HARBOR_SECRET_KEY"),
 		HarborCAFile:            os.Getenv("CHARM_REGISTRY_HARBOR_CA_FILE"),
-		HarborInsecureTLS:       harborInsecureTLS,
-		ServerReadHeaderTimeout: serverReadHeaderTimeout,
-		ServerReadTimeout:       serverReadTimeout,
-		ServerWriteTimeout:      serverWriteTimeout,
-		ServerIdleTimeout:       serverIdleTimeout,
-		ServerShutdownTimeout:   serverShutdownTimeout,
-		ServerMaxHeaderBytes:    serverMaxHeaderBytes,
-		MaxJSONBodyBytes:        maxJSONBodyBytes,
-		MaxUploadBytes:          maxUploadBytes,
+		HarborInsecureTLS:       parsed.harborInsecureTLS,
+		ServerReadHeaderTimeout: parsed.serverReadHeaderTimeout,
+		ServerReadTimeout:       parsed.serverReadTimeout,
+		ServerWriteTimeout:      parsed.serverWriteTimeout,
+		ServerIdleTimeout:       parsed.serverIdleTimeout,
+		ServerShutdownTimeout:   parsed.serverShutdownTimeout,
+		ServerMaxHeaderBytes:    parsed.serverMaxHeaderBytes,
+		MaxJSONBodyBytes:        parsed.maxJSONBodyBytes,
+		MaxUploadBytes:          parsed.maxUploadBytes,
 	}
 
+	return validateConfig(cfg)
+}
+
+func loadParsedConfig() (parsedConfig, error) {
+	s3UsePathStyle, err := envBool("CHARM_REGISTRY_S3_USE_PATH_STYLE", true)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	s3DisableTLS, err := envBool("CHARM_REGISTRY_S3_DISABLE_TLS", false)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	enableInsecureDevAuth, err := envBool("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", false)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	harborInsecureTLS, err := envBool("CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY", false)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverReadTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverWriteTimeout, err := envDuration("CHARM_REGISTRY_SERVER_WRITE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverIdleTimeout, err := envDuration("CHARM_REGISTRY_SERVER_IDLE_TIMEOUT", 120*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverShutdownTimeout, err := envDuration("CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	serverMaxHeaderBytes, err := envInt("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	maxJSONBodyBytes, err := envInt64("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", 1<<20)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	maxUploadBytes, err := envInt64("CHARM_REGISTRY_MAX_UPLOAD_BYTES", 64<<20)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+
+	return parsedConfig{
+		s3UsePathStyle:          s3UsePathStyle,
+		s3DisableTLS:            s3DisableTLS,
+		enableInsecureDevAuth:   enableInsecureDevAuth,
+		harborInsecureTLS:       harborInsecureTLS,
+		serverReadHeaderTimeout: serverReadHeaderTimeout,
+		serverReadTimeout:       serverReadTimeout,
+		serverWriteTimeout:      serverWriteTimeout,
+		serverIdleTimeout:       serverIdleTimeout,
+		serverShutdownTimeout:   serverShutdownTimeout,
+		serverMaxHeaderBytes:    serverMaxHeaderBytes,
+		maxJSONBodyBytes:        maxJSONBodyBytes,
+		maxUploadBytes:          maxUploadBytes,
+	}, nil
+}
+
+func validateConfig(cfg Config) (Config, error) {
 	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("CHARM_REGISTRY_DATABASE_URL is required")
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_DATABASE_URL is required")
 	}
 	if (cfg.OIDCIssuerURL == "") != (cfg.OIDCClientID == "") {
 		return Config{}, fmt.Errorf(
-			"CHARM_REGISTRY_OIDC_ISSUER_URL and CHARM_REGISTRY_OIDC_CLIENT_ID must be set together",
+			"cannot load config: CHARM_REGISTRY_OIDC_ISSUER_URL and CHARM_REGISTRY_OIDC_CLIENT_ID must be set together",
 		)
 	}
 	if !cfg.EnableInsecureDevAuth && cfg.OIDCIssuerURL == "" && cfg.OIDCClientID == "" {
 		return Config{}, fmt.Errorf(
-			"configure OIDC or explicitly enable CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH for development",
+			"cannot load config: configure OIDC or explicitly enable CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH for development",
 		)
 	}
 	if cfg.HarborURL == "" {
-		return Config{}, fmt.Errorf("CHARM_REGISTRY_HARBOR_URL is required")
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_HARBOR_URL is required")
 	}
 	if cfg.HarborAPIURL == "" {
 		cfg.HarborAPIURL = cfg.HarborURL
 	}
 	if cfg.HarborAdminUsername == "" || cfg.HarborAdminPassword == "" {
 		return Config{}, fmt.Errorf(
-			"CHARM_REGISTRY_HARBOR_ADMIN_USERNAME and CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD are required",
+			"cannot load config: CHARM_REGISTRY_HARBOR_ADMIN_USERNAME and CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD are required",
 		)
 	}
 	if cfg.HarborSecretKey == "" {
-		return Config{}, fmt.Errorf("CHARM_REGISTRY_HARBOR_SECRET_KEY is required")
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_HARBOR_SECRET_KEY is required")
 	}
 
 	return cfg, nil
@@ -207,7 +248,7 @@ func envBool(key string, fallback bool) (bool, error) {
 	}
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
-		return false, fmt.Errorf("parse %s as bool: %w", key, err)
+		return false, fmt.Errorf("cannot parse %s as bool: %w", key, err)
 	}
 	return value, nil
 }
@@ -219,7 +260,7 @@ func envInt(key string, fallback int) (int, error) {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as int: %w", key, err)
+		return 0, fmt.Errorf("cannot parse %s as int: %w", key, err)
 	}
 	return value, nil
 }
@@ -231,7 +272,7 @@ func envInt64(key string, fallback int64) (int64, error) {
 	}
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as int64: %w", key, err)
+		return 0, fmt.Errorf("cannot parse %s as int64: %w", key, err)
 	}
 	return value, nil
 }
@@ -243,7 +284,7 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 	}
 	value, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as duration: %w", key, err)
+		return 0, fmt.Errorf("cannot parse %s as duration: %w", key, err)
 	}
 	return value, nil
 }

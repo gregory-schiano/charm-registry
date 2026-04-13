@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,10 +52,10 @@ func New(cfg config.Config) (*Client, error) {
 		}
 		pemBytes, err := os.ReadFile(cfg.HarborCAFile)
 		if err != nil {
-			return nil, fmt.Errorf("read Harbor CA file: %w", err)
+			return nil, fmt.Errorf("cannot read Harbor CA file: %w", err)
 		}
 		if ok := rootCAs.AppendCertsFromPEM(pemBytes); !ok {
-			return nil, fmt.Errorf("append Harbor CA file: no certificates found")
+			return nil, fmt.Errorf("cannot append Harbor CA file: no certificates found")
 		}
 		tlsConfig.RootCAs = rootCAs
 	}
@@ -111,7 +112,7 @@ func (c *Client) SyncPackage(ctx context.Context, pkg core.Package) (core.Packag
 func (c *Client) ImageReference(pkg core.Package, resourceName string) (string, error) {
 	projectName := pkg.HarborProject
 	if projectName == "" {
-		return "", fmt.Errorf("harbor project not configured for package %s", pkg.Name)
+		return "", fmt.Errorf("cannot resolve image reference: harbor project not configured for package %s", pkg.Name)
 	}
 	host := strings.TrimPrefix(strings.TrimPrefix(c.publicRegistry, "https://"), "http://")
 	return host + "/" + projectName + "/" + sanitizeName(resourceName), nil
@@ -123,7 +124,7 @@ func (c *Client) Credentials(pkg core.Package, pull bool) (string, string, error
 		robot = pkg.HarborPullRobot
 	}
 	if robot == nil || robot.Username == "" || robot.EncryptedSecret == "" {
-		return "", "", fmt.Errorf("harbor robot credentials are not available")
+		return "", "", fmt.Errorf("cannot read harbor robot credentials: credentials are not available")
 	}
 	secret, err := c.decrypt(robot.EncryptedSecret)
 	if err != nil {
@@ -162,7 +163,7 @@ func (c *Client) ensureProject(ctx context.Context, projectName string) error {
 		},
 	}
 	if err := c.doJSON(ctx, http.MethodPost, "/projects", req, nil); err != nil {
-		var apiErr *apiError
+		var apiErr *harborAPIError
 		if ok := errorAs(err, &apiErr); ok && apiErr.StatusCode == http.StatusConflict {
 			return nil
 		}
@@ -185,11 +186,11 @@ func (c *Client) ensureRobot(
 	}
 	created, err := c.createRobot(ctx, name, projectName, allowPush)
 	if err != nil {
-		var apiErr *apiError
+		var apiErr *harborAPIError
 		if ok := errorAs(err, &apiErr); !ok || apiErr.StatusCode != http.StatusConflict {
 			return nil, err
 		}
-		created, err = c.createRobot(ctx, name+"-"+fmt.Sprintf("%d", time.Now().UTC().Unix()), projectName, allowPush)
+		created, err = c.createRobot(ctx, name+"-"+strconv.FormatInt(time.Now().UTC().Unix(), 10), projectName, allowPush)
 		if err != nil {
 			return nil, err
 		}
@@ -239,12 +240,12 @@ func (c *Client) createRobot(ctx context.Context, name, projectName string, allo
 	return created, nil
 }
 
-type apiError struct {
+type harborAPIError struct {
 	StatusCode int
 	Body       string
 }
 
-func (e *apiError) Error() string {
+func (e *harborAPIError) Error() string {
 	return fmt.Sprintf("Harbor API returned %d: %s", e.StatusCode, strings.TrimSpace(e.Body))
 }
 
@@ -281,7 +282,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, o
 		return err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return &apiError{StatusCode: resp.StatusCode, Body: string(responseBody)}
+		return &harborAPIError{StatusCode: resp.StatusCode, Body: string(responseBody)}
 	}
 	if len(out) == 0 || out[0] == nil || len(responseBody) == 0 {
 		return nil
@@ -347,7 +348,7 @@ func (c *Client) decrypt(encrypted string) (string, error) {
 		return "", err
 	}
 	if len(raw) < aead.NonceSize() {
-		return "", fmt.Errorf("encrypted Harbor secret is malformed")
+		return "", fmt.Errorf("cannot decrypt Harbor secret: encrypted secret is malformed")
 	}
 	nonce := raw[:aead.NonceSize()]
 	plaintext, err := aead.Open(nil, nonce, raw[aead.NonceSize():], nil)
@@ -357,6 +358,6 @@ func (c *Client) decrypt(encrypted string) (string, error) {
 	return string(plaintext), nil
 }
 
-func errorAs(err error, target **apiError) bool {
+func errorAs(err error, target **harborAPIError) bool {
 	return errors.As(err, target)
 }

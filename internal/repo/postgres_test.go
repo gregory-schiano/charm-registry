@@ -48,6 +48,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+
 }
 
 func newPostgresIntegrationRepository(t *testing.T) *Postgres {
@@ -115,9 +116,12 @@ func createTestPackage(t *testing.T, repository *Postgres, owner core.Account, p
 }
 
 func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
+
+	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 
+	// Act
 	owner := ensureTestAccount(t, repository, "owner-1", "owner")
 	editor := ensureTestAccount(t, repository, "editor-1", "editor")
 	pkg := createTestPackage(t, repository, owner, core.Package{
@@ -126,6 +130,7 @@ func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
 		Private: true,
 	})
 
+	// Assert
 	_, err := repository.pool.Exec(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
 		VALUES ($1, $2, $3, $4)
@@ -144,12 +149,16 @@ func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
 	canManage, err := repository.CanManagePackage(ctx, pkg.ID, editor.ID)
 	require.NoError(t, err)
 	assert.True(t, canManage)
+
 }
 
 func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
+
+	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 
+	// Act
 	owner := ensureTestAccount(t, repository, "owner-2", "owner2")
 	viewer := ensureTestAccount(t, repository, "viewer-1", "viewer")
 	pkg := createTestPackage(t, repository, owner, core.Package{
@@ -158,6 +167,7 @@ func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
 		Private: true,
 	})
 
+	// Assert
 	_, err := repository.pool.Exec(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
 		VALUES ($1, $2, $3, $4)
@@ -180,12 +190,16 @@ func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
 	canManage, err := repository.CanManagePackage(ctx, pkg.ID, viewer.ID)
 	require.NoError(t, err)
 	assert.False(t, canManage)
+
 }
 
 func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
+
+	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 
+	// Act
 	owner := ensureTestAccount(t, repository, "owner-3", "owner3")
 	pkg := createTestPackage(t, repository, owner, core.Package{
 		ID:           "pkg-release",
@@ -193,6 +207,7 @@ func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
 		DefaultTrack: stringPtr("2.0"),
 	})
 
+	// Assert
 	older := time.Now().UTC().Add(-time.Hour)
 	newer := time.Now().UTC()
 	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
@@ -212,12 +227,16 @@ func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1.0/stable", release.Channel)
 	assert.Equal(t, 2, release.Revision)
+
 }
 
 func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
+
+	// Act
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 
+	// Assert
 	owner := ensureTestAccount(t, repository, "owner-4", "owner4")
 	err := repository.WithinTransaction(ctx, func(txRepo Repository) error {
 		return txRepo.CreatePackage(ctx, core.Package{
@@ -250,12 +269,16 @@ func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
 
 	_, err = repository.GetPackageByName(ctx, "rollback-package")
 	require.ErrorIs(t, err, ErrNotFound)
+
 }
 
 func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
+
+	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 
+	// Act
 	owner := ensureTestAccount(t, repository, "owner-search", "owner-search")
 	createTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-percent",
@@ -270,6 +293,7 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 		Name: "literalxname",
 	})
 
+	// Assert
 	percentMatches, err := repository.SearchPackages(ctx, "%")
 	require.NoError(t, err)
 	require.Len(t, percentMatches, 1)
@@ -279,6 +303,7 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, underscoreMatches, 1)
 	assert.Equal(t, "literal_name", underscoreMatches[0].Name)
+
 }
 
 func stringPtr(value string) *string {

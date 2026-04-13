@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -128,14 +128,11 @@ func (s *Service) canSeePackage(ctx context.Context, identity core.Identity, pkg
 // --- URL helpers ---
 
 func (s *Service) charmDownloadURL(packageID string, revision int) string {
-	return s.cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf("%d", revision) + ".charm"
+	return s.cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + strconv.Itoa(revision) + ".charm"
 }
 
 func (s *Service) resourceDownloadURL(packageID, resourceName string, revision int) string {
-	return s.cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resourceName + "_" + fmt.Sprintf(
-		"%d",
-		revision,
-	)
+	return s.cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resourceName + "_" + strconv.Itoa(revision)
 }
 
 // --- Token and package selectors ---
@@ -232,15 +229,6 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func firstLink(values []string) string {

@@ -7,8 +7,6 @@ import (
 )
 
 type Repository interface {
-	coreTokenFinder
-
 	Ping(ctx context.Context) error
 	WithinTransaction(ctx context.Context, fn func(Repository) error) error
 
@@ -17,6 +15,7 @@ type Repository interface {
 
 	CreateStoreToken(ctx context.Context, token core.StoreToken) error
 	ListStoreTokens(ctx context.Context, accountID string, includeInactive bool) ([]core.StoreToken, error)
+	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
 	RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error
 
 	CreatePackage(ctx context.Context, pkg core.Package) error
@@ -54,8 +53,4 @@ type Repository interface {
 	ListReleases(ctx context.Context, packageID string) ([]core.Release, error)
 	ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error)
 	ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error)
-}
-
-type coreTokenFinder interface {
-	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
 }

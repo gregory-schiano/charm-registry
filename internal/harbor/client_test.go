@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 
 func TestSyncPackageCreatesProjectAndRobots(t *testing.T) {
 	t.Parallel()
+
+	// Act + Assert
 
 	var (
 		projectCreated bool
@@ -83,6 +87,7 @@ func TestSyncPackageCreatesProjectAndRobots(t *testing.T) {
 func TestSyncPackageReusesHealthyRobots(t *testing.T) {
 	t.Parallel()
 
+	// Act
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/projects":
@@ -97,6 +102,7 @@ func TestSyncPackageReusesHealthyRobots(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Assert
 	client, err := New(config.Config{
 		PublicRegistryURL:     "https://oci.example.test",
 		HarborURL:             server.URL,
@@ -131,6 +137,7 @@ func TestSyncPackageReusesHealthyRobots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "robot$pull-pkg-1", username)
 	assert.Equal(t, "pull-secret", password)
+
 }
 
 func mustEncrypt(t *testing.T, client *Client, secret string) string {
@@ -140,25 +147,30 @@ func mustEncrypt(t *testing.T, client *Client, secret string) string {
 	return encrypted
 }
 
-func TestErrorAsMatchesWrappedAPIError(t *testing.T) {
+func TestErrorAsMatchesWrappedHarborAPIError(t *testing.T) {
 	t.Parallel()
 
-	wrapped := fmt.Errorf("wrapped: %w", &apiError{StatusCode: http.StatusConflict, Body: "conflict"})
-	var target *apiError
+	// Act
+	wrapped := fmt.Errorf("wrapped: %w", &harborAPIError{StatusCode: http.StatusConflict, Body: "conflict"})
+	var target *harborAPIError
 
+	// Assert
 	require.True(t, errorAs(wrapped, &target))
 	require.NotNil(t, target)
 	assert.Equal(t, http.StatusConflict, target.StatusCode)
+
 }
 
 func TestDoJSONUsesRequestTimeout(t *testing.T) {
 	t.Parallel()
 
+	// Act
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
 	defer server.Close()
 
+	// Assert
 	client, err := New(config.Config{
 		PublicRegistryURL:     "https://oci.example.test",
 		HarborURL:             server.URL,
@@ -178,4 +190,56 @@ func TestDoJSONUsesRequestTimeout(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(start), 500*time.Millisecond)
+
+}
+
+func TestNewReturnsContextForMissingHarborCAFile(t *testing.T) {
+	t.Parallel()
+
+	// Act
+	_, err := New(config.Config{
+		PublicRegistryURL:     "https://oci.example.test",
+		HarborURL:             "https://harbor.example.test",
+		HarborAPIURL:          "https://harbor.example.test/api/v2.0",
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "harbor-secret",
+		HarborCAFile:          filepath.Join(t.TempDir(), "missing.pem"),
+	})
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot read Harbor CA file")
+
+}
+
+func TestNewReturnsContextForInvalidHarborCAFile(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	tempDir := t.TempDir()
+	caFile := filepath.Join(tempDir, "invalid.pem")
+	require.NoError(t, os.WriteFile(caFile, []byte("not-a-certificate"), 0o600))
+
+	// Act
+	_, err := New(config.Config{
+		PublicRegistryURL:     "https://oci.example.test",
+		HarborURL:             "https://harbor.example.test",
+		HarborAPIURL:          "https://harbor.example.test/api/v2.0",
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "harbor-secret",
+		HarborCAFile:          caFile,
+	})
+
+	// Assert
+	require.Error(t, err)
+	assert.EqualError(t, err, "cannot append Harbor CA file: no certificates found")
+
 }

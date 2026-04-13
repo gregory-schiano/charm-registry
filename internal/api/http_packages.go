@@ -32,7 +32,7 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": pkg.ID})
+	writeJSON(w, http.StatusOK, registerPackageResponse{ID: pkg.ID})
 }
 
 func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
@@ -50,11 +50,11 @@ func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	results := make([]map[string]any, 0, len(packages))
+	results := make([]packageMetadataResponse, 0, len(packages))
 	for _, pkg := range packages {
 		results = append(results, packageMetadata(pkg))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	writeJSON(w, http.StatusOK, packageListResponse{Results: results})
 }
 
 func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +68,7 @@ func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
+	writeJSON(w, http.StatusOK, packageMetadataEnvelope{Metadata: packageMetadata(pkg)})
 }
 
 func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +87,7 @@ func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
+	writeJSON(w, http.StatusOK, packageMetadataEnvelope{Metadata: packageMetadata(pkg)})
 }
 
 func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request) {
@@ -101,5 +101,5 @@ func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"package-id": packageID})
+	writeJSON(w, http.StatusOK, deletePackageResponse{PackageID: packageID})
 }

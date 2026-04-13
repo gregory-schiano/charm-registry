@@ -40,126 +40,162 @@ func TestParseArchive(t *testing.T) {
 func TestParseArchiveInvalidZip(t *testing.T) {
 	t.Parallel()
 
+	// Act
 	_, err := ParseArchive([]byte("not a zip file"))
 
+	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open charm archive")
+
 }
 
 func TestParseArchiveMissingMetadata(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"config.yaml": "options: {}\n",
 	})
 
+	// Act
 	_, err := ParseArchive(archive)
 
+	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata.yaml not found")
+
 }
 
 func TestParseArchiveInvalidYAML(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: [invalid\n",
 	})
 
+	// Act
 	_, err := ParseArchive(archive)
 
+	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse metadata.yaml")
+
 }
 
 func TestParseArchiveRejectsOversizedZipEntry(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: " + strings.Repeat("a", maxArchiveFileSize) + "\n",
 	})
 
+	// Act
 	_, err := ParseArchive(archive)
 
+	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata.yaml exceeds")
+
 }
 
 func TestParseArchiveAutoGeneratesOCIResourcesFromContainers(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: charm\ncontainers:\n  web:\n    resource: web-image\n",
 	})
 
+	// Act
 	result, err := ParseArchive(archive)
 
+	// Assert
 	require.NoError(t, err)
 	resource, ok := result.Manifest.Resources["web-image"]
 	require.True(t, ok, "auto-generated OCI resource should exist")
 	assert.Equal(t, "oci-image", resource.Type)
+
 }
 
 func TestParseArchiveDoesNotOverwriteExistingResource(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: charm\nresources:\n  web-image:\n    type: oci-image\n    description: custom desc\ncontainers:\n  web:\n    resource: web-image\n",
 	})
 
+	// Act
 	result, err := ParseArchive(archive)
 
+	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "custom desc", result.Manifest.Resources["web-image"].Description)
+
 }
 
 func TestParseArchiveSkipsContainerWithoutResource(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: charm\ncontainers:\n  sidecar:\n    resource: \"\"\n",
 	})
 
+	// Act
 	result, err := ParseArchive(archive)
 
+	// Assert
 	require.NoError(t, err)
 	assert.Empty(t, result.Manifest.Resources)
+
 }
 
 func TestParseArchiveMinimalMetadata(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: bare\n",
 	})
 
+	// Act
 	result, err := ParseArchive(archive)
 
+	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "bare", result.Manifest.Name)
 	assert.Empty(t, result.ConfigYAML)
 	assert.Empty(t, result.ActionsYAML)
 	assert.Empty(t, result.ReadmeMD)
+
 }
 
 func TestParseArchiveWithRelations(t *testing.T) {
 	t.Parallel()
 
+	// Arrange
 	archive := buildZip(t, map[string]string{
 		"metadata.yaml": "name: charm\nprovides:\n  db:\n    interface: postgresql_client\nrequires:\n  ingress:\n    interface: ingress\npeers:\n  cluster:\n    interface: cluster\n",
 	})
 
+	// Act
 	result, err := ParseArchive(archive)
 
+	// Assert
 	require.NoError(t, err)
 	assert.Contains(t, result.Manifest.Provides, "db")
 	assert.Contains(t, result.Manifest.Requires, "ingress")
 	assert.Contains(t, result.Manifest.Peers, "cluster")
+
 }
 
 func TestExtractWebsites(t *testing.T) {
 	t.Parallel()
 
+	// Act
 	tests := []struct {
 		name     string
 		input    any
@@ -176,6 +212,7 @@ func TestExtractWebsites(t *testing.T) {
 		{"empty slice of any", []any{}, []string{}},
 	}
 
+	// Assert
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -183,6 +220,7 @@ func TestExtractWebsites(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+
 }
 
 func buildZip(t *testing.T, files map[string]string) []byte {

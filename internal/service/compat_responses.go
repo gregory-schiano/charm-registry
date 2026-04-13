@@ -15,6 +15,56 @@ type infoResponse struct {
 	Result         packageResultResponse `json:"result"`
 }
 
+type rootDocumentResponse struct {
+	ServiceName string `json:"service-name"`
+	Version     string `json:"version"`
+	APIURL      string `json:"api-url"`
+	StorageURL  string `json:"storage-url"`
+	RegistryURL string `json:"registry-url"`
+}
+
+type accountResponse struct {
+	DisplayName string `json:"display-name"`
+	Email       string `json:"email"`
+	ID          string `json:"id"`
+	IsAdmin     bool   `json:"is-admin"`
+	Username    string `json:"username"`
+	Validation  string `json:"validation"`
+}
+
+type macaroonInfoResponse struct {
+	Account     accountResponse        `json:"account"`
+	Packages    []core.PackageSelector `json:"packages"`
+	Channels    []string               `json:"channels"`
+	Permissions []string               `json:"permissions"`
+}
+
+type findResponse struct {
+	Results []findResultResponse `json:"results"`
+}
+
+type findResultResponse struct {
+	ID             string                `json:"id"`
+	Name           string                `json:"name"`
+	Type           string                `json:"type"`
+	DefaultRelease findReleaseResponse   `json:"default-release"`
+	Result         packageResultResponse `json:"result"`
+}
+
+type findReleaseResponse struct {
+	Channel  infoChannelResponse  `json:"channel"`
+	Revision findRevisionResponse `json:"revision"`
+}
+
+type findRevisionResponse struct {
+	Attributes map[string]string `json:"attributes"`
+	Bases      []core.Base       `json:"bases"`
+	CreatedAt  time.Time         `json:"created-at"`
+	Download   core.Download     `json:"download"`
+	Revision   int               `json:"revision"`
+	Version    string            `json:"version"`
+}
+
 type infoReleaseResponse struct {
 	Channel   infoChannelResponse     `json:"channel"`
 	Resources []core.ResourceRevision `json:"resources"`
@@ -66,6 +116,71 @@ type packageResultResponse struct {
 	Unlisted     bool                `json:"unlisted"`
 	UsedBy       []any               `json:"used-by"`
 	Website      string              `json:"website"`
+}
+
+type reviewUploadResponse struct {
+	Revisions []uploadReviewResponse `json:"revisions"`
+}
+
+type uploadReviewResponse struct {
+	Errors   []core.APIError `json:"errors"`
+	Revision *int            `json:"revision"`
+	Status   string          `json:"status"`
+	UploadID string          `json:"upload-id"`
+}
+
+type listReleasesResponse struct {
+	ChannelMap      []listReleaseChannelMapItem `json:"channel-map"`
+	CraftChannelMap []any                       `json:"craft-channel-map"`
+	Package         listReleasesPackageResponse `json:"package"`
+	Revisions       []listReleasesRevisionRow   `json:"revisions"`
+}
+
+type listReleaseChannelMapItem struct {
+	Base           *core.Base                `json:"base"`
+	Channel        string                    `json:"channel"`
+	ExpirationDate *time.Time                `json:"expiration-date"`
+	Resources      []core.ReleaseResourceRef `json:"resources"`
+	Revision       int                       `json:"revision"`
+	When           time.Time                 `json:"when"`
+}
+
+type listReleasesPackageResponse struct {
+	Channels []releaseChannelDescriptorResponse `json:"channels"`
+}
+
+type listReleasesRevisionRow struct {
+	Bases     []core.Base `json:"bases"`
+	CreatedAt time.Time   `json:"created-at"`
+	CreatedBy string      `json:"created-by"`
+	Errors    []any       `json:"errors"`
+	Revision  int         `json:"revision"`
+	SHA384    string      `json:"sha3-384"`
+	Size      int64       `json:"size"`
+	Status    string      `json:"status"`
+	Version   string      `json:"version"`
+}
+
+type releaseChannelDescriptorResponse struct {
+	Name     string  `json:"name"`
+	Track    string  `json:"track"`
+	Risk     string  `json:"risk"`
+	Branch   *string `json:"branch"`
+	Fallback *string `json:"fallback"`
+}
+
+type ociImageUploadCredentialsResponse struct {
+	ImageName string `json:"image-name"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+}
+
+// ResourceListItemResponse describes one resource returned by ListResources.
+type ResourceListItemResponse struct {
+	Name     string `json:"name"`
+	Optional bool   `json:"optional"`
+	Revision int    `json:"revision"`
+	Type     string `json:"type"`
 }
 
 type refreshResponse struct {

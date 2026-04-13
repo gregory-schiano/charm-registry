@@ -26,7 +26,7 @@ func (s *Service) RegisterPackage(
 	pkg := core.Package{
 		ID:             compactID(),
 		Name:           name,
-		Type:           firstNonEmpty(packageType, "charm"),
+		Type:           core.FirstNonEmpty(packageType, "charm"),
 		Private:        private,
 		Status:         "registered",
 		OwnerAccountID: identity.Account.ID,
@@ -183,20 +183,20 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 	return pkg.ID, nil
 }
 
-// Find searches packages that the caller is allowed to see.
+// SearchPackages searches packages that the caller is allowed to see.
 //
 // The following errors may be returned:
 // - Repository lookup or package enrichment errors.
-func (s *Service) Find(ctx context.Context, identity core.Identity, query string) (map[string]any, error) {
+func (s *Service) SearchPackages(ctx context.Context, identity core.Identity, query string) (findResponse, error) {
 	packages, err := s.repo.SearchPackages(ctx, query)
 	if err != nil {
-		return nil, err
+		return findResponse{}, err
 	}
 	packages, err = s.enrichPackages(ctx, packages)
 	if err != nil {
-		return nil, err
+		return findResponse{}, err
 	}
-	results := make([]map[string]any, 0, len(packages))
+	results := make([]findResultResponse, 0, len(packages))
 	for _, pkg := range packages {
 		if !s.canSeePackage(ctx, identity, pkg) {
 			continue
@@ -206,22 +206,22 @@ func (s *Service) Find(ctx context.Context, identity core.Identity, query string
 			if errors.Is(err, repo.ErrNotFound) {
 				continue
 			}
-			return nil, err
+			return findResponse{}, err
 		}
 		results = append(results, item)
 	}
-	return map[string]any{"results": results}, nil
+	return findResponse{Results: results}, nil
 }
 
-// Info returns Charmhub-style metadata for a package.
+// GetPackageInfo returns Charmhub-style metadata for a package.
 //
 // The following errors may be returned:
 // - Authorization or repository lookup errors.
-func (s *Service) Info(ctx context.Context, identity core.Identity, charmName string) (infoResponse, error) {
+func (s *Service) GetPackageInfo(ctx context.Context, identity core.Identity, charmName string) (infoResponse, error) {
 	return s.info(ctx, identity, charmName, "")
 }
 
-func (s *Service) InfoForChannel(
+func (s *Service) GetPackageInfoForChannel(
 	ctx context.Context,
 	identity core.Identity,
 	charmName, channel string,
@@ -308,42 +308,42 @@ func (s *Service) info(ctx context.Context, identity core.Identity, charmName, c
 	}, nil
 }
 
-func (s *Service) packageFindResult(ctx context.Context, pkg core.Package) (map[string]any, error) {
+func (s *Service) packageFindResult(ctx context.Context, pkg core.Package) (findResultResponse, error) {
 	defaultRelease, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return findResultResponse{}, err
 	}
 	defaultRevision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, defaultRelease.Revision)
 	if err != nil {
-		return nil, err
+		return findResultResponse{}, err
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
-	return map[string]any{
-		"id":   pkg.ID,
-		"name": pkg.Name,
-		"type": pkg.Type,
-		"default-release": map[string]any{
-			"channel": map[string]any{
-				"base":        defaultRelease.Base,
-				"name":        defaultRelease.Channel,
-				"released-at": defaultRelease.When,
-				"risk":        channelInfo.risk,
-				"track":       channelInfo.track,
+	return findResultResponse{
+		ID:   pkg.ID,
+		Name: pkg.Name,
+		Type: pkg.Type,
+		DefaultRelease: findReleaseResponse{
+			Channel: infoChannelResponse{
+				Base:       defaultRelease.Base,
+				Name:       defaultRelease.Channel,
+				ReleasedAt: defaultRelease.When,
+				Risk:       channelInfo.risk,
+				Track:      channelInfo.track,
 			},
-			"revision": map[string]any{
-				"attributes": defaultRevision.Attributes,
-				"bases":      defaultRevision.Bases,
-				"created-at": defaultRevision.CreatedAt,
-				"download": map[string]any{
-					"hash-sha-256": defaultRevision.SHA256,
-					"size":         defaultRevision.Size,
-					"url":          s.charmDownloadURL(pkg.ID, defaultRevision.Revision),
+			Revision: findRevisionResponse{
+				Attributes: defaultRevision.Attributes,
+				Bases:      defaultRevision.Bases,
+				CreatedAt:  defaultRevision.CreatedAt,
+				Download: core.Download{
+					HashSHA256: defaultRevision.SHA256,
+					Size:       defaultRevision.Size,
+					URL:        s.charmDownloadURL(pkg.ID, defaultRevision.Revision),
 				},
-				"revision": defaultRevision.Revision,
-				"version":  defaultRevision.Version,
+				Revision: defaultRevision.Revision,
+				Version:  defaultRevision.Version,
 			},
 		},
-		"result": packageResult(pkg),
+		Result: packageResult(pkg),
 	}, nil
 }
 
@@ -361,7 +361,7 @@ func packageResult(pkg core.Package) packageResultResponse {
 		Links:        pkg.Links,
 		Media:        pkg.Media,
 		Publisher:    pkg.Publisher,
-		StoreURL:     firstNonEmpty(website, pkg.Store),
+		StoreURL:     core.FirstNonEmpty(website, pkg.Store),
 		StoreURLOld:  "",
 		Summary:      stringValue(pkg.Summary),
 		Title:        stringValue(pkg.Title),
