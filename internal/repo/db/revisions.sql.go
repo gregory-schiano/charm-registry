@@ -145,6 +145,25 @@ func (q *Queries) CreateUpload(ctx context.Context, arg CreateUploadParams) erro
 	return err
 }
 
+const deleteRevision = `-- name: DeleteRevision :execrows
+DELETE FROM revisions
+WHERE package_id = $1
+  AND revision = $2
+`
+
+type DeleteRevisionParams struct {
+	PackageID string
+	Revision  int32
+}
+
+func (q *Queries) DeleteRevision(ctx context.Context, arg DeleteRevisionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRevision, arg.PackageID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getLatestRevision = `-- name: GetLatestRevision :one
 SELECT id, package_id, revision, version, status,
        created_at, created_by, size, sha256, sha384,

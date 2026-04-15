@@ -59,6 +59,18 @@ func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string
 	return out, nil
 }
 
+// DeleteResourceDefinition is part of the [Repository] interface.
+func (p *Postgres) DeleteResourceDefinition(ctx context.Context, resourceID string) error {
+	rowsAffected, err := p.queries().DeleteResourceDefinition(ctx, resourceID)
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // CreateResourceRevision is part of the [Repository] interface.
 func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
 	basesJSON, err := rawJSON(revision.Bases)
@@ -98,6 +110,25 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 		OciImageDigest:  revision.OCIImageDigest,
 		OciImageBlob:    revision.OCIImageBlob,
 	})
+}
+
+// DeleteResourceRevision is part of the [Repository] interface.
+func (p *Postgres) DeleteResourceRevision(ctx context.Context, resourceID string, revision int) error {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := p.queries().DeleteResourceRevision(ctx, sqlcdb.DeleteResourceRevisionParams{
+		ResourceID: resourceID,
+		Revision:   revisionNumber,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateResourceRevision is part of the [Repository] interface.

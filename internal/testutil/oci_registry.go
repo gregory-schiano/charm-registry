@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/gschiano/charm-registry/internal/core"
@@ -36,6 +37,26 @@ func (o OCIRegistry) Credentials(pkg core.Package, pull bool) (string, string, e
 		return pkg.HarborPullRobot.Username, "pull-secret", nil
 	}
 	return pkg.HarborPushRobot.Username, "push-secret", nil
+}
+
+func (o OCIRegistry) MirrorImage(
+	_ context.Context,
+	_ core.Package,
+	_ string,
+	sourceImage, _, _ string,
+) (string, error) {
+	if idx := strings.LastIndex(sourceImage, "@"); idx >= 0 {
+		return sourceImage[idx+1:], nil
+	}
+	return "", nil
+}
+
+func (o OCIRegistry) DeleteImage(_ context.Context, _ core.Package, _ string, _ string) error {
+	return nil
+}
+
+func (o OCIRegistry) DeletePackage(_ context.Context, _ core.Package) error {
+	return nil
 }
 
 func (o OCIRegistry) registryHost() string {

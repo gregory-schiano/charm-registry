@@ -23,6 +23,7 @@ type Memory struct {
 	resourceDefs      map[string]map[string]core.ResourceDefinition
 	resourceRevisions map[string][]core.ResourceRevision
 	releases          map[string]map[string]core.Release
+	syncRules         map[string]map[string]core.CharmhubSyncRule
 }
 
 // NewMemory returns an in-memory [Repository] implementation.
@@ -42,6 +43,7 @@ func NewMemory() *Memory {
 		resourceDefs:      map[string]map[string]core.ResourceDefinition{},
 		resourceRevisions: map[string][]core.ResourceRevision{},
 		releases:          map[string]map[string]core.Release{},
+		syncRules:         map[string]map[string]core.CharmhubSyncRule{},
 	}
 }
 
@@ -281,6 +283,32 @@ func (m *Memory) CreateTracks(_ context.Context, packageID string, tracks []core
 	return created, nil
 }
 
+// DeleteTrack is part of the [Repository] interface.
+func (m *Memory) DeleteTrack(_ context.Context, packageID, trackName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pkg, ok := m.packagesByID[packageID]
+	if !ok {
+		return ErrNotFound
+	}
+	filtered := pkg.Tracks[:0]
+	removed := false
+	for _, track := range pkg.Tracks {
+		if track.Name == trackName {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, track)
+	}
+	if !removed {
+		return ErrNotFound
+	}
+	pkg.Tracks = append([]core.Track(nil), filtered...)
+	m.packagesByID[packageID] = pkg
+	m.packages[pkg.Name] = pkg
+	return nil
+}
+
 // ListTracks is part of the [Repository] interface.
 func (m *Memory) ListTracks(_ context.Context, packageID string) ([]core.Track, error) {
 	m.mu.RLock()
@@ -352,7 +380,33 @@ func (m *Memory) ApproveUpload(_ context.Context, uploadID string, revision *int
 func (m *Memory) CreateRevision(_ context.Context, revision core.Revision) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.revisions[revision.PackageID] {
+		if existing.Revision == revision.Revision {
+			return ErrConflict
+		}
+	}
 	m.revisions[revision.PackageID] = append(m.revisions[revision.PackageID], revision)
+	return nil
+}
+
+// DeleteRevision is part of the [Repository] interface.
+func (m *Memory) DeleteRevision(_ context.Context, packageID string, revision int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	revisions := m.revisions[packageID]
+	filtered := revisions[:0]
+	removed := false
+	for _, item := range revisions {
+		if item.Revision == revision {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if !removed {
+		return ErrNotFound
+	}
+	m.revisions[packageID] = append([]core.Revision(nil), filtered...)
 	return nil
 }
 
@@ -433,6 +487,24 @@ func (m *Memory) UpsertResourceDefinition(
 	return resource, nil
 }
 
+// DeleteResourceDefinition is part of the [Repository] interface.
+func (m *Memory) DeleteResourceDefinition(_ context.Context, resourceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for packageID, resources := range m.resourceDefs {
+		for resourceName, resource := range resources {
+			if resource.ID != resourceID {
+				continue
+			}
+			delete(resources, resourceName)
+			delete(m.resourceRevisions, resourceID)
+			m.resourceDefs[packageID] = resources
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 // GetResourceDefinition is part of the [Repository] interface.
 func (m *Memory) GetResourceDefinition(
 	_ context.Context,
@@ -463,7 +535,33 @@ func (m *Memory) ListResourceDefinitions(_ context.Context, packageID string) ([
 func (m *Memory) CreateResourceRevision(_ context.Context, revision core.ResourceRevision) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.resourceRevisions[revision.ResourceID] {
+		if existing.Revision == revision.Revision {
+			return ErrConflict
+		}
+	}
 	m.resourceRevisions[revision.ResourceID] = append(m.resourceRevisions[revision.ResourceID], revision)
+	return nil
+}
+
+// DeleteResourceRevision is part of the [Repository] interface.
+func (m *Memory) DeleteResourceRevision(_ context.Context, resourceID string, revision int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	revisions := m.resourceRevisions[resourceID]
+	filtered := revisions[:0]
+	removed := false
+	for _, item := range revisions {
+		if item.Revision == revision {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if !removed {
+		return ErrNotFound
+	}
+	m.resourceRevisions[resourceID] = append([]core.ResourceRevision(nil), filtered...)
 	return nil
 }
 
@@ -516,6 +614,21 @@ func (m *Memory) ReplaceRelease(_ context.Context, packageID string, release cor
 	return nil
 }
 
+// DeleteRelease is part of the [Repository] interface.
+func (m *Memory) DeleteRelease(_ context.Context, packageID, channel string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	releases, ok := m.releases[packageID]
+	if !ok {
+		return ErrNotFound
+	}
+	if _, ok := releases[channel]; !ok {
+		return ErrNotFound
+	}
+	delete(releases, channel)
+	return nil
+}
+
 // ListReleases is part of the [Repository] interface.
 func (m *Memory) ListReleases(_ context.Context, packageID string) ([]core.Release, error) {
 	m.mu.RLock()
@@ -550,4 +663,87 @@ func (m *Memory) ResolveDefaultRelease(_ context.Context, packageID string) (cor
 		return release, nil
 	}
 	return core.Release{}, ErrNotFound
+}
+
+// CreateCharmhubSyncRule is part of the [Repository] interface.
+func (m *Memory) CreateCharmhubSyncRule(_ context.Context, rule core.CharmhubSyncRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.syncRules[rule.PackageName]; !ok {
+		m.syncRules[rule.PackageName] = map[string]core.CharmhubSyncRule{}
+	}
+	if _, exists := m.syncRules[rule.PackageName][rule.Track]; exists {
+		return ErrConflict
+	}
+	m.syncRules[rule.PackageName][rule.Track] = rule
+	return nil
+}
+
+// DeleteCharmhubSyncRule is part of the [Repository] interface.
+func (m *Memory) DeleteCharmhubSyncRule(_ context.Context, packageName, track string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rules, ok := m.syncRules[packageName]
+	if !ok {
+		return ErrNotFound
+	}
+	if _, ok := rules[track]; !ok {
+		return ErrNotFound
+	}
+	delete(rules, track)
+	if len(rules) == 0 {
+		delete(m.syncRules, packageName)
+		return nil
+	}
+	m.syncRules[packageName] = rules
+	return nil
+}
+
+// ListCharmhubSyncRules is part of the [Repository] interface.
+func (m *Memory) ListCharmhubSyncRules(_ context.Context) ([]core.CharmhubSyncRule, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var rules []core.CharmhubSyncRule
+	for _, byTrack := range m.syncRules {
+		for _, rule := range byTrack {
+			rules = append(rules, rule)
+		}
+	}
+	slices.SortFunc(rules, func(a, b core.CharmhubSyncRule) int {
+		if a.PackageName != b.PackageName {
+			return strings.Compare(a.PackageName, b.PackageName)
+		}
+		return strings.Compare(a.Track, b.Track)
+	})
+	return rules, nil
+}
+
+// ListCharmhubSyncRulesByPackageName is part of the [Repository] interface.
+func (m *Memory) ListCharmhubSyncRulesByPackageName(_ context.Context, packageName string) ([]core.CharmhubSyncRule, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	byTrack := m.syncRules[packageName]
+	rules := make([]core.CharmhubSyncRule, 0, len(byTrack))
+	for _, rule := range byTrack {
+		rules = append(rules, rule)
+	}
+	slices.SortFunc(rules, func(a, b core.CharmhubSyncRule) int {
+		return strings.Compare(a.Track, b.Track)
+	})
+	return rules, nil
+}
+
+// UpdateCharmhubSyncRule is part of the [Repository] interface.
+func (m *Memory) UpdateCharmhubSyncRule(_ context.Context, rule core.CharmhubSyncRule) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byTrack, ok := m.syncRules[rule.PackageName]
+	if !ok {
+		return ErrNotFound
+	}
+	if _, ok := byTrack[rule.Track]; !ok {
+		return ErrNotFound
+	}
+	byTrack[rule.Track] = rule
+	return nil
 }

@@ -17,6 +17,8 @@ This repository contains a Go-based private charm registry that supports stock `
 - OIDC-backed identity resolution plus opaque store-token issuance
 - Private-by-default packages with owner-only management and admin override
 - S3-backed charm/resource blobs and Harbor-backed OCI credential/blob helpers
+- Registry-managed Charmhub track synchronization with a background worker
+- Admin CLI `charm-registryctl` for managing synchronized tracks
 
 ## Architecture
 
@@ -27,6 +29,7 @@ This repository contains a Go-based private charm registry that supports stock `
 - `internal/blob`: S3-compatible blob store
 - `internal/auth`: OIDC and store-token authentication
 - `internal/charm`: charm archive parsing
+- `internal/charmhub`: upstream Charmhub client used by the sync worker
 
 ## Local development
 
@@ -86,6 +89,91 @@ make up
 make down
 ```
 
+`make build` now produces both binaries in `.bin/`:
+
+- `.bin/charm-registry`
+- `.bin/charm-registryctl`
+
+## Charmhub synchronization
+
+The registry can mirror public Charmhub charms on a track-by-track basis. Each sync rule is `(charm name, track)`, and the worker mirrors the latest release for:
+
+- `track/stable`
+- `track/candidate`
+- `track/beta`
+- `track/edge`
+
+Important behavior:
+
+- Synchronization is admin-only.
+- Synchronized packages are registry-owned and marked with `authority=charmhub`.
+- While a package is synchronized, normal publisher mutations are blocked.
+- Removing a synchronized track prunes local charm/resource artifacts that are no longer referenced.
+- Removing the last synchronized track deletes the mirrored package and its OCI artifacts locally.
+- Trying to manually register a synchronized package name returns a conflict.
+- Trying to synchronize a package name that already exists as a normal package also returns a conflict.
+
+The worker runs on a registry-owned schedule. Adding or removing a sync rule also triggers an immediate asynchronous reconciliation.
+
+## Admin CLI
+
+Build the CLI:
+
+```bash
+make build
+```
+
+The binary will be at:
+
+```bash
+.bin/charm-registryctl
+```
+
+The CLI talks to the registry over HTTP and requires an admin bearer token.
+
+Set the connection details once:
+
+```bash
+export CHARM_REGISTRY_URL=http://localhost:8080
+export CHARM_REGISTRY_TOKEN='dev:admin:admin'
+```
+
+If you are using insecure dev auth locally, make sure that identity is configured as an admin through one of:
+
+- `CHARM_REGISTRY_ADMIN_SUBJECTS`
+- `CHARM_REGISTRY_ADMIN_EMAILS`
+- `CHARM_REGISTRY_ADMIN_USERNAMES`
+
+For example:
+
+```bash
+export CHARM_REGISTRY_ADMIN_USERNAMES=admin
+```
+
+That admin bootstrap setting must be present in the running `charm-registry` server process, not just in the shell where you invoke the CLI. With Docker Compose, either put `CHARM_REGISTRY_ADMIN_USERNAMES=admin` in your real `.env`, or export it before `make up`, then restart the registry so the container picks it up.
+
+Then use the CLI:
+
+```bash
+.bin/charm-registryctl sync list
+.bin/charm-registryctl sync add postgresql-k8s --track 14
+.bin/charm-registryctl sync remove postgresql-k8s --track 14
+.bin/charm-registryctl sync run postgresql-k8s
+```
+
+You can also pass the connection details explicitly instead of using environment variables:
+
+```bash
+.bin/charm-registryctl --url http://localhost:8080 --token 'dev:admin:admin' sync list
+```
+
+What the commands do:
+
+- `sync list`: show the configured rules and the last known sync status
+- `sync add <name> --track <track>`: create a sync rule and enqueue an immediate sync
+- `sync remove <name> --track <track>`: remove the rule and enqueue cleanup/reconciliation
+- `sync run <name>`: trigger an immediate reconciliation for all synchronized tracks of that package
+
 ## Configuration
 
 See [.env.example](/src/Canonical/charm-registry/.env.example) for the supported environment variables.
@@ -98,6 +186,9 @@ Important auth settings:
 - `CHARM_REGISTRY_HARBOR_URL`, `CHARM_REGISTRY_HARBOR_API_URL`, `CHARM_REGISTRY_HARBOR_ADMIN_USERNAME`, and `CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD` configure the Harbor control plane used for project and robot provisioning. In the local compose stack, `CHARM_REGISTRY_HARBOR_API_URL` should target the internal shared-network alias `https://harbor-proxy:8443/api/v2.0`, not the public `localhost` URL.
 - `HARBOR_HTTP_PORT` and `HARBOR_HTTPS_PORT` control the local Harbor listener ports used by `make harbor-prepare` and `make harbor-up`.
 - `CHARM_REGISTRY_HARBOR_SECRET_KEY` encrypts Harbor robot secrets at rest in the Charm Registry database.
+- `CHARM_REGISTRY_CHARMHUB_URL` overrides the upstream Charmhub API base URL used by the sync worker. The default is `https://api.charmhub.io`.
+- `CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL` controls how often the background sync worker scans all configured rules. The default is `15m`.
+- `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` controls the per-entry decompressed size limit when parsing charm archives. The default is `10485760` (10 MiB).
 
 ## Current limitations
 

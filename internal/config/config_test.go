@@ -55,6 +55,7 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "admin", cfg.HarborAdminUsername)
 	assert.Equal(t, "charm", cfg.HarborProjectPrefix)
 	assert.Equal(t, int64(1<<20), cfg.MaxJSONBodyBytes)
+	assert.Equal(t, int64(10<<20), cfg.MaxArchiveFileBytes)
 	assert.Equal(t, int64(64<<20), cfg.MaxUploadBytes)
 	assert.Equal(t, 10*time.Second, cfg.ServerReadHeaderTimeout)
 	assert.Equal(t, 30*time.Second, cfg.ServerReadTimeout)
@@ -75,6 +76,7 @@ func TestLoadCustomValues(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_S3_USE_PATH_STYLE", "false")
 	t.Setenv("CHARM_REGISTRY_S3_DISABLE_TLS", "true")
 	t.Setenv("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", "2048")
+	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "4096")
 	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "1024")
 	t.Setenv("CHARM_REGISTRY_SERVER_READ_TIMEOUT", "5s")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
@@ -94,6 +96,7 @@ func TestLoadCustomValues(t *testing.T) {
 	assert.False(t, cfg.S3UsePathStyle)
 	assert.True(t, cfg.S3DisableTLS)
 	assert.Equal(t, int64(2048), cfg.MaxJSONBodyBytes)
+	assert.Equal(t, int64(4096), cfg.MaxArchiveFileBytes)
 	assert.Equal(t, int64(1024), cfg.MaxUploadBytes)
 	assert.Equal(t, 5*time.Second, cfg.ServerReadTimeout)
 
@@ -132,10 +135,10 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 
 func TestEnvBoolInvalidFallsBack(t *testing.T) {
 
-	// Act
+	// Arrange
 	t.Setenv("TEST_BOOL", "not-a-bool")
 
-	// Assert
+	// Act + Assert
 	_, err := envBool("TEST_BOOL", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot parse TEST_BOOL as bool")
@@ -144,11 +147,11 @@ func TestEnvBoolInvalidFallsBack(t *testing.T) {
 
 func TestEnvBoolValid(t *testing.T) {
 
-	// Act
+	// Arrange
 	t.Setenv("TEST_BOOL_T", "true")
 	t.Setenv("TEST_BOOL_F", "false")
 
-	// Assert
+	// Act + Assert
 	valueTrue, err := envBool("TEST_BOOL_T", false)
 	require.NoError(t, err)
 	assert.True(t, valueTrue)
@@ -205,10 +208,10 @@ func TestEnvMissingKeyFallsBack(t *testing.T) {
 
 func TestEnvEmptyValueFallsBack(t *testing.T) {
 
-	// Act
+	// Arrange
 	t.Setenv("EMPTY_VAL", "")
 
-	// Assert
+	// Act + Assert
 	assert.Equal(t, "fallback", env("EMPTY_VAL", "fallback"))
 	boolValue, err := envBool("EMPTY_VAL", true)
 	require.NoError(t, err)
@@ -242,6 +245,26 @@ func TestLoadRejectsInvalidConfiguredValues(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CHARM_REGISTRY_MAX_UPLOAD_BYTES")
+
+}
+
+func TestLoadRejectsInvalidArchiveFileLimit(t *testing.T) {
+
+	// Arrange
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_HARBOR_URL", "https://harbor.example.com")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME", "admin")
+	t.Setenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD", "secret")
+	t.Setenv("CHARM_REGISTRY_HARBOR_SECRET_KEY", "harbor-secret")
+	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "0")
+
+	// Act
+	_, err := Load()
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES")
 
 }
 

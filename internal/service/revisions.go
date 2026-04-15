@@ -58,6 +58,8 @@ func (s *Service) AuthorizeUpload(identity core.Identity) error {
 //
 // The following errors may be returned:
 // - Authorization, validation, blob, or repository errors.
+//
+//nolint:gocognit,cyclop // Publishing a revision intentionally follows the end-to-end workflow in one place.
 func (s *Service) PushRevision(
 	ctx context.Context,
 	identity core.Identity,
@@ -67,6 +69,9 @@ func (s *Service) PushRevision(
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return "", translateRepoError(err, "package not found")
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return "", err
@@ -79,7 +84,7 @@ func (s *Service) PushRevision(
 	if err != nil {
 		return "", err
 	}
-	archive, err := charm.ParseArchive(payload)
+	archive, err := charm.ParseArchiveWithMaxFileSize(payload, s.cfg.MaxArchiveFileBytes)
 	if err != nil {
 		reviewErr := []core.APIError{{Code: "invalid-archive", Message: err.Error()}}
 		_ = s.repo.ApproveUpload(ctx, upload.ID, nil, reviewErr)

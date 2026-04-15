@@ -22,6 +22,9 @@ func (s *Service) RegisterPackage(
 	if err := s.requirePermission(identity, permAccountRegisterPackage); err != nil {
 		return core.Package{}, err
 	}
+	if err := s.ensurePackageNotSynchronized(ctx, name); err != nil {
+		return core.Package{}, err
+	}
 	now := time.Now().UTC()
 	pkg := core.Package{
 		ID:             compactID(),
@@ -121,6 +124,9 @@ func (s *Service) UpdatePackage(
 	if err != nil {
 		return core.Package{}, translateRepoError(err, "package not found")
 	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return core.Package{}, err
+	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageMetadata); err != nil {
 		return core.Package{}, err
 	}
@@ -163,6 +169,9 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
 		return "", translateRepoError(err, "package not found")
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManage); err != nil {
 		return "", err

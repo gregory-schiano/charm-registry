@@ -67,6 +67,9 @@ func (s *Service) PushResource(
 	if err != nil {
 		return "", translateRepoError(err, "package not found")
 	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
+	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return "", err
 	}
@@ -178,6 +181,9 @@ func (s *Service) UpdateResourceRevisions(
 	if err != nil {
 		return 0, translateRepoError(err, "package not found")
 	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return 0, err
+	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return 0, err
 	}
@@ -213,6 +219,9 @@ func (s *Service) OCIImageUploadCredentials(
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return ociImageUploadCredentialsResponse{}, translateRepoError(err, "package not found")
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return ociImageUploadCredentialsResponse{}, err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return ociImageUploadCredentialsResponse{}, err
@@ -251,6 +260,9 @@ func (s *Service) OCIImageBlob(
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return "", translateRepoError(err, "package not found")
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return "", err

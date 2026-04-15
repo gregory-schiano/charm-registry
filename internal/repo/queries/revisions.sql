@@ -31,6 +31,11 @@ INSERT INTO revisions (
     $15, $16, $17, $18, $19, $20
 );
 
+-- name: DeleteRevision :execrows
+DELETE FROM revisions
+WHERE package_id = $1
+  AND revision = $2;
+
 -- name: ListRevisions :many
 SELECT id, package_id, revision, version, status,
        created_at, created_by, size, sha256, sha384,

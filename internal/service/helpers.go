@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,6 +39,16 @@ func (s *Service) requirePermission(identity core.Identity, permission string) e
 		}
 	}
 	return newError(ErrorKindForbidden, "forbidden", "token does not grant required permission")
+}
+
+func (s *Service) requireAdmin(identity core.Identity) error {
+	if err := s.requireAuth(identity); err != nil {
+		return err
+	}
+	if identity.Account.IsAdmin {
+		return nil
+	}
+	return newError(ErrorKindForbidden, "forbidden", "admin access is required")
 }
 
 func (s *Service) requirePermissionOrAnonymous(identity core.Identity, permission string) error {
@@ -229,6 +240,10 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }
 
 func firstLink(values []string) string {

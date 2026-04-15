@@ -306,6 +306,145 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 
 }
 
+func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
+
+	// Arrange
+	repository := newPostgresIntegrationRepository(t)
+	ctx := context.Background()
+	admin := ensureTestAccount(t, repository, "admin-sync", "admin-sync")
+	now := time.Now().UTC()
+
+	// Act
+	err := repository.CreateCharmhubSyncRule(ctx, core.CharmhubSyncRule{
+		PackageName:        "demo",
+		Track:              "latest",
+		CreatedByAccountID: admin.ID,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		LastSyncStatus:     "pending",
+	})
+	require.NoError(t, err)
+
+	rules, err := repository.ListCharmhubSyncRules(ctx)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "demo", rules[0].PackageName)
+	assert.Equal(t, "latest", rules[0].Track)
+
+	startedAt := now.Add(time.Minute)
+	finishedAt := now.Add(2 * time.Minute)
+	lastError := "sync failed"
+	rule := rules[0]
+	rule.LastSyncStatus = "error"
+	rule.LastSyncStartedAt = &startedAt
+	rule.LastSyncFinishedAt = &finishedAt
+	rule.LastSyncError = &lastError
+	rule.UpdatedAt = now.Add(3 * time.Minute)
+	require.NoError(t, repository.UpdateCharmhubSyncRule(ctx, rule))
+
+	rules, err = repository.ListCharmhubSyncRulesByPackageName(ctx, "demo")
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "error", rules[0].LastSyncStatus)
+	require.NotNil(t, rules[0].LastSyncError)
+	assert.Equal(t, "sync failed", *rules[0].LastSyncError)
+
+	require.NoError(t, repository.DeleteCharmhubSyncRule(ctx, "demo", "latest"))
+	rules, err = repository.ListCharmhubSyncRulesByPackageName(ctx, "demo")
+	require.NoError(t, err)
+	assert.Empty(t, rules)
+
+}
+
+func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
+
+	// Arrange
+	repository := newPostgresIntegrationRepository(t)
+	ctx := context.Background()
+	owner := ensureTestAccount(t, repository, "owner-sync-delete", "owner-sync-delete")
+	pkg := createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-sync-delete",
+		Name: "sync-delete",
+	})
+
+	// Act
+	_, err := repository.CreateTracks(ctx, pkg.ID, []core.Track{{
+		Name:      "latest",
+		CreatedAt: time.Now().UTC(),
+	}})
+	require.NoError(t, err)
+
+	require.NoError(t, repository.CreateRevision(ctx, core.Revision{
+		ID:        "rev-1",
+		PackageID: pkg.ID,
+		Revision:  1,
+		Version:   "1",
+		Status:    "approved",
+		CreatedAt: time.Now().UTC(),
+		CreatedBy: owner.ID,
+		ObjectKey: "charms/pkg-sync-delete/1.charm",
+	}))
+
+	resourceDef, err := repository.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID:          "res-def-1",
+		PackageID:   pkg.ID,
+		Name:        "app-image",
+		Type:        "oci-image",
+		Description: "image",
+		CreatedAt:   time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repository.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:              "res-rev-1",
+		ResourceID:      resourceDef.ID,
+		Name:            "app-image",
+		Type:            "oci-image",
+		Revision:        1,
+		CreatedAt:       time.Now().UTC(),
+		OCIImageDigest:  "sha256:deadbeef",
+		PackageRevision: intPtr(1),
+	}))
+
+	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-1",
+		Channel:  "latest/stable",
+		Revision: 1,
+		Resources: []core.ReleaseResourceRef{{
+			Name:     "app-image",
+			Revision: intPtr(1),
+		}},
+		When: time.Now().UTC(),
+	}))
+
+	// Assert
+	require.NoError(t, repository.DeleteRelease(ctx, pkg.ID, "latest/stable"))
+	_, err = repository.ResolveRelease(ctx, pkg.ID, "latest/stable")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, repository.DeleteTrack(ctx, pkg.ID, "latest"))
+	tracks, err := repository.ListTracks(ctx, pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, tracks)
+
+	require.NoError(t, repository.DeleteResourceRevision(ctx, resourceDef.ID, 1))
+	_, err = repository.GetResourceRevision(ctx, resourceDef.ID, 1)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, repository.DeleteResourceDefinition(ctx, resourceDef.ID))
+	_, err = repository.GetResourceDefinition(ctx, pkg.ID, "app-image")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, repository.DeleteRevision(ctx, pkg.ID, 1))
+	_, err = repository.GetRevisionByNumber(ctx, pkg.ID, 1)
+	require.ErrorIs(t, err, ErrNotFound)
+
+}
+
 func stringPtr(value string) *string {
+	return &value
+}
+
+func intPtr(value int) *int {
 	return &value
 }

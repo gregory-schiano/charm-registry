@@ -471,19 +471,6 @@ func TestDeletePackage(t *testing.T) {
 
 }
 
-func TestGetPackageNotFoundReturns404(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent", nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
 
 func TestCreateTracks(t *testing.T) {
 	t.Parallel()
@@ -909,188 +896,16 @@ func TestInfoEndpointNotFound(t *testing.T) {
 
 }
 
-func TestRefreshEndpointInvalidBody(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
 
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v2/charms/refresh",
-		`not json`, "Bearer dev:alice:alice")
 
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
 
-}
 
-func TestPushRevisionInvalidBody(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-body-charm"}, "Bearer dev:alice:alice")
 
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/bad-body-charm/revisions",
-		`not json`, "Bearer dev:alice:alice")
 
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
 
-}
 
-func TestReleaseInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-rel-charm"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/bad-rel-charm/releases",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestPatchInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-patch-charm"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "PATCH", "/v1/charm/bad-patch-charm",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestRegisterInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestRevokeTokenInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens/revoke",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestIssueTokenInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestOCIImageBlobInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "oci-bad"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/oci-bad/resources/foo/oci-image/blob",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestPushResourceInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "res-bad"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/res-bad/resources/config/revisions",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestUpdateResourceRevisionsInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "resupd-bad"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "PATCH",
-		"/v1/charm/resupd-bad/resources/config/revisions",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestCreateTracksInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "track-bad"}, "Bearer dev:alice:alice")
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/track-bad/tracks",
-		`not json`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
 
 func TestHandlersRejectBadAuth(t *testing.T) {
 	t.Parallel()
@@ -1171,182 +986,17 @@ func TestGetTokensWithInactiveFilter(t *testing.T) {
 
 }
 
-func TestDashboardExchangeInvalidBody(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
 
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens/dashboard/exchange",
-		`not json`, "Bearer dev:alice:alice")
 
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
 
-}
 
-func TestDeletePackageNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
 
-	// Act
-	resp := doRequest(t, handler, "DELETE", "/v1/charm/nonexistent", nil, "Bearer dev:alice:alice")
 
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
 
-}
 
-func TestPatchPackageNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "PATCH", "/v1/charm/nonexistent",
-		map[string]any{"title": "x"}, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestListRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/revisions", nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestListReleasesNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/releases", nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestListResourcesNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/resources", nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestListResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/resources/config/revisions",
-		nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestReviewUploadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/revisions/review?upload-id=x",
-		nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestPushRevisionNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "POST", "/v1/charm/nonexistent/revisions",
-		map[string]any{"upload-id": "bogus"}, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestPushResourceNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "POST", "/v1/charm/nonexistent/resources/config/revisions",
-		map[string]any{"upload-id": "bogus", "type": "file"}, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestUpdateResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "PATCH", "/v1/charm/nonexistent/resources/config/revisions",
-		map[string]any{"resource-revision-updates": []any{}}, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestOCIUploadCredentialsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET",
-		"/v1/charm/nonexistent/resources/config/oci-image/upload-credentials",
-		nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
 
 func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 	t.Parallel()
@@ -1379,96 +1029,7 @@ func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 
 }
 
-func TestReleaseNotFoundPackage(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/nonexistent/releases",
-		`[{"channel":"latest/stable","revision":1}]`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestCreateTracksNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/nonexistent/tracks",
-		`[{"name":"2.0"}]`, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestRefreshMissingIDAndName(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	// Per the Charmhub refresh contract the HTTP response is always 200; the
-	// error for this specific action is embedded in the per-action result.
-	resp := doRequest(t, handler, "POST", "/v2/charms/refresh", map[string]any{
-		"context": []any{},
-		"actions": []any{map[string]any{
-			"action":       "refresh",
-			"instance-key": "unit/0",
-		}},
-	}, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusOK, resp.Code)
-	body := decodeJSON(t, resp)
-	results := body["results"].([]any)
-	require.Len(t, results, 1)
-	item := results[0].(map[string]any)
-	assert.Equal(t, "error", item["result"])
-	apiErr := item["error"].(map[string]any)
-	assert.Equal(t, "invalid-request", apiErr["code"])
-
-}
-
-func TestResourceDownloadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET",
-		"/api/v1/resources/download/charm_nonexistent.config_1",
-		nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
-
-func TestCharmDownloadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-
-	// Act
-	resp := doRequest(t, handler, "GET",
-		"/api/v1/charms/download/nonexistent_1.charm",
-		nil, "Bearer dev:alice:alice")
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-
-}
 
 func TestWhoAmIUnauthenticated(t *testing.T) {
 	t.Parallel()
@@ -1621,55 +1182,6 @@ func TestExchangeTokenUnauthenticated(t *testing.T) {
 
 }
 
-func TestDeletePackageWithRevisions(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "del-charm"}, authHeader)
-	resp := doMultipartUpload(t, handler, buildTestCharmArchive(t, "del-charm"), "del-charm.charm", authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
-	doRequest(t, handler, "POST", "/v1/charm/del-charm/revisions",
-		map[string]any{"upload-id": uploadID}, authHeader)
-
-	// Act
-	resp = doRequest(t, handler, "DELETE", "/v1/charm/del-charm", nil, authHeader)
-
-	// Assert
-	// The caller is authorised; the business rule prevents deletion.
-	// This is 400 invalid-request, not 403 (which is reserved for auth).
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
-func TestReleaseEmptyChannelReturns400(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "rel-err-charm"}, authHeader)
-	resp := doMultipartUpload(t, handler, buildTestCharmArchive(t, "rel-err-charm"), "rel-err-charm.charm", authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
-	doRequest(t, handler, "POST", "/v1/charm/rel-err-charm/revisions",
-		map[string]any{"upload-id": uploadID}, authHeader)
-
-	// Act
-	resp = doJSONRequest(t, handler, "POST", "/v1/charm/rel-err-charm/releases",
-		`[{"channel":"","revision":1}]`, authHeader)
-
-	// Assert
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-
-}
-
 func TestUnscannedUploadMissingBinaryField(t *testing.T) {
 	t.Parallel()
 
@@ -1774,27 +1286,6 @@ func TestRefreshNotFoundChannel(t *testing.T) {
 
 }
 
-func TestInfoEndpointNoRelease(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "norel-info"}, authHeader)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v2/charms/info/norel-info", nil, authHeader)
-
-	// Assert
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-	body := decodeJSON(t, resp)
-	assert.Equal(t, "not-found", body["code"])
-	assert.Equal(t, "no released revisions found", body["message"])
-
-}
-
 // TestLibrariesBulkNoAuth verifies that POST /v1/charm/libraries/bulk works
 // without credentials (charmcraft uses its anonymous client for this call)
 // and always returns an empty libraries list.
@@ -1837,27 +1328,6 @@ func TestLibrariesBulkWithPayload(t *testing.T) {
 	libs, ok := body["libraries"].([]any)
 	require.True(t, ok)
 	assert.Empty(t, libs, "unknown library IDs should return empty list, not an error")
-
-}
-
-func TestListReleasesEmpty(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "norel-list"}, authHeader)
-
-	// Act
-	resp := doRequest(t, handler, "GET", "/v1/charm/norel-list/releases", nil, authHeader)
-
-	// Assert
-	assert.Equal(t, http.StatusOK, resp.Code)
-	body := decodeJSON(t, resp)
-	channelMap := body["channel-map"].([]any)
-	assert.Empty(t, channelMap)
 
 }
 
@@ -2033,6 +1503,82 @@ func TestPatchPackageForbiddenForDifferentUser(t *testing.T) {
 }
 
 // --- helpers ---
+
+func TestEndpointsReturnNotFoundForMissingPackage(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	auth := "Bearer dev:alice:alice"
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{"GET", "/v1/charm/nonexistent", nil},
+		{"DELETE", "/v1/charm/nonexistent", nil},
+		{"PATCH", "/v1/charm/nonexistent", map[string]any{"title": "x"}},
+		{"GET", "/v1/charm/nonexistent/revisions", nil},
+		{"POST", "/v1/charm/nonexistent/revisions", map[string]any{"upload-id": "bogus"}},
+		{"GET", "/v1/charm/nonexistent/revisions/review?upload-id=x", nil},
+		{"GET", "/v1/charm/nonexistent/releases", nil},
+		{"GET", "/v1/charm/nonexistent/resources", nil},
+		{"GET", "/v1/charm/nonexistent/resources/config/revisions", nil},
+		{"POST", "/v1/charm/nonexistent/resources/config/revisions", map[string]any{"upload-id": "bogus", "type": "file"}},
+		{"PATCH", "/v1/charm/nonexistent/resources/config/revisions", map[string]any{"resource-revision-updates": []any{}}},
+		{"GET", "/v1/charm/nonexistent/resources/config/oci-image/upload-credentials", nil},
+		{"POST", "/v1/charm/nonexistent/releases", []any{map[string]any{"channel": "latest/stable", "revision": 1}}},
+		{"POST", "/v1/charm/nonexistent/tracks", []any{map[string]any{"name": "2.0"}}},
+		{"GET", "/api/v1/charms/download/nonexistent_1.charm", nil},
+		{"GET", "/api/v1/resources/download/charm_nonexistent.config_1", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			t.Parallel()
+			resp := doRequest(t, handler, tt.method, tt.path, tt.body, auth)
+			assert.Equal(t, http.StatusNotFound, resp.Code,
+				"expected 404 for %s %s, got %d", tt.method, tt.path, resp.Code)
+		})
+	}
+}
+
+func TestEndpointsRejectInvalidJSONBody(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	auth := "Bearer dev:alice:alice"
+
+	// Register a package for endpoints that need a valid package name in the path.
+	doRequest(t, handler, "POST", "/v1/charm", map[string]any{"name": "badbody-charm"}, auth)
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{"POST", "/v1/charm"},
+		{"PATCH", "/v1/charm/badbody-charm"},
+		{"POST", "/v1/charm/badbody-charm/revisions"},
+		{"POST", "/v1/charm/badbody-charm/releases"},
+		{"POST", "/v1/charm/badbody-charm/tracks"},
+		{"POST", "/v1/charm/badbody-charm/resources/config/revisions"},
+		{"PATCH", "/v1/charm/badbody-charm/resources/config/revisions"},
+		{"POST", "/v1/charm/badbody-charm/resources/foo/oci-image/blob"},
+		{"POST", "/v1/tokens"},
+		{"POST", "/v1/tokens/revoke"},
+		{"POST", "/v1/tokens/dashboard/exchange"},
+		{"POST", "/v2/charms/refresh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			t.Parallel()
+			resp := doJSONRequest(t, handler, tt.method, tt.path, "not json", auth)
+			assert.Equal(t, http.StatusBadRequest, resp.Code,
+				"expected 400 for %s %s with invalid JSON", tt.method, tt.path)
+		})
+	}
+}
 
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	t.Helper()

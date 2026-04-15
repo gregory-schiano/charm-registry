@@ -18,6 +18,7 @@ type mockS3Client struct {
 	createBucketFn func(ctx context.Context, input *s3.CreateBucketInput, opts ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
 	putObjectFn    func(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	getObjectFn    func(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	deleteObjectFn func(ctx context.Context, input *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 func (m *mockS3Client) HeadBucket(ctx context.Context, input *s3.HeadBucketInput, opts ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -34,6 +35,10 @@ func (m *mockS3Client) PutObject(ctx context.Context, input *s3.PutObjectInput, 
 
 func (m *mockS3Client) GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	return m.getObjectFn(ctx, input, opts...)
+}
+
+func (m *mockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	return m.deleteObjectFn(ctx, input, opts...)
 }
 
 func TestMemoryStorePutAndGet(t *testing.T) {
@@ -77,12 +82,10 @@ func TestMemoryStoreOverwrite(t *testing.T) {
 	store := NewMemoryStore()
 
 	// Act
-	// Act
 	_ = store.Put(ctx, "key", []byte("v1"), "text/plain")
 	_ = store.Put(ctx, "key", []byte("v2"), "text/plain")
 	data, err := store.Get(ctx, "key")
 
-	// Assert
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v2"), data)
@@ -122,17 +125,27 @@ func TestMemoryStoreMultipleKeys(t *testing.T) {
 	store := NewMemoryStore()
 
 	// Act
-	// Act
 	_ = store.Put(ctx, "a", []byte("alpha"), "text/plain")
 	_ = store.Put(ctx, "b", []byte("beta"), "text/plain")
 
-	// Assert
 	// Assert
 	a, _ := store.Get(ctx, "a")
 	b, _ := store.Get(ctx, "b")
 	assert.Equal(t, []byte("alpha"), a)
 	assert.Equal(t, []byte("beta"), b)
 
+}
+
+func TestMemoryStoreDelete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := NewMemoryStore()
+
+	require.NoError(t, store.Put(ctx, "key", []byte("hello"), "text/plain"))
+	require.NoError(t, store.Delete(ctx, "key"))
+	_, err := store.Get(ctx, "key")
+	require.Error(t, err)
 }
 
 // ---- S3Store tests --------------------------------------------------------
@@ -376,4 +389,19 @@ func TestS3StoreGetError(t *testing.T) {
 	// Assert
 	assert.ErrorIs(t, err, getErr)
 
+}
+
+func TestS3StoreDelete(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockS3Client{
+		deleteObjectFn: func(_ context.Context, input *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+			assert.Equal(t, "my-bucket", *input.Bucket)
+			assert.Equal(t, "key", *input.Key)
+			return &s3.DeleteObjectOutput{}, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+
+	require.NoError(t, store.Delete(context.Background(), "key"))
 }

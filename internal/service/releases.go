@@ -28,6 +28,9 @@ func (s *Service) CreateRelease(
 	if err != nil {
 		return nil, translateRepoError(err, "package not found")
 	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return nil, err
+	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageReleases); err != nil {
 		return nil, err
 	}
@@ -174,6 +177,9 @@ func (s *Service) CreateTracks(
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return 0, translateRepoError(err, "package not found")
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return 0, err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageMetadata); err != nil {
 		return 0, err

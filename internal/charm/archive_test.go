@@ -88,7 +88,7 @@ func TestParseArchiveRejectsOversizedZipEntry(t *testing.T) {
 
 	// Arrange
 	archive := buildZip(t, map[string]string{
-		"metadata.yaml": "name: " + strings.Repeat("a", maxArchiveFileSize) + "\n",
+		"metadata.yaml": "name: " + strings.Repeat("a", int(defaultMaxArchiveFileSize)) + "\n",
 	})
 
 	// Act
@@ -96,8 +96,21 @@ func TestParseArchiveRejectsOversizedZipEntry(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata.yaml exceeds")
+	assert.Contains(t, err.Error(), `read charm archive entry: archive entry "metadata.yaml" exceeds the 10 MiB per-file safety limit`)
 
+}
+
+func TestParseArchiveWithCustomMaxFileSize(t *testing.T) {
+	t.Parallel()
+
+	archive := buildZip(t, map[string]string{
+		"metadata.yaml": "name: " + strings.Repeat("a", 256) + "\n",
+	})
+
+	_, err := ParseArchiveWithMaxFileSize(archive, 128)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `read charm archive entry: archive entry "metadata.yaml" exceeds the 128 bytes per-file safety limit`)
 }
 
 func TestParseArchiveAutoGeneratesOCIResourcesFromContainers(t *testing.T) {

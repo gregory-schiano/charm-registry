@@ -38,6 +38,25 @@ func (q *Queries) CreateTrack(ctx context.Context, arg CreateTrackParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const deleteTrack = `-- name: DeleteTrack :execrows
+DELETE FROM tracks
+WHERE package_id = $1
+  AND name = $2
+`
+
+type DeleteTrackParams struct {
+	PackageID string
+	Name      string
+}
+
+func (q *Queries) DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTrack, arg.PackageID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listTracks = `-- name: ListTracks :many
 SELECT name, version_pattern, automatic_phasing_percentage, created_at
 FROM tracks

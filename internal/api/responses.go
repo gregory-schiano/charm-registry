@@ -118,6 +118,10 @@ type resourceRevisionUpdatesResponse struct {
 	NumResourceRevisionsUpdated int `json:"num-resource-revisions-updated"`
 }
 
+type charmhubSyncRuleListResponse struct {
+	Rules []core.CharmhubSyncRule `json:"rules"`
+}
+
 func newErrorListResponse(code, message string) errorListResponse {
 	return errorListResponse{
 		ErrorList: []errorItemResponse{{

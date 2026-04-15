@@ -71,6 +71,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		closers = append(closers, closer)
 	}
 	svc := service.New(cfg, repository, storage, ociRegistry)
+	closers = append(closers, svc.StartCharmhubSyncManager(ctx))
 	handler := api.New(cfg, svc, authenticator)
 	return &App{Handler: handler, closers: closers}, nil
 }

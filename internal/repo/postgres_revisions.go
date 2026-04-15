@@ -117,6 +117,25 @@ func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) e
 	})
 }
 
+// DeleteRevision is part of the [Repository] interface.
+func (p *Postgres) DeleteRevision(ctx context.Context, packageID string, revision int) error {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := p.queries().DeleteRevision(ctx, sqlcdb.DeleteRevisionParams{
+		PackageID: packageID,
+		Revision:  revisionNumber,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListRevisions is part of the [Repository] interface.
 func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error) {
 	if revision != nil {

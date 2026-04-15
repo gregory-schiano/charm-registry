@@ -13,7 +13,7 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
-const maxArchiveFileSize = 10 << 20
+const defaultMaxArchiveFileSize int64 = 10 << 20
 
 // ParseArchive extracts charm metadata from a charm archive payload.
 //
@@ -22,6 +22,15 @@ const maxArchiveFileSize = 10 << 20
 // - `metadata.yaml` is missing.
 // - `metadata.yaml` cannot be parsed.
 func ParseArchive(payload []byte) (core.CharmArchive, error) {
+	return ParseArchiveWithMaxFileSize(payload, defaultMaxArchiveFileSize)
+}
+
+// ParseArchiveWithMaxFileSize extracts charm metadata from a charm archive
+// payload while enforcing a per-entry decompressed size limit.
+func ParseArchiveWithMaxFileSize(payload []byte, maxFileSize int64) (core.CharmArchive, error) {
+	if maxFileSize <= 0 {
+		maxFileSize = defaultMaxArchiveFileSize
+	}
 	reader, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
 	if err != nil {
 		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
@@ -30,9 +39,9 @@ func ParseArchive(payload []byte) (core.CharmArchive, error) {
 	var archive core.CharmArchive
 	for _, file := range reader.File {
 		name := filepath.ToSlash(file.Name)
-		content, err := readZipFile(file)
+		content, err := readZipFile(file, maxFileSize)
 		if err != nil {
-			return core.CharmArchive{}, err
+			return core.CharmArchive{}, fmt.Errorf("read charm archive entry: %w", err)
 		}
 		switch {
 		case strings.EqualFold(name, "metadata.yaml"):
@@ -115,19 +124,33 @@ func ExtractWebsites(raw any) []string {
 	}
 }
 
-func readZipFile(file *zip.File) ([]byte, error) {
+func readZipFile(file *zip.File, maxFileSize int64) ([]byte, error) {
 	reader, err := file.Open()
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", file.Name, err)
 	}
 	defer reader.Close()
-	limited := io.LimitReader(reader, maxArchiveFileSize+1)
+	limited := io.LimitReader(reader, maxFileSize+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", file.Name, err)
 	}
-	if len(payload) > maxArchiveFileSize {
-		return nil, fmt.Errorf("%s exceeds %d bytes", file.Name, maxArchiveFileSize)
+	if int64(len(payload)) > maxFileSize {
+		return nil, fmt.Errorf(
+			"archive entry %q exceeds the %s per-file safety limit",
+			file.Name,
+			formatArchiveFileSizeLimit(maxFileSize),
+		)
 	}
 	return payload, nil
+}
+
+func formatArchiveFileSizeLimit(value int64) string {
+	if value%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", value>>20)
+	}
+	if value%(1<<10) == 0 {
+		return fmt.Sprintf("%d KiB", value>>10)
+	}
+	return fmt.Sprintf("%d bytes", value)
 }

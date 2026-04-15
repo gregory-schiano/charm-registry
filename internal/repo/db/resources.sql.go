@@ -70,6 +70,38 @@ func (q *Queries) CreateResourceRevision(ctx context.Context, arg CreateResource
 	return err
 }
 
+const deleteResourceDefinition = `-- name: DeleteResourceDefinition :execrows
+DELETE FROM resource_definitions
+WHERE id = $1
+`
+
+func (q *Queries) DeleteResourceDefinition(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteResourceDefinition, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteResourceRevision = `-- name: DeleteResourceRevision :execrows
+DELETE FROM resource_revisions
+WHERE resource_id = $1
+  AND revision = $2
+`
+
+type DeleteResourceRevisionParams struct {
+	ResourceID string
+	Revision   int32
+}
+
+func (q *Queries) DeleteResourceRevision(ctx context.Context, arg DeleteResourceRevisionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteResourceRevision, arg.ResourceID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getResourceDefinition = `-- name: GetResourceDefinition :one
 SELECT id, package_id, name, type, description, filename, optional, created_at
 FROM resource_definitions

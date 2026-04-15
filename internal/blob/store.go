@@ -22,6 +22,7 @@ import (
 type Store interface {
 	Put(ctx context.Context, key string, payload []byte, contentType string) error
 	Get(ctx context.Context, key string) ([]byte, error)
+	Delete(ctx context.Context, key string) error
 }
 
 type MemoryStore struct {
@@ -53,6 +54,14 @@ func (s *MemoryStore) Get(_ context.Context, key string) ([]byte, error) {
 	return append([]byte(nil), payload...), nil
 }
 
+// Delete is part of the [Store] interface.
+func (s *MemoryStore) Delete(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, key)
+	return nil
+}
+
 // s3API is the subset of [s3.Client] methods used by [S3Store].
 // Declared as an interface so tests can substitute a mock without a live AWS endpoint.
 type s3API interface {
@@ -60,6 +69,7 @@ type s3API interface {
 	CreateBucket(ctx context.Context, input *s3.CreateBucketInput, opts ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
 	PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 type S3Store struct {
@@ -174,6 +184,15 @@ func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+// Delete is part of the [Store] interface.
+func (s *S3Store) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: &s.bucket,
+		Key:    &key,
+	})
+	return err
 }
 
 // Close releases idle HTTP connections held by the S3 client transport.

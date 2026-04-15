@@ -3,6 +3,11 @@ INSERT INTO tracks (package_id, name, version_pattern, automatic_phasing_percent
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING;
 
+-- name: DeleteTrack :execrows
+DELETE FROM tracks
+WHERE package_id = $1
+  AND name = $2;
+
 -- name: ListTracks :many
 SELECT name, version_pattern, automatic_phasing_percentage, created_at
 FROM tracks

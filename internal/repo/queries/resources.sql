@@ -21,6 +21,10 @@ FROM resource_definitions
 WHERE package_id = $1
 ORDER BY name ASC;
 
+-- name: DeleteResourceDefinition :execrows
+DELETE FROM resource_definitions
+WHERE id = $1;
+
 -- name: CreateResourceRevision :exec
 INSERT INTO resource_revisions (
     id, resource_id, revision, package_revision, name, type, description,
@@ -31,6 +35,11 @@ INSERT INTO resource_revisions (
     $8, $9, $10, $11, $12, $13, $14,
     $15, $16, $17, $18, $19
 );
+
+-- name: DeleteResourceRevision :execrows
+DELETE FROM resource_revisions
+WHERE resource_id = $1
+  AND revision = $2;
 
 -- name: UpdateResourceRevision :execrows
 UPDATE resource_revisions

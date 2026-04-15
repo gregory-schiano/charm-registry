@@ -34,6 +34,21 @@ func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release
 	})
 }
 
+// DeleteRelease is part of the [Repository] interface.
+func (p *Postgres) DeleteRelease(ctx context.Context, packageID, channel string) error {
+	rowsAffected, err := p.queries().DeleteRelease(ctx, sqlcdb.DeleteReleaseParams{
+		PackageID: packageID,
+		Channel:   channel,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListReleases is part of the [Repository] interface.
 func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
 	rows, err := p.queries().ListReleases(ctx, packageID)

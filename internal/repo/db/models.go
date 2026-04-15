@@ -34,6 +34,18 @@ type AccountGroupMember struct {
 	AccountID string
 }
 
+type CharmhubSyncRule struct {
+	PackageName        string
+	Track              string
+	CreatedByAccountID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastSyncStatus     string
+	LastSyncStartedAt  pgtype.Timestamptz
+	LastSyncFinishedAt pgtype.Timestamptz
+	LastSyncError      *string
+}
+
 type Package struct {
 	ID                    string
 	Name                  string

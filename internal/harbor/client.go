@@ -14,23 +14,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
 var invalidNamePattern = regexp.MustCompile(`[^a-z0-9-]+`)
+var authRealmPattern = regexp.MustCompile(`realm="([^"]+)"`)
 
 type Client struct {
 	http            *http.Client
 	transport       *http.Transport
+	registryRT      http.RoundTripper
 	requestTimeout  time.Duration
 	apiURL          string
 	publicRegistry  string
@@ -60,11 +68,20 @@ func New(cfg config.Config) (*Client, error) {
 		tlsConfig.RootCAs = rootCAs
 	}
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
+	internalRegistry := registryBaseURL(cfg.HarborAPIURL, cfg.HarborURL)
+	registryRT := http.RoundTripper(transport)
+	if realmBase, err := url.Parse(internalRegistry); err == nil && realmBase.Host != "" {
+		registryRT = &rewriteAuthenticateRealmTransport{
+			inner:     transport,
+			realmBase: realmBase,
+		}
+	}
 	return &Client{
 		http: &http.Client{
 			Transport: transport,
 		},
 		transport:       transport,
+		registryRT:      registryRT,
 		requestTimeout:  15 * time.Second,
 		apiURL:          cfg.HarborAPIURL,
 		publicRegistry:  cfg.PublicRegistryURL,
@@ -110,11 +127,18 @@ func (c *Client) SyncPackage(ctx context.Context, pkg core.Package) (core.Packag
 }
 
 func (c *Client) ImageReference(pkg core.Package, resourceName string) (string, error) {
+	return c.imageReference(c.publicRegistry, pkg, resourceName)
+}
+
+func (c *Client) imageReference(registryURL string, pkg core.Package, resourceName string) (string, error) {
 	projectName := pkg.HarborProject
 	if projectName == "" {
 		return "", fmt.Errorf("cannot resolve image reference: harbor project not configured for package %s", pkg.Name)
 	}
-	host := strings.TrimPrefix(strings.TrimPrefix(c.publicRegistry, "https://"), "http://")
+	host := registryHost(registryURL)
+	if host == "" {
+		return "", fmt.Errorf("cannot resolve image reference: registry host is not configured")
+	}
 	return host + "/" + projectName + "/" + sanitizeName(resourceName), nil
 }
 
@@ -215,11 +239,18 @@ func (c *Client) createRobot(ctx context.Context, name, projectName string, allo
 		},
 	}
 	if allowPush {
-		access = append(access, map[string]string{
-			"resource": "repository",
-			"action":   "push",
-			"effect":   "allow",
-		})
+		access = append(access,
+			map[string]string{
+				"resource": "repository",
+				"action":   "push",
+				"effect":   "allow",
+			},
+			map[string]string{
+				"resource": "repository",
+				"action":   "delete",
+				"effect":   "allow",
+			},
+		)
 	}
 	req := map[string]any{
 		"name":        sanitizeName(name),
@@ -238,6 +269,105 @@ func (c *Client) createRobot(ctx context.Context, name, projectName string, allo
 		return robotResponse{}, err
 	}
 	return created, nil
+}
+
+func (c *Client) MirrorImage(
+	ctx context.Context,
+	pkg core.Package,
+	resourceName, sourceImage, sourceUsername, sourcePassword string,
+) (string, error) {
+	if sourceImage == "" {
+		return "", fmt.Errorf("cannot mirror OCI image: source image reference is required")
+	}
+	targetRepository, err := c.ImageReference(pkg, resourceName)
+	if err != nil {
+		return "", err
+	}
+	pushUsername, pushPassword, err := c.Credentials(pkg, false)
+	if err != nil {
+		return "", err
+	}
+	sourceRef, err := name.ParseReference(sourceImage)
+	if err != nil {
+		return "", fmt.Errorf("cannot parse source image reference: %w", err)
+	}
+	sourceImageObject, err := remote.Image(
+		sourceRef,
+		remote.WithContext(ctx),
+		remote.WithTransport(c.transport),
+		remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: sourceUsername,
+			Password: sourcePassword,
+		})),
+	)
+	if err != nil {
+		return "", fmt.Errorf("cannot fetch source OCI image: %w", err)
+	}
+	digest, err := sourceImageObject.Digest()
+	if err != nil {
+		return "", fmt.Errorf("cannot calculate mirrored OCI image digest: %w", err)
+	}
+	targetRef, err := name.ParseReference(targetRepository + ":" + digestTag(digest.String()))
+	if err != nil {
+		return "", fmt.Errorf("cannot parse target image reference: %w", err)
+	}
+	if err := remote.Write(
+		targetRef,
+		sourceImageObject,
+		remote.WithContext(ctx),
+		remote.WithTransport(c.registryRT),
+		remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: pushUsername,
+			Password: pushPassword,
+		})),
+	); err != nil {
+		return "", fmt.Errorf("cannot push mirrored OCI image: %w", err)
+	}
+	return digest.String(), nil
+}
+
+func (c *Client) DeleteImage(ctx context.Context, pkg core.Package, resourceName, digest string) error {
+	if digest == "" {
+		return nil
+	}
+	pushUsername, pushPassword, err := c.Credentials(pkg, false)
+	if err != nil {
+		return err
+	}
+	imageReference, err := c.ImageReference(pkg, resourceName)
+	if err != nil {
+		return err
+	}
+	ref, err := name.ParseReference(imageReference + "@" + digest)
+	if err != nil {
+		return fmt.Errorf("cannot parse OCI image digest reference: %w", err)
+	}
+	if err := remote.Delete(
+		ref,
+		remote.WithContext(ctx),
+		remote.WithTransport(c.registryRT),
+		remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: pushUsername,
+			Password: pushPassword,
+		})),
+	); err != nil {
+		return fmt.Errorf("cannot delete mirrored OCI image: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) DeletePackage(ctx context.Context, pkg core.Package) error {
+	if pkg.HarborProject == "" {
+		return nil
+	}
+	if err := c.doJSON(ctx, http.MethodDelete, path.Join("/projects", pkg.HarborProject), nil, nil); err != nil {
+		var apiErr *harborAPIError
+		if errorAs(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 type harborAPIError struct {
@@ -302,6 +432,15 @@ func (c *Client) robotName(prefix, packageID string) string {
 	return sanitizeName(prefix + "-" + packageID)
 }
 
+func digestTag(digest string) string {
+	trimmed := strings.TrimPrefix(digest, "sha256:")
+	trimmed = strings.TrimPrefix(trimmed, "sha512:")
+	if trimmed == "" {
+		return "mirrored"
+	}
+	return "digest-" + trimmed
+}
+
 func sanitizeName(value string) string {
 	cleaned := strings.ToLower(strings.TrimSpace(value))
 	cleaned = invalidNamePattern.ReplaceAllString(cleaned, "-")
@@ -360,4 +499,69 @@ func (c *Client) decrypt(encrypted string) (string, error) {
 
 func errorAs(err error, target **harborAPIError) bool {
 	return errors.As(err, target)
+}
+
+type rewriteAuthenticateRealmTransport struct {
+	inner     http.RoundTripper
+	realmBase *url.URL
+}
+
+func (t *rewriteAuthenticateRealmTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.inner.RoundTrip(req)
+	if err != nil || resp == nil || t.realmBase == nil {
+		return resp, err
+	}
+	header := resp.Header.Get("Www-Authenticate")
+	rewritten, changed := rewriteAuthenticateRealm(header, t.realmBase)
+	if changed {
+		resp.Header.Set("Www-Authenticate", rewritten)
+	}
+	return resp, nil
+}
+
+func rewriteAuthenticateRealm(header string, realmBase *url.URL) (string, bool) {
+	if realmBase == nil || strings.TrimSpace(header) == "" {
+		return header, false
+	}
+	matches := authRealmPattern.FindStringSubmatch(header)
+	if len(matches) != 2 {
+		return header, false
+	}
+	realmURL, err := url.Parse(matches[1])
+	if err != nil {
+		return header, false
+	}
+	host := realmURL.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil || (!ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsPrivate()) {
+		return header, false
+	}
+	realmURL.Scheme = realmBase.Scheme
+	realmURL.Host = realmBase.Host
+	return strings.Replace(header, matches[1], realmURL.String(), 1), true
+}
+
+func registryBaseURL(apiURL, harborURL string) string {
+	for _, raw := range []string{apiURL, harborURL} {
+		if base := trimURLToSchemeAndHost(raw); base != "" {
+			return base
+		}
+	}
+	return ""
+}
+
+func registryHost(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(raw), "https://"), "http://")
+}
+
+func trimURLToSchemeAndHost(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }

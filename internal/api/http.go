@@ -61,6 +61,10 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Get("/v1/tokens/whoami", api.handleTokenWhoAmI)
 	router.Post("/v1/tokens/dashboard/exchange", api.handleDashboardExchange)
 	router.Get("/v1/whoami", api.handleWhoAmI)
+	router.Get("/v1/admin/charmhub-sync", api.handleListCharmhubSyncRules)
+	router.Post("/v1/admin/charmhub-sync", api.handleAddCharmhubSyncRule)
+	router.Delete("/v1/admin/charmhub-sync/{name}/{track}", api.handleDeleteCharmhubSyncRule)
+	router.Post("/v1/admin/charmhub-sync/{name}/run", api.handleRunCharmhubSync)
 
 	router.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
 	router.Get("/v1/charm", api.handleListPackages)

@@ -15,13 +15,20 @@ type Querier interface {
 	// interpolated SQL fragment. This is the safe replacement for the old
 	// fmt.Sprintf(roleCondition) pattern.
 	CanViewPackage(ctx context.Context, arg CanViewPackageParams) (bool, error)
+	CreateCharmhubSyncRule(ctx context.Context, arg CreateCharmhubSyncRuleParams) error
 	CreatePackage(ctx context.Context, arg CreatePackageParams) error
 	CreateResourceRevision(ctx context.Context, arg CreateResourceRevisionParams) error
 	CreateRevision(ctx context.Context, arg CreateRevisionParams) error
 	CreateStoreToken(ctx context.Context, arg CreateStoreTokenParams) error
 	CreateTrack(ctx context.Context, arg CreateTrackParams) (int64, error)
 	CreateUpload(ctx context.Context, arg CreateUploadParams) error
+	DeleteCharmhubSyncRule(ctx context.Context, arg DeleteCharmhubSyncRuleParams) (int64, error)
 	DeletePackage(ctx context.Context, id string) (int64, error)
+	DeleteRelease(ctx context.Context, arg DeleteReleaseParams) (int64, error)
+	DeleteResourceDefinition(ctx context.Context, id string) (int64, error)
+	DeleteResourceRevision(ctx context.Context, arg DeleteResourceRevisionParams) (int64, error)
+	DeleteRevision(ctx context.Context, arg DeleteRevisionParams) (int64, error)
+	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)
 	FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error)
 	GetAccountByID(ctx context.Context, id string) (Account, error)
@@ -35,6 +42,8 @@ type Querier interface {
 	GetUpload(ctx context.Context, id string) (Upload, error)
 	ListActiveStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
 	ListAllStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
+	ListCharmhubSyncRules(ctx context.Context) ([]CharmhubSyncRule, error)
+	ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]CharmhubSyncRule, error)
 	ListPackagesForAccount(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountRow, error)
 	ListPackagesForAccountWithCollaborations(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountWithCollaborationsRow, error)
 	ListReleases(ctx context.Context, packageID string) ([]Release, error)
@@ -50,6 +59,7 @@ type Querier interface {
 	ResolveRelease(ctx context.Context, arg ResolveReleaseParams) (Release, error)
 	RevokeStoreToken(ctx context.Context, arg RevokeStoreTokenParams) (int64, error)
 	SearchPackages(ctx context.Context, dollar_1 string) ([]SearchPackagesRow, error)
+	UpdateCharmhubSyncRule(ctx context.Context, arg UpdateCharmhubSyncRuleParams) (int64, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (int64, error)
 	UpdateResourceRevision(ctx context.Context, arg UpdateResourceRevisionParams) (int64, error)
 	UpsertResourceDefinition(ctx context.Context, arg UpsertResourceDefinitionParams) (ResourceDefinition, error)

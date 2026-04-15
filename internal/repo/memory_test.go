@@ -82,18 +82,45 @@ func TestMemoryEnsureAccountUpdatesExistingFields(t *testing.T) {
 
 }
 
-func TestMemoryGetAccountByIDNotFound(t *testing.T) {
+func TestMemoryMethodsReturnNotFoundForMissingKeys(t *testing.T) {
 	t.Parallel()
 
-	// Arrange
+	ctx := context.Background()
 	m := NewMemory()
 
-	// Act
-	_, err := m.GetAccountByID(context.Background(), "nope")
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{"GetAccountByID", func() error { _, err := m.GetAccountByID(ctx, "x"); return err }},
+		{"FindStoreTokenByHash", func() error { _, _, err := m.FindStoreTokenByHash(ctx, "x"); return err }},
+		{"UpdatePackage", func() error { return m.UpdatePackage(ctx, core.Package{Name: "x"}) }},
+		{"DeletePackage", func() error { return m.DeletePackage(ctx, "x") }},
+		{"GetPackageByName", func() error { _, err := m.GetPackageByName(ctx, "x"); return err }},
+		{"GetPackageByID", func() error { _, err := m.GetPackageByID(ctx, "x"); return err }},
+		{"CanViewPackage", func() error { _, err := m.CanViewPackage(ctx, "x", "acc"); return err }},
+		{"CanManagePackage", func() error { _, err := m.CanManagePackage(ctx, "x", "acc"); return err }},
+		{"CreateTracks", func() error { _, err := m.CreateTracks(ctx, "x", []core.Track{{Name: "latest"}}); return err }},
+		{"ListTracks", func() error { _, err := m.ListTracks(ctx, "x"); return err }},
+		{"ApproveUpload", func() error { return m.ApproveUpload(ctx, "x", nil, nil) }},
+		{"GetUpload", func() error { _, err := m.GetUpload(ctx, "x"); return err }},
+		{"GetRevisionByNumber", func() error { _, err := m.GetRevisionByNumber(ctx, "x", 1); return err }},
+		{"GetLatestRevision", func() error { _, err := m.GetLatestRevision(ctx, "x"); return err }},
+		{"GetResourceDefinition", func() error { _, err := m.GetResourceDefinition(ctx, "x", "r"); return err }},
+		{"UpdateResourceRevision", func() error {
+			return m.UpdateResourceRevision(ctx, core.ResourceRevision{ResourceID: "x", Revision: 1})
+		}},
+		{"GetResourceRevision", func() error { _, err := m.GetResourceRevision(ctx, "x", 1); return err }},
+		{"ResolveRelease", func() error { _, err := m.ResolveRelease(ctx, "x", "latest/stable"); return err }},
+		{"ResolveDefaultRelease", func() error { _, err := m.ResolveDefaultRelease(ctx, "x"); return err }},
+	}
 
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.ErrorIs(t, tt.fn(), ErrNotFound)
+		})
+	}
 }
 
 // ---- Store tokens ----------------------------------------------------------
@@ -121,20 +148,6 @@ func TestMemoryStoreTokenRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sess-1", gotToken.SessionID)
 	assert.Equal(t, acc.ID, gotAcc.ID)
-
-}
-
-func TestMemoryFindStoreTokenByHashNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, _, err := m.FindStoreTokenByHash(context.Background(), "missing")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
 
 }
 
@@ -257,14 +270,13 @@ func TestMemoryRevokeStoreTokenNotFound(t *testing.T) {
 func TestMemoryCreatePackageAndGetByNameAndID(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
-
-	// Assert
 	pkg := core.Package{ID: "p1", Name: "mycharm", OwnerAccountID: acc.ID}
 	require.NoError(t, m.CreatePackage(ctx, pkg))
 
+	// Act + Assert
 	byName, err := m.GetPackageByName(ctx, "mycharm")
 	require.NoError(t, err)
 	assert.Equal(t, "p1", byName.ID)
@@ -278,14 +290,15 @@ func TestMemoryCreatePackageAndGetByNameAndID(t *testing.T) {
 func TestMemoryCreatePackageConflict(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
-
-	// Assert
 	require.NoError(t, m.CreatePackage(ctx, core.Package{ID: "p1", Name: "mycharm", OwnerAccountID: acc.ID}))
+
+	// Act
 	err := m.CreatePackage(ctx, core.Package{ID: "p2", Name: "mycharm", OwnerAccountID: acc.ID})
 
+	// Assert
 	assert.ErrorIs(t, err, ErrConflict)
 
 }
@@ -293,17 +306,17 @@ func TestMemoryCreatePackageConflict(t *testing.T) {
 func TestMemoryUpdatePackage(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
-
-	// Assert
 	require.NoError(t, m.CreatePackage(ctx, core.Package{ID: "p1", Name: "mycharm", OwnerAccountID: acc.ID}))
 
+	// Act
 	desc := "updated description"
 	err := m.UpdatePackage(ctx, core.Package{ID: "p1", Name: "mycharm", OwnerAccountID: acc.ID, Description: &desc})
 	require.NoError(t, err)
 
+	// Assert
 	got, err := m.GetPackageByName(ctx, "mycharm")
 	require.NoError(t, err)
 	require.NotNil(t, got.Description)
@@ -311,71 +324,19 @@ func TestMemoryUpdatePackage(t *testing.T) {
 
 }
 
-func TestMemoryUpdatePackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	err := m.UpdatePackage(context.Background(), core.Package{Name: "nonexistent"})
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 func TestMemoryDeletePackage(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
-
-	// Assert
 	require.NoError(t, m.CreatePackage(ctx, core.Package{ID: "p1", Name: "mycharm", OwnerAccountID: acc.ID}))
+
+	// Act
 	require.NoError(t, m.DeletePackage(ctx, "p1"))
 
+	// Assert
 	_, err := m.GetPackageByName(ctx, "mycharm")
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
-func TestMemoryDeletePackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Act
-	m := NewMemory()
-
-	// Assert
-	assert.ErrorIs(t, m.DeletePackage(context.Background(), "nope"), ErrNotFound)
-
-}
-
-func TestMemoryGetPackageByNameNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetPackageByName(context.Background(), "missing")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
-func TestMemoryGetPackageByIDNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetPackageByID(context.Background(), "missing")
-
-	// Assert
 	assert.ErrorIs(t, err, ErrNotFound)
 
 }
@@ -493,20 +454,6 @@ func TestMemoryCanViewPackagePrivateNonOwner(t *testing.T) {
 
 }
 
-func TestMemoryCanViewPackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.CanViewPackage(context.Background(), "missing", "acc")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 func TestMemoryCanManagePackageOwnerVsStranger(t *testing.T) {
 	t.Parallel()
 
@@ -528,20 +475,6 @@ func TestMemoryCanManagePackageOwnerVsStranger(t *testing.T) {
 
 }
 
-func TestMemoryCanManagePackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.CanManagePackage(context.Background(), "missing", "acc")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 // ---- Tracks ----------------------------------------------------------------
 
 func TestMemoryCreateTracksDeduplicates(t *testing.T) {
@@ -550,11 +483,9 @@ func TestMemoryCreateTracksDeduplicates(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
-
-	// Act
 	_ = m.CreatePackage(ctx, core.Package{ID: "p1", Name: "charm", OwnerAccountID: acc.ID})
 
-	// Assert
+	// Act + Assert
 	n, err := m.CreateTracks(ctx, "p1", []core.Track{{Name: "latest"}, {Name: "1.0"}})
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
@@ -570,49 +501,21 @@ func TestMemoryCreateTracksDeduplicates(t *testing.T) {
 
 }
 
-func TestMemoryCreateTracksPackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.CreateTracks(context.Background(), "nonexistent", []core.Track{{Name: "latest"}})
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
-func TestMemoryListTracksPackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.ListTracks(context.Background(), "nonexistent")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 // ---- Uploads ---------------------------------------------------------------
 
 func TestMemoryUploadApproved(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m := NewMemory()
-
-	// Assert
 	require.NoError(t, m.CreateUpload(ctx, core.Upload{ID: "up-1", Status: "pending"}))
 
+	// Act
 	rev := 5
 	require.NoError(t, m.ApproveUpload(ctx, "up-1", &rev, nil))
 
+	// Assert
 	got, err := m.GetUpload(ctx, "up-1")
 	require.NoError(t, err)
 	assert.Equal(t, "approved", got.Status)
@@ -624,45 +527,20 @@ func TestMemoryUploadApproved(t *testing.T) {
 func TestMemoryUploadRejected(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m := NewMemory()
-
-	// Assert
 	require.NoError(t, m.CreateUpload(ctx, core.Upload{ID: "up-1"}))
 
+	// Act
 	errs := []core.APIError{{Code: "bad-file", Message: "corrupt archive"}}
 	require.NoError(t, m.ApproveUpload(ctx, "up-1", nil, errs))
 
+	// Assert
 	got, err := m.GetUpload(ctx, "up-1")
 	require.NoError(t, err)
 	assert.Equal(t, "rejected", got.Status)
 	assert.Equal(t, errs, got.Errors)
-
-}
-
-func TestMemoryApproveUploadNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Act
-	m := NewMemory()
-
-	// Assert
-	assert.ErrorIs(t, m.ApproveUpload(context.Background(), "nope", nil, nil), ErrNotFound)
-
-}
-
-func TestMemoryGetUploadNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetUpload(context.Background(), "nope")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
 
 }
 
@@ -722,45 +600,17 @@ func TestMemoryListRevisionsByNumberNotFound(t *testing.T) {
 
 }
 
-func TestMemoryGetRevisionByNumberNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetRevisionByNumber(context.Background(), "pkg-1", 1)
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
-func TestMemoryGetLatestRevisionNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetLatestRevision(context.Background(), "pkg-1")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 // ---- Resource definitions --------------------------------------------------
 
 func TestMemoryResourceDefinitionUpsert(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m := NewMemory()
-
-	// Assert
 	res := core.ResourceDefinition{PackageID: "p1", Name: "config", Type: "file"}
+
+	// Act
 	got, err := m.UpsertResourceDefinition(ctx, res)
 	require.NoError(t, err)
 	assert.Equal(t, "config", got.Name)
@@ -777,33 +627,18 @@ func TestMemoryResourceDefinitionUpsert(t *testing.T) {
 
 }
 
-func TestMemoryGetResourceDefinitionNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetResourceDefinition(context.Background(), "p1", "missing")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 // ---- Resource revisions ----------------------------------------------------
 
 func TestMemoryResourceRevisionRoundtrip(t *testing.T) {
 	t.Parallel()
 
-	// Act
+	// Arrange
 	ctx := context.Background()
 	m := NewMemory()
-
-	// Assert
 	rev := core.ResourceRevision{ResourceID: "res-1", Revision: 1, CreatedAt: time.Now().UTC()}
 	require.NoError(t, m.CreateResourceRevision(ctx, rev))
 
+	// Act + Assert
 	listed, err := m.ListResourceRevisions(ctx, "res-1")
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
@@ -818,34 +653,6 @@ func TestMemoryResourceRevisionRoundtrip(t *testing.T) {
 	updated, err := m.GetResourceRevision(ctx, "res-1", 1)
 	require.NoError(t, err)
 	assert.Equal(t, "updated-name", updated.Name)
-
-}
-
-func TestMemoryUpdateResourceRevisionNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	err := m.UpdateResourceRevision(context.Background(), core.ResourceRevision{ResourceID: "res-1", Revision: 1})
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
-func TestMemoryGetResourceRevisionNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.GetResourceRevision(context.Background(), "res-1", 1)
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
 
 }
 
@@ -891,20 +698,6 @@ func TestMemoryReleaseReplaceUpdatesChannel(t *testing.T) {
 
 }
 
-func TestMemoryResolveReleaseNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.ResolveRelease(context.Background(), "p1", "latest/stable")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}
-
 func TestMemoryResolveDefaultReleasePreferStable(t *testing.T) {
 	t.Parallel()
 
@@ -942,16 +735,3 @@ func TestMemoryResolveDefaultReleaseFallback(t *testing.T) {
 
 }
 
-func TestMemoryResolveDefaultReleaseNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	m := NewMemory()
-
-	// Act
-	_, err := m.ResolveDefaultRelease(context.Background(), "p1")
-
-	// Assert
-	assert.ErrorIs(t, err, ErrNotFound)
-
-}

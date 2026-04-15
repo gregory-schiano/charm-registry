@@ -11,6 +11,11 @@ ON CONFLICT (package_id, channel) DO UPDATE SET
     expiration_date = EXCLUDED.expiration_date,
     progressive     = EXCLUDED.progressive;
 
+-- name: DeleteRelease :execrows
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel = $2;
+
 -- name: ListReleases :many
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gschiano/charm-registry/internal/blob"
+	charmhubclient "github.com/gschiano/charm-registry/internal/charmhub"
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -111,15 +112,28 @@ type RefreshAction struct {
 
 // Service is the application service layer.
 type Service struct {
-	cfg   config.Config
-	repo  repo.Repository
-	blobs blob.Store
-	oci   OCIRegistry
+	cfg         config.Config
+	repo        repo.Repository
+	blobs       blob.Store
+	oci         OCIRegistry
+	charmhub    charmhubClient
+	syncManager *CharmhubSyncManager
+}
+
+type charmhubClient interface {
+	GetChannel(ctx context.Context, name, channel string) (charmhubclient.PackageChannel, error)
+	Download(ctx context.Context, artifactURL string) ([]byte, error)
 }
 
 // New returns a [Service] backed by the provided repository and blob store.
 func New(cfg config.Config, repository repo.Repository, blobs blob.Store, oci OCIRegistry) *Service {
-	return &Service{cfg: cfg, repo: repository, blobs: blobs, oci: oci}
+	return &Service{
+		cfg:      cfg,
+		repo:     repository,
+		blobs:    blobs,
+		oci:      oci,
+		charmhub: charmhubclient.New(cfg.CharmhubURL),
+	}
 }
 
 func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.Repository) error) error {

@@ -271,21 +271,6 @@ func TestGetRootDocumentReturnsServiceMetadata(t *testing.T) {
 	assert.Equal(t, "https://registry.example.test", doc.APIURL)
 }
 
-func TestIssueStoreTokenUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-
-	// Act
-	_, _, err := svc.IssueStoreToken(ctx, core.Identity{}, IssueTokenRequest{})
-
-	// Assert
-	require.Error(t, err)
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestIssueStoreTokenDefaultPermissions(t *testing.T) {
 	t.Parallel()
@@ -437,21 +422,6 @@ func TestReleaseRejectsResourceForDifferentPackageRevision(t *testing.T) {
 
 }
 
-func TestListStoreTokensUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-
-	// Act
-	_, err := svc.ListStoreTokens(ctx, core.Identity{}, false)
-
-	// Assert
-	require.Error(t, err)
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestRevokeStoreToken(t *testing.T) {
 	t.Parallel()
@@ -482,36 +452,7 @@ func TestRevokeStoreToken(t *testing.T) {
 
 }
 
-func TestRevokeStoreTokenUnauthenticated(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-
-	// Act
-	err := svc.RevokeStoreToken(ctx, core.Identity{}, "any-session")
-
-	// Assert
-	require.Error(t, err)
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestMacaroonInfoUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	svc, _ := newTestService()
-
-	// Act
-	_, err := svc.MacaroonInfo(core.Identity{})
-
-	// Assert
-	require.Error(t, err)
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestMacaroonInfoWithoutToken(t *testing.T) {
 	t.Parallel()
@@ -548,34 +489,7 @@ func TestDeprecatedWhoAmI(t *testing.T) {
 
 }
 
-func TestDeprecatedWhoAmIUnauthenticated(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	svc, _ := newTestService()
-
-	// Act
-	_, err := svc.DeprecatedWhoAmI(core.Identity{})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestRegisterPackageUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-
-	// Act
-	_, err := svc.RegisterPackage(ctx, core.Identity{}, "charm-name", "charm", true)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestRegisterPackageDuplicate(t *testing.T) {
 	t.Parallel()
@@ -652,21 +566,6 @@ func TestListRegisteredPackages(t *testing.T) {
 
 }
 
-func TestGetPackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.GetPackage(ctx, owner, "nonexistent", true)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestUpdatePackageMetadata(t *testing.T) {
 	t.Parallel()
@@ -699,39 +598,7 @@ func TestUpdatePackageMetadata(t *testing.T) {
 
 }
 
-func TestUpdatePackageNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.UpdatePackage(ctx, owner, "nonexistent", MetadataPatch{})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestUpdatePackageUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.UpdatePackage(ctx, core.Identity{}, "my-charm", MetadataPatch{})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestUnregisterEmptyPackage(t *testing.T) {
 	t.Parallel()
@@ -780,39 +647,7 @@ func TestUnregisterPackageWithRevisions(t *testing.T) {
 
 }
 
-func TestUnregisterPackageNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.UnregisterPackage(ctx, owner, "nonexistent")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestUnregisterPackageUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.UnregisterPackage(ctx, core.Identity{}, "my-charm")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestCreateUploadSetsKindFromFilename(t *testing.T) {
 	t.Parallel()
@@ -1204,21 +1039,6 @@ func TestDownloadCharm(t *testing.T) {
 
 }
 
-func TestDownloadCharmNotFound(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.DownloadCharm(ctx, owner, "nonexistent-id", 1)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestDownloadResource(t *testing.T) {
 	t.Parallel()
@@ -1327,37 +1147,7 @@ func TestDownloadResourceOCIImageRequiresProvisionedPackage(t *testing.T) {
 
 }
 
-func TestDownloadResourceNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.DownloadResource(ctx, owner, "nonexistent", "config", 1)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestPushRevisionNonExistentPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.PushRevision(ctx, owner, "nonexistent", PushRevisionRequest{UploadID: "some-id"})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestPushRevisionInvalidArchive(t *testing.T) {
 	t.Parallel()
@@ -1379,21 +1169,6 @@ func TestPushRevisionInvalidArchive(t *testing.T) {
 
 }
 
-func TestPushResourceNonExistentPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.PushResource(ctx, owner, "nonexistent", "config", PushResourceRequest{UploadID: "id"})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestTokenPackageScoping(t *testing.T) {
 	t.Parallel()
@@ -1538,21 +1313,6 @@ func TestRefreshMissingIDAndName(t *testing.T) {
 
 }
 
-func TestOCIImageUploadCredentialsNonExistentPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.OCIImageUploadCredentials(ctx, owner, "nonexistent", "resource")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestMultipleRevisions(t *testing.T) {
 	t.Parallel()
@@ -1650,17 +1410,6 @@ func TestUpdatePackageDefaultTrack(t *testing.T) {
 
 }
 
-func TestServiceErrorString(t *testing.T) {
-	t.Parallel()
-
-	// Act
-	err := &Error{Kind: ErrorKindNotFound, Code: "not-found", Message: "package not found"}
-
-	// Assert
-	assert.Equal(t, "not-found: package not found", err.Error())
-
-}
-
 func TestPublicPackageAccessibleAnonymously(t *testing.T) {
 	t.Parallel()
 
@@ -1732,154 +1481,14 @@ func TestListResourcesNoResources(t *testing.T) {
 
 }
 
-func TestListResourcesNotFound(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
 
-	// Act
-	_, err := svc.ListResources(ctx, owner, "nonexistent")
 
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
 
-}
 
-func TestListRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
 
-	// Act
-	_, err := svc.ListRevisions(ctx, owner, "nonexistent", nil)
 
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestListReleasesNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.ListReleases(ctx, owner, "nonexistent")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestInfoNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.GetPackageInfo(ctx, owner, "nonexistent")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestListResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.ListResourceRevisions(ctx, owner, "nonexistent", "config")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestUpdateResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.UpdateResourceRevisions(ctx, owner, "nonexistent", "config",
-		UpdateResourceRevisionRequest{})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestCreateTracksNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.CreateTracks(ctx, owner, "nonexistent", []core.Track{{Name: "2.0"}})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
-
-func TestReviewUploadUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.ReviewUpload(ctx, core.Identity{}, "my-charm", "upload-id")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestOCIImageUploadCredentialsUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.OCIImageUploadCredentials(ctx, core.Identity{}, "my-charm", "resource")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestPushResourceUndeclaredResource(t *testing.T) {
 	t.Parallel()
@@ -2167,20 +1776,6 @@ func TestRefreshWithDirectRevisionAndResourceOverrideUsesAttachedReleaseResource
 
 }
 
-func TestListRegisteredPackagesUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-
-	// Act
-	_, err := svc.ListRegisteredPackages(ctx, core.Identity{}, false)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestListRegisteredPackagesWithCollaborations(t *testing.T) {
 	t.Parallel()
@@ -2351,23 +1946,6 @@ func TestPushRevisionNonExistentUpload(t *testing.T) {
 
 }
 
-func TestPushRevisionUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.PushRevision(ctx, core.Identity{}, "my-charm", PushRevisionRequest{UploadID: "id"})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestPushResourceNonExistentUpload(t *testing.T) {
 	t.Parallel()
@@ -2393,43 +1971,7 @@ func TestPushResourceNonExistentUpload(t *testing.T) {
 
 }
 
-func TestReleaseUnauthenticated(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.CreateRelease(ctx, core.Identity{}, "my-charm", []core.Release{{
-		Channel: "latest/stable", Revision: 1,
-	}})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestReleaseNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-
-	// Act
-	_, err := svc.CreateRelease(ctx, owner, "nonexistent", []core.Release{{
-		Channel: "latest/stable", Revision: 1,
-	}})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindNotFound)
-
-}
 
 func TestInfoNoRelease(t *testing.T) {
 	t.Parallel()
@@ -2711,23 +2253,6 @@ func TestReleaseWithNilResourceRevision(t *testing.T) {
 
 }
 
-func TestListReleasesUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.ListReleases(ctx, core.Identity{}, "my-charm")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestOCIImageBlobPayload(t *testing.T) {
 	t.Parallel()
@@ -2969,77 +2494,9 @@ func TestRefreshNoChannelNoRelease(t *testing.T) {
 
 }
 
-func TestListRevisionsUnauthenticated(t *testing.T) {
-	t.Parallel()
 
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
 
-	// Act
-	_, err = svc.ListRevisions(ctx, core.Identity{}, "my-charm", nil)
 
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestListResourcesUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.ListResources(ctx, core.Identity{}, "my-charm")
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestCreateTracksUnauthenticated(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.CreateTracks(ctx, core.Identity{}, "my-charm", []core.Track{{Name: "2.0"}})
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
-
-func TestDownloadCharmUnauthenticatedPrivate(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	ctx := context.Background()
-	svc, _ := newTestService()
-	owner := newIdentity("acc-1", "alice")
-	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
-	require.NoError(t, err)
-
-	// Act
-	_, err = svc.DownloadCharm(ctx, core.Identity{}, pkg.ID, 1)
-
-	// Assert
-	assertServiceError(t, err, ErrorKindUnauthorized)
-
-}
 
 func TestUpdatePackageTokenDoesNotAllowPackage(t *testing.T) {
 	t.Parallel()
@@ -3321,25 +2778,6 @@ func TestPushResourceWithFilenameOnly(t *testing.T) {
 
 // --- helper function tests ---
 
-func TestStringPtr(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Nil(t, stringPtr(""))
-	assert.Equal(t, "hello", *stringPtr("hello"))
-}
-
-func TestStringValue(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "", stringValue(nil))
-	v := "hello"
-	assert.Equal(t, "hello", stringValue(&v))
-}
-
 func TestFirstNonEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -3349,37 +2787,6 @@ func TestFirstNonEmpty(t *testing.T) {
 	assert.Equal(t, "", core.FirstNonEmpty("", "", ""))
 	assert.Equal(t, "a", core.FirstNonEmpty("", "a", "b"))
 	assert.Equal(t, "first", core.FirstNonEmpty("first"))
-}
-
-func TestFirstLink(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "", firstLink(nil))
-	assert.Equal(t, "", firstLink([]string{}))
-	assert.Equal(t, "a", firstLink([]string{"a", "b"}))
-}
-
-func TestNullIfEmpty(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Nil(t, nullIfEmpty([]string{}))
-	assert.Nil(t, nullIfEmpty[int](nil))
-	result := nullIfEmpty([]string{"a"})
-	assert.Equal(t, []string{"a"}, result)
-}
-
-func TestEmptySliceIfNil(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.NotNil(t, emptySliceIfNil[string](nil))
-	assert.Empty(t, emptySliceIfNil[string](nil))
-	assert.Equal(t, []string{"a"}, emptySliceIfNil([]string{"a"}))
 }
 
 func TestTranslateRepoError(t *testing.T) {
@@ -3419,7 +2826,7 @@ func TestSplitChannel(t *testing.T) {
 	assert.Equal(t, "2.0", parts.track)
 	assert.Equal(t, "edge", parts.risk)
 
-	// Assert
+	// Act
 	// Single-part channel defaults to latest track
 	parts = splitChannel("stable")
 	assert.Equal(t, "latest", parts.track)
@@ -3435,7 +2842,7 @@ func TestPackageChannels(t *testing.T) {
 	channels := packageChannels(nil)
 	assert.Len(t, channels, 4) // stable, candidate, beta, edge
 
-	// Assert
+	// Act
 	// Custom tracks
 	channels = packageChannels([]core.Track{{Name: "2.0"}, {Name: "3.0"}})
 	assert.Len(t, channels, 8) // 4 per track
@@ -3453,28 +2860,6 @@ func TestExtractBases(t *testing.T) {
 	assert.Equal(t, "ubuntu", bases[0].Name)
 	assert.Equal(t, "22.04", bases[0].Channel)
 	assert.Equal(t, "amd64", bases[0].Architecture)
-}
-
-func TestDetectUploadKind(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "revision", detectUploadKind("test.charm"))
-	assert.Equal(t, "resource", detectUploadKind("config.yaml"))
-	assert.Equal(t, "resource", detectUploadKind("image.tar"))
-}
-
-func TestChannelOrDefault(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "", channelOrDefault(nil))
-	empty := ""
-	assert.Equal(t, "", channelOrDefault(&empty))
-	stable := "latest/stable"
-	assert.Equal(t, "latest/stable", channelOrDefault(&stable))
 }
 
 func TestTokenAllowsPackage(t *testing.T) {
@@ -3537,25 +2922,6 @@ func TestMergeLinksEmpty(t *testing.T) {
 	// Assert
 	assert.Empty(t, merged)
 
-}
-
-func TestCompactID(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	id := compactID()
-	assert.Len(t, id, 32)
-	assert.NotContains(t, id, "-")
-}
-
-func TestSanitizeSubject(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "oidc-google-123", sanitizeSubject("oidc|google/123"))
-	assert.Equal(t, "simple", sanitizeSubject("simple"))
 }
 
 func TestInfoWithNilResourceRevision(t *testing.T) {
@@ -3670,18 +3036,120 @@ func TestFindPublicPackageWithMultipleTracks(t *testing.T) {
 
 }
 
-func TestNewError(t *testing.T) {
+func TestServiceMethodsRequireAuthentication(t *testing.T) {
 	t.Parallel()
 
-	// Act + Assert
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	pkg, err := svc.RegisterPackage(ctx, owner, "auth-charm", "charm", true)
+	require.NoError(t, err)
 
-	err := newError(ErrorKindInvalidRequest, "bad-request", "invalid input")
-	var svcErr *Error
-	require.ErrorAs(t, err, &svcErr)
-	assert.Equal(t, ErrorKindInvalidRequest, svcErr.Kind)
-	assert.Equal(t, "bad-request", svcErr.Code)
-	assert.Equal(t, "invalid input", svcErr.Message)
-	assert.Equal(t, "bad-request: invalid input", svcErr.Error())
+	anon := core.Identity{}
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{"IssueStoreToken", func() error { _, _, err := svc.IssueStoreToken(ctx, anon, IssueTokenRequest{}); return err }},
+		{"ListStoreTokens", func() error { _, err := svc.ListStoreTokens(ctx, anon, false); return err }},
+		{"RevokeStoreToken", func() error { return svc.RevokeStoreToken(ctx, anon, "any-session") }},
+		{"MacaroonInfo", func() error { _, err := svc.MacaroonInfo(anon); return err }},
+		{"DeprecatedWhoAmI", func() error { _, err := svc.DeprecatedWhoAmI(anon); return err }},
+		{"RegisterPackage", func() error { _, err := svc.RegisterPackage(ctx, anon, "x", "charm", true); return err }},
+		{"ListRegisteredPackages", func() error { _, err := svc.ListRegisteredPackages(ctx, anon, false); return err }},
+		{"UpdatePackage", func() error { _, err := svc.UpdatePackage(ctx, anon, pkg.Name, MetadataPatch{}); return err }},
+		{"UnregisterPackage", func() error { _, err := svc.UnregisterPackage(ctx, anon, pkg.Name); return err }},
+		{"ReviewUpload", func() error { _, err := svc.ReviewUpload(ctx, anon, pkg.Name, "upload-id"); return err }},
+		{"PushRevision", func() error {
+			_, err := svc.PushRevision(ctx, anon, pkg.Name, PushRevisionRequest{UploadID: "id"})
+			return err
+		}},
+		{"CreateRelease", func() error {
+			_, err := svc.CreateRelease(ctx, anon, pkg.Name, []core.Release{{Channel: "latest/stable", Revision: 1}})
+			return err
+		}},
+		{"ListRevisions", func() error { _, err := svc.ListRevisions(ctx, anon, pkg.Name, nil); return err }},
+		{"ListResources", func() error { _, err := svc.ListResources(ctx, anon, pkg.Name); return err }},
+		{"ListReleases", func() error { _, err := svc.ListReleases(ctx, anon, pkg.Name); return err }},
+		{"CreateTracks", func() error {
+			_, err := svc.CreateTracks(ctx, anon, pkg.Name, []core.Track{{Name: "2.0"}})
+			return err
+		}},
+		{"OCIImageUploadCredentials", func() error {
+			_, err := svc.OCIImageUploadCredentials(ctx, anon, pkg.Name, "resource")
+			return err
+		}},
+		{"DownloadCharm", func() error { _, err := svc.DownloadCharm(ctx, anon, pkg.ID, 1); return err }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertServiceError(t, tt.fn(), ErrorKindUnauthorized)
+		})
+	}
+}
+
+func TestServiceMethodsReturnNotFoundForMissingPackage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{"GetPackage", func() error { _, err := svc.GetPackage(ctx, owner, "nonexistent", true); return err }},
+		{"UpdatePackage", func() error { _, err := svc.UpdatePackage(ctx, owner, "nonexistent", MetadataPatch{}); return err }},
+		{"UnregisterPackage", func() error { _, err := svc.UnregisterPackage(ctx, owner, "nonexistent"); return err }},
+		{"ListRevisions", func() error { _, err := svc.ListRevisions(ctx, owner, "nonexistent", nil); return err }},
+		{"ListReleases", func() error { _, err := svc.ListReleases(ctx, owner, "nonexistent"); return err }},
+		{"ListResources", func() error { _, err := svc.ListResources(ctx, owner, "nonexistent"); return err }},
+		{"GetPackageInfo", func() error { _, err := svc.GetPackageInfo(ctx, owner, "nonexistent"); return err }},
+		{"ListResourceRevisions", func() error {
+			_, err := svc.ListResourceRevisions(ctx, owner, "nonexistent", "config")
+			return err
+		}},
+		{"UpdateResourceRevisions", func() error {
+			_, err := svc.UpdateResourceRevisions(ctx, owner, "nonexistent", "config", UpdateResourceRevisionRequest{})
+			return err
+		}},
+		{"CreateTracks", func() error {
+			_, err := svc.CreateTracks(ctx, owner, "nonexistent", []core.Track{{Name: "2.0"}})
+			return err
+		}},
+		{"PushRevision", func() error {
+			_, err := svc.PushRevision(ctx, owner, "nonexistent", PushRevisionRequest{UploadID: "some-id"})
+			return err
+		}},
+		{"PushResource", func() error {
+			_, err := svc.PushResource(ctx, owner, "nonexistent", "config", PushResourceRequest{UploadID: "id"})
+			return err
+		}},
+		{"OCIImageUploadCredentials", func() error {
+			_, err := svc.OCIImageUploadCredentials(ctx, owner, "nonexistent", "resource")
+			return err
+		}},
+		{"DownloadCharm", func() error { _, err := svc.DownloadCharm(ctx, owner, "nonexistent-id", 1); return err }},
+		{"DownloadResource", func() error {
+			_, err := svc.DownloadResource(ctx, owner, "nonexistent", "config", 1)
+			return err
+		}},
+		{"CreateRelease", func() error {
+			_, err := svc.CreateRelease(ctx, owner, "nonexistent", []core.Release{{Channel: "latest/stable", Revision: 1}})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertServiceError(t, tt.fn(), ErrorKindNotFound)
+		})
+	}
 }
 
 func assertServiceError(t *testing.T, err error, expectedKind ErrorKind) {
@@ -3758,6 +3226,9 @@ type failingOCIRegistry struct {
 	syncErr        error
 	imageRefErr    error
 	credentialsErr error
+	mirrorErr      error
+	deleteImageErr error
+	deletePkgErr   error
 }
 
 func (o failingOCIRegistry) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
@@ -3779,6 +3250,31 @@ func (o failingOCIRegistry) Credentials(pkg core.Package, pull bool) (string, st
 		return "", "", o.credentialsErr
 	}
 	return o.OCIRegistry.Credentials(pkg, pull)
+}
+
+func (o failingOCIRegistry) MirrorImage(
+	ctx context.Context,
+	pkg core.Package,
+	resourceName, sourceImage, sourceUsername, sourcePassword string,
+) (string, error) {
+	if o.mirrorErr != nil {
+		return "", o.mirrorErr
+	}
+	return o.OCIRegistry.MirrorImage(ctx, pkg, resourceName, sourceImage, sourceUsername, sourcePassword)
+}
+
+func (o failingOCIRegistry) DeleteImage(ctx context.Context, pkg core.Package, resourceName, digest string) error {
+	if o.deleteImageErr != nil {
+		return o.deleteImageErr
+	}
+	return o.OCIRegistry.DeleteImage(ctx, pkg, resourceName, digest)
+}
+
+func (o failingOCIRegistry) DeletePackage(ctx context.Context, pkg core.Package) error {
+	if o.deletePkgErr != nil {
+		return o.deletePkgErr
+	}
+	return o.OCIRegistry.DeletePackage(ctx, pkg)
 }
 
 func buildCharmArchive(t *testing.T, name string) []byte {

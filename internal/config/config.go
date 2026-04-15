@@ -40,6 +40,8 @@ type Config struct {
 	HarborSecretKey         string
 	HarborCAFile            string
 	HarborInsecureTLS       bool
+	CharmhubURL             string
+	CharmhubSyncInterval    time.Duration
 	ServerReadHeaderTimeout time.Duration
 	ServerReadTimeout       time.Duration
 	ServerWriteTimeout      time.Duration
@@ -47,6 +49,7 @@ type Config struct {
 	ServerShutdownTimeout   time.Duration
 	ServerMaxHeaderBytes    int
 	MaxJSONBodyBytes        int64
+	MaxArchiveFileBytes     int64
 	MaxUploadBytes          int64
 }
 
@@ -55,6 +58,7 @@ type parsedConfig struct {
 	s3DisableTLS            bool
 	enableInsecureDevAuth   bool
 	harborInsecureTLS       bool
+	charmhubSyncInterval    time.Duration
 	serverReadHeaderTimeout time.Duration
 	serverReadTimeout       time.Duration
 	serverWriteTimeout      time.Duration
@@ -62,6 +66,7 @@ type parsedConfig struct {
 	serverShutdownTimeout   time.Duration
 	serverMaxHeaderBytes    int
 	maxJSONBodyBytes        int64
+	maxArchiveFileBytes     int64
 	maxUploadBytes          int64
 }
 
@@ -113,6 +118,8 @@ func Load() (Config, error) {
 		HarborSecretKey:         os.Getenv("CHARM_REGISTRY_HARBOR_SECRET_KEY"),
 		HarborCAFile:            os.Getenv("CHARM_REGISTRY_HARBOR_CA_FILE"),
 		HarborInsecureTLS:       parsed.harborInsecureTLS,
+		CharmhubURL:             strings.TrimRight(env("CHARM_REGISTRY_CHARMHUB_URL", "https://api.charmhub.io"), "/"),
+		CharmhubSyncInterval:    parsed.charmhubSyncInterval,
 		ServerReadHeaderTimeout: parsed.serverReadHeaderTimeout,
 		ServerReadTimeout:       parsed.serverReadTimeout,
 		ServerWriteTimeout:      parsed.serverWriteTimeout,
@@ -120,6 +127,7 @@ func Load() (Config, error) {
 		ServerShutdownTimeout:   parsed.serverShutdownTimeout,
 		ServerMaxHeaderBytes:    parsed.serverMaxHeaderBytes,
 		MaxJSONBodyBytes:        parsed.maxJSONBodyBytes,
+		MaxArchiveFileBytes:     parsed.maxArchiveFileBytes,
 		MaxUploadBytes:          parsed.maxUploadBytes,
 	}
 
@@ -140,6 +148,10 @@ func loadParsedConfig() (parsedConfig, error) {
 		return parsedConfig{}, err
 	}
 	harborInsecureTLS, err := envBool("CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY", false)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	charmhubSyncInterval, err := envDuration("CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL", 15*time.Minute)
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -171,6 +183,10 @@ func loadParsedConfig() (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
+	maxArchiveFileBytes, err := envInt64("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", 10<<20)
+	if err != nil {
+		return parsedConfig{}, err
+	}
 	maxUploadBytes, err := envInt64("CHARM_REGISTRY_MAX_UPLOAD_BYTES", 64<<20)
 	if err != nil {
 		return parsedConfig{}, err
@@ -181,6 +197,7 @@ func loadParsedConfig() (parsedConfig, error) {
 		s3DisableTLS:            s3DisableTLS,
 		enableInsecureDevAuth:   enableInsecureDevAuth,
 		harborInsecureTLS:       harborInsecureTLS,
+		charmhubSyncInterval:    charmhubSyncInterval,
 		serverReadHeaderTimeout: serverReadHeaderTimeout,
 		serverReadTimeout:       serverReadTimeout,
 		serverWriteTimeout:      serverWriteTimeout,
@@ -188,6 +205,7 @@ func loadParsedConfig() (parsedConfig, error) {
 		serverShutdownTimeout:   serverShutdownTimeout,
 		serverMaxHeaderBytes:    serverMaxHeaderBytes,
 		maxJSONBodyBytes:        maxJSONBodyBytes,
+		maxArchiveFileBytes:     maxArchiveFileBytes,
 		maxUploadBytes:          maxUploadBytes,
 	}, nil
 }
@@ -219,6 +237,9 @@ func validateConfig(cfg Config) (Config, error) {
 	}
 	if cfg.HarborSecretKey == "" {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_HARBOR_SECRET_KEY is required")
+	}
+	if cfg.MaxArchiveFileBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
 	}
 
 	return cfg, nil

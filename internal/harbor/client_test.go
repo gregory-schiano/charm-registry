@@ -8,9 +8,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/registry"
+	v1empty "github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -39,6 +44,11 @@ func TestSyncPackageCreatesProjectAndRobots(t *testing.T) {
 			robotCreates++
 			var payload map[string]any
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			permissions := payload["permissions"].([]any)
+			access := permissions[0].(map[string]any)["access"].([]any)
+			if robotCreates == 1 {
+				require.Len(t, access, 3)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 				"id":     robotCreates,
@@ -82,6 +92,99 @@ func TestSyncPackageCreatesProjectAndRobots(t *testing.T) {
 	imageRef, err := client.ImageReference(pkg, "workload-image")
 	require.NoError(t, err)
 	assert.Equal(t, "oci.example.test/charm-my-charm/workload-image", imageRef)
+}
+
+func TestMirrorImageAndDeleteImage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	registryServer := httptest.NewTLSServer(registry.New())
+	defer registryServer.Close()
+
+	registryURL := registryServer.URL
+	registryHost := strings.TrimPrefix(registryURL, "https://")
+	client, err := New(config.Config{
+		PublicRegistryURL:     registryURL,
+		HarborURL:             registryURL,
+		HarborAPIURL:          registryURL,
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "harbor-secret",
+		HarborInsecureTLS:     true,
+	})
+	require.NoError(t, err)
+
+	sourceRef, err := name.ParseReference(registryHost + "/upstream/workload:source")
+	require.NoError(t, err)
+	err = remote.Write(
+		sourceRef,
+		v1empty.Image,
+		remote.WithTransport(registryServer.Client().Transport),
+		remote.WithContext(ctx),
+	)
+	require.NoError(t, err)
+	sourceDigest, err := v1empty.Image.Digest()
+	require.NoError(t, err)
+
+	pkg := core.Package{
+		ID:            "pkg-1",
+		Name:          "my-charm",
+		HarborProject: "charm-my-charm",
+		HarborPushRobot: &core.RobotCredential{
+			ID:              10,
+			Username:        "robot$push-pkg-1",
+			EncryptedSecret: mustEncrypt(t, client, "push-secret"),
+		},
+		HarborPullRobot: &core.RobotCredential{
+			ID:              11,
+			Username:        "robot$pull-pkg-1",
+			EncryptedSecret: mustEncrypt(t, client, "pull-secret"),
+		},
+	}
+
+	digest, err := client.MirrorImage(
+		ctx,
+		pkg,
+		"workload-image",
+		registryHost+"/upstream/workload@"+sourceDigest.String(),
+		"robot$pull-pkg-1",
+		"pull-secret",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, sourceDigest.String(), digest)
+
+	err = client.DeleteImage(ctx, pkg, "workload-image", sourceDigest.String())
+	require.NoError(t, err)
+}
+
+func TestDeletePackageIgnoresMissingProject(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/projects/charm-my-charm", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := New(config.Config{
+		PublicRegistryURL:     "https://oci.example.test",
+		HarborURL:             server.URL,
+		HarborAPIURL:          server.URL,
+		HarborAdminUsername:   "admin",
+		HarborAdminPassword:   "secret",
+		HarborProjectPrefix:   "charm",
+		HarborPullRobotPrefix: "pull",
+		HarborPushRobotPrefix: "push",
+		HarborSecretKey:       "harbor-secret",
+	})
+	require.NoError(t, err)
+
+	err = client.DeletePackage(context.Background(), core.Package{HarborProject: "charm-my-charm"})
+	require.NoError(t, err)
 }
 
 func TestSyncPackageReusesHealthyRobots(t *testing.T) {

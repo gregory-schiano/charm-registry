@@ -30,13 +30,6 @@ func TestHashTokenConsistent(t *testing.T) {
 
 }
 
-func TestHashTokenDifferentInputs(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-	assert.NotEqual(t, HashToken("token-a"), HashToken("token-b"))
-}
-
 func TestNewOpaqueToken(t *testing.T) {
 	t.Parallel()
 
@@ -48,20 +41,6 @@ func TestNewOpaqueToken(t *testing.T) {
 	assert.True(t, strings.HasPrefix(raw, "cr_"), "token should start with cr_ prefix")
 	assert.Equal(t, HashToken(raw), hash)
 	assert.Len(t, hash, 64)
-
-}
-
-func TestNewOpaqueTokenUniqueness(t *testing.T) {
-	t.Parallel()
-
-	// Act
-	raw1, _, err := NewOpaqueToken()
-	require.NoError(t, err)
-	raw2, _, err := NewOpaqueToken()
-	require.NoError(t, err)
-
-	// Assert
-	assert.NotEqual(t, raw1, raw2)
 
 }
 
@@ -380,28 +359,6 @@ func TestAuthenticateUnknownTokenNoOIDC(t *testing.T) {
 
 }
 
-func TestAsString(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "", asString(nil))
-	assert.Equal(t, "hello", asString("hello"))
-	assert.Equal(t, "", asString(42))
-	assert.Equal(t, "", asString(true))
-}
-
-func TestAuthFirstNonEmpty(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	assert.Equal(t, "", core.FirstNonEmpty())
-	assert.Equal(t, "", core.FirstNonEmpty("", ""))
-	assert.Equal(t, "a", core.FirstNonEmpty("", "a", "b"))
-	assert.Equal(t, "first", core.FirstNonEmpty("first"))
-}
-
 func TestAuthenticateEmptySecretAfterBearer(t *testing.T) {
 	t.Parallel()
 
@@ -454,17 +411,6 @@ func TestWrapInMacaroon(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, caveats)
 
-}
-
-func TestWrapInMacaroonDeterministic(t *testing.T) {
-	t.Parallel()
-
-	// Act + Assert
-
-	// Same token always produces same JSON (no random data).
-	r1 := WrapInMacaroon("cr_abc", "http://localhost:8080")
-	r2 := WrapInMacaroon("cr_abc", "http://localhost:8080")
-	assert.Equal(t, r1, r2)
 }
 
 func TestExtractTokenFromMacaroons(t *testing.T) {

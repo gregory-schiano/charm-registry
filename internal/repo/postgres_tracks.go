@@ -26,6 +26,21 @@ func (p *Postgres) CreateTracks(ctx context.Context, packageID string, tracks []
 	return created, nil
 }
 
+// DeleteTrack is part of the [Repository] interface.
+func (p *Postgres) DeleteTrack(ctx context.Context, packageID, trackName string) error {
+	rowsAffected, err := p.queries().DeleteTrack(ctx, sqlcdb.DeleteTrackParams{
+		PackageID: packageID,
+		Name:      trackName,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListTracks is part of the [Repository] interface.
 func (p *Postgres) ListTracks(ctx context.Context, packageID string) ([]core.Track, error) {
 	rows, err := p.queries().ListTracks(ctx, packageID)

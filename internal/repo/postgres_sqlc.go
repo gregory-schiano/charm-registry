@@ -434,6 +434,25 @@ func trackBatchFromSQLC(item sqlcdb.Track) core.Track {
 	}
 }
 
+func charmhubSyncRuleFromSQLC(item sqlcdb.CharmhubSyncRule) core.CharmhubSyncRule {
+	rule := core.CharmhubSyncRule{
+		PackageName:        item.PackageName,
+		Track:              item.Track,
+		CreatedByAccountID: item.CreatedByAccountID,
+		CreatedAt:          item.CreatedAt,
+		UpdatedAt:          item.UpdatedAt,
+		LastSyncStatus:     item.LastSyncStatus,
+		LastSyncError:      item.LastSyncError,
+	}
+	if item.LastSyncStartedAt.Valid {
+		rule.LastSyncStartedAt = &item.LastSyncStartedAt.Time
+	}
+	if item.LastSyncFinishedAt.Valid {
+		rule.LastSyncFinishedAt = &item.LastSyncFinishedAt.Time
+	}
+	return rule
+}
+
 func pgxNotFound(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }

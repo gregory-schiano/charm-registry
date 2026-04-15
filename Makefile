@@ -19,7 +19,7 @@ help:
 		"make gosec        - run gosec static analysis" \
 		"make sqlc-diff    - verify sqlc-generated code is up to date" \
 		"make audit        - run lint, tests, and security checks" \
-		"make build        - build the registry binary" \
+		"make build        - build the registry and admin CLI binaries" \
 		"make run          - run the registry locally" \
 		"make harbor-prepare - download and render the vendored Harbor deployment" \
 		"make harbor-up    - start the Harbor OCI stack" \
@@ -48,6 +48,7 @@ tidy-check:
 # Packages to unit-test: exclude infrastructure wiring (internal/app) that
 # requires live external services, and sqlc-generated code (internal/repo/db).
 _UNIT_PKGS = $(shell $(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$')
+_COVER_PKGS = $(shell $(GO) list -f '{{if .TestGoFiles}}{{.ImportPath}}{{else if .XTestGoFiles}}{{.ImportPath}}{{end}}' ./internal/... | grep -Ev '^$$|/(app|repo/db)$$')
 
 # Repository Go packages. `./...` walks into vendored Harbor runtime
 # data under deploy/, which includes unreadable directories in local setups.
@@ -61,8 +62,14 @@ test-race:
 	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | xargs $(GO) test -race
 
 coverage:
-	$(GO) list ./internal/... | grep -Ev '/(app|repo/db)$$' | \
-		xargs $(GO) test -race -coverprofile=coverage.out -covermode=atomic
+	@rm -f coverage.out
+	@printf "mode: count\n" > coverage.out
+	@for pkg in $(_COVER_PKGS); do \
+		tmp_cov=$$(mktemp); \
+		$(GO) test $$pkg -coverprofile=$$tmp_cov -covermode=count >/dev/null; \
+		if [ -s "$$tmp_cov" ]; then tail -n +2 "$$tmp_cov" >> coverage.out; fi; \
+		rm -f "$$tmp_cov"; \
+	done
 	$(GO) tool cover -func=coverage.out
 
 vet:
@@ -71,6 +78,7 @@ vet:
 build:
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=true -o $(BIN_DIR)/charm-registry ./cmd/charm-registry
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=true -o $(BIN_DIR)/charm-registryctl ./cmd/charm-registryctl
 
 run:
 	$(GO) run ./cmd/charm-registry

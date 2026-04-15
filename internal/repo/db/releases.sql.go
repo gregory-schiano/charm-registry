@@ -13,6 +13,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteRelease = `-- name: DeleteRelease :execrows
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel = $2
+`
+
+type DeleteReleaseParams struct {
+	PackageID string
+	Channel   string
+}
+
+func (q *Queries) DeleteRelease(ctx context.Context, arg DeleteReleaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRelease, arg.PackageID, arg.Channel)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listReleases = `-- name: ListReleases :many
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive
