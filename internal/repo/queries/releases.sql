@@ -3,7 +3,7 @@ INSERT INTO releases (
     id, package_id, channel, revision,
     base, resources, when_created, expiration_date, progressive
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (package_id, channel) DO UPDATE SET
+ON CONFLICT (package_id, channel, base_key) DO UPDATE SET
     revision        = EXCLUDED.revision,
     base            = EXCLUDED.base,
     resources       = EXCLUDED.resources,
@@ -16,19 +16,35 @@ DELETE FROM releases
 WHERE package_id = $1
   AND channel = $2;
 
+-- name: DeleteReleaseForBase :execrows
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel = $2
+  AND base_key = $3::jsonb::text;
+
 -- name: ListReleases :many
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive
 FROM releases
 WHERE package_id = $1
-ORDER BY channel ASC;
+ORDER BY channel ASC, base_key ASC;
 
 -- name: ResolveRelease :one
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive
 FROM releases
 WHERE package_id = $1
-  AND channel    = $2;
+  AND channel    = $2
+ORDER BY when_created DESC
+LIMIT 1;
+
+-- name: ResolveReleaseForBase :one
+SELECT id, package_id, channel, revision,
+       base, resources, when_created, expiration_date, progressive
+FROM releases
+WHERE package_id = $1
+  AND channel    = $2
+  AND base_key   = $3::jsonb::text;
 
 -- name: ResolveDefaultRelease :one
 SELECT

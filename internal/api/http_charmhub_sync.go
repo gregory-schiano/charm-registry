@@ -27,14 +27,16 @@ func (a *API) handleAddCharmhubSyncRule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Name  string `json:"name"`
-		Track string `json:"track"`
+		Name          string   `json:"name"`
+		Track         string   `json:"track"`
+		Bases         []string `json:"bases"`
+		Architectures []string `json:"architectures"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))
 		return
 	}
-	rule, err := a.svc.AddCharmhubSyncRule(r.Context(), identity, req.Name, req.Track)
+	rule, err := a.svc.AddCharmhubSyncRule(r.Context(), identity, req.Name, req.Track, req.Bases, req.Architectures)
 	if err != nil {
 		writeError(w, r, err)
 		return

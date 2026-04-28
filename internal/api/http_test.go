@@ -471,7 +471,6 @@ func TestDeletePackage(t *testing.T) {
 
 }
 
-
 func TestCreateTracks(t *testing.T) {
 	t.Parallel()
 
@@ -896,17 +895,6 @@ func TestInfoEndpointNotFound(t *testing.T) {
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
 func TestHandlersRejectBadAuth(t *testing.T) {
 	t.Parallel()
 
@@ -986,18 +974,6 @@ func TestGetTokensWithInactiveFilter(t *testing.T) {
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 	t.Parallel()
 
@@ -1028,8 +1004,6 @@ func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), "sha256:abc")
 
 }
-
-
 
 func TestWhoAmIUnauthenticated(t *testing.T) {
 	t.Parallel()

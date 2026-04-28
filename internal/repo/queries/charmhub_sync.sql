@@ -1,8 +1,8 @@
 -- name: CreateCharmhubSyncRule :exec
 INSERT INTO charmhub_sync_rules (
-    package_name, track, created_by_account_id, created_at, updated_at,
+    package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
     last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
 -- name: DeleteCharmhubSyncRule :execrows
 DELETE FROM charmhub_sync_rules
@@ -10,13 +10,13 @@ WHERE package_name = $1
   AND track = $2;
 
 -- name: ListCharmhubSyncRules :many
-SELECT package_name, track, created_by_account_id, created_at, updated_at,
+SELECT package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
        last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
 FROM charmhub_sync_rules
 ORDER BY package_name ASC, track ASC;
 
 -- name: ListCharmhubSyncRulesByPackageName :many
-SELECT package_name, track, created_by_account_id, created_at, updated_at,
+SELECT package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
        last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
 FROM charmhub_sync_rules
 WHERE package_name = $1

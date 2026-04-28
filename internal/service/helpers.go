@@ -253,13 +253,6 @@ func firstLink(values []string) string {
 	return values[0]
 }
 
-func nullIfEmpty[T any](value []T) any {
-	if len(value) == 0 {
-		return nil
-	}
-	return value
-}
-
 func emptySliceIfNil[T any](values []T) []T {
 	if values == nil {
 		return []T{}

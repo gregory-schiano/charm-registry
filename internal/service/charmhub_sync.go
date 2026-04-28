@@ -169,6 +169,7 @@ func (s *Service) AddCharmhubSyncRule(
 	ctx context.Context,
 	identity core.Identity,
 	packageName, track string,
+	bases, architectures []string,
 ) (core.CharmhubSyncRule, error) {
 	if err := s.requireAdmin(identity); err != nil {
 		return core.CharmhubSyncRule{}, err
@@ -178,6 +179,11 @@ func (s *Service) AddCharmhubSyncRule(
 	if err != nil {
 		return core.CharmhubSyncRule{}, err
 	}
+	bases, err = normalizeSyncBases(bases)
+	if err != nil {
+		return core.CharmhubSyncRule{}, err
+	}
+	architectures = normalizeSyncArchitectures(architectures)
 	if packageName == "" {
 		return core.CharmhubSyncRule{}, newError(ErrorKindInvalidRequest, "invalid-request", "package name is required")
 	}
@@ -198,6 +204,8 @@ func (s *Service) AddCharmhubSyncRule(
 	rule := core.CharmhubSyncRule{
 		PackageName:        packageName,
 		Track:              track,
+		Bases:              bases,
+		Architectures:      architectures,
 		CreatedByAccountID: identity.Account.ID,
 		CreatedAt:          now,
 		UpdatedAt:          now,
@@ -274,6 +282,57 @@ func normalizeSyncTrack(track string) (string, error) {
 		return "", newError(ErrorKindInvalidRequest, "invalid-request", "track must not include a risk")
 	}
 	return track, nil
+}
+
+func normalizeSyncBases(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, err := parseSyncBaseSelector(value); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func normalizeSyncArchitectures(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func parseSyncBaseSelector(value string) (core.Base, error) {
+	name, channel, ok := strings.Cut(value, "@")
+	if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(channel) == "" {
+		return core.Base{}, newError(
+			ErrorKindInvalidRequest,
+			"invalid-request",
+			"base filters must use name@channel syntax, for example ubuntu@22.04",
+		)
+	}
+	return core.Base{Name: strings.TrimSpace(name), Channel: strings.TrimSpace(channel)}, nil
 }
 
 func isCharmhubManagedPackage(pkg core.Package) bool {
@@ -384,13 +443,24 @@ func (s *Service) syncCharmhubTrack(
 		info    charmhubclient.PackageChannel
 	}
 
+	upstreamInfo, err := s.charmhub.GetInfo(ctx, rule.PackageName)
+	if err != nil {
+		return pkg, err
+	}
 	var present []channelState
-	for _, risk := range charmhubSyncRisks {
-		channel := rule.Track + "/" + risk
-		info, err := s.charmhub.GetChannel(ctx, rule.PackageName, channel)
+	for _, item := range selectCharmhubSyncVariants(upstreamInfo.ChannelMap, rule) {
+		base := item.Channel.Base
+		if base == nil {
+			continue
+		}
+		channel := item.Channel.Name
+		info, err := s.charmhub.RefreshChannel(ctx, rule.PackageName, channel, *base)
 		if err != nil {
 			return pkg, err
 		}
+		info.ID = core.FirstNonEmpty(info.ID, upstreamInfo.ID)
+		info.Name = core.FirstNonEmpty(info.Name, upstreamInfo.Name, rule.PackageName)
+		info.Result = upstreamInfo.Result
 		if info.DefaultRelease.Present() {
 			present = append(present, channelState{channel: channel, info: info})
 		}
@@ -466,17 +536,25 @@ func (s *Service) syncCharmhubTrack(
 		}
 	}
 
-	for _, risk := range charmhubSyncRisks {
-		channel := rule.Track + "/" + risk
-		found := false
-		for _, item := range present {
-			if item.channel == channel {
-				found = true
-				break
-			}
+	presentVariants := map[string]struct{}{}
+	for _, item := range present {
+		presentVariants[releaseVariantID(item.channel, item.info.DefaultRelease.Channel.Base)] = struct{}{}
+	}
+	releases, err := s.repo.ListReleases(ctx, pkg.ID)
+	if err != nil {
+		return core.Package{}, err
+	}
+	for _, release := range releases {
+		parts := splitChannel(release.Channel)
+		if parts.track != rule.Track {
+			continue
 		}
-		if !found {
-			_ = s.repo.DeleteRelease(ctx, pkg.ID, channel)
+		if _, ok := presentVariants[releaseVariantID(release.Channel, release.Base)]; ok {
+			continue
+		}
+		if err := s.repo.DeleteReleaseForBase(ctx, pkg.ID, release.Channel, release.Base); err != nil &&
+			!errors.Is(err, repo.ErrNotFound) {
+			return core.Package{}, err
 		}
 	}
 
@@ -505,6 +583,52 @@ func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, tra
 		CreatedAt: time.Now().UTC(),
 	}})
 	return err
+}
+
+func selectCharmhubSyncVariants(items []charmhubclient.ChannelMap, rule core.CharmhubSyncRule) []charmhubclient.ChannelMap {
+	var selected []charmhubclient.ChannelMap
+	for _, item := range items {
+		base := item.Channel.Base
+		if base == nil {
+			continue
+		}
+		if item.Channel.Track != rule.Track {
+			continue
+		}
+		if !slices.Contains(charmhubSyncRisks, item.Channel.Risk) {
+			continue
+		}
+		if !syncRuleMatchesBase(rule, *base) || !syncRuleMatchesArchitecture(rule, base.Architecture) {
+			continue
+		}
+		selected = append(selected, item)
+	}
+	slices.SortFunc(selected, func(left, right charmhubclient.ChannelMap) int {
+		return strings.Compare(
+			releaseVariantID(left.Channel.Name, left.Channel.Base),
+			releaseVariantID(right.Channel.Name, right.Channel.Base),
+		)
+	})
+	return selected
+}
+
+func syncRuleMatchesBase(rule core.CharmhubSyncRule, base core.Base) bool {
+	if len(rule.Bases) == 0 {
+		return true
+	}
+	selector := base.Name + "@" + base.Channel
+	return slices.Contains(rule.Bases, selector)
+}
+
+func syncRuleMatchesArchitecture(rule core.CharmhubSyncRule, architecture string) bool {
+	return len(rule.Architectures) == 0 || slices.Contains(rule.Architectures, architecture)
+}
+
+func releaseVariantID(channel string, base *core.Base) string {
+	if base == nil {
+		return channel + "\x00"
+	}
+	return channel + "\x00" + base.Name + "\x00" + base.Channel + "\x00" + base.Architecture
 }
 
 //nolint:gocognit,cyclop,nestif // Artifact mirroring mirrors the external Charmhub workflow step-by-step.

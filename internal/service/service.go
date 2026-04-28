@@ -122,6 +122,8 @@ type Service struct {
 
 type charmhubClient interface {
 	GetChannel(ctx context.Context, name, channel string) (charmhubclient.PackageChannel, error)
+	GetInfo(ctx context.Context, name string) (charmhubclient.PackageChannel, error)
+	RefreshChannel(ctx context.Context, name, channel string, base core.Base) (charmhubclient.PackageChannel, error)
 	Download(ctx context.Context, artifactURL string) ([]byte, error)
 }
 

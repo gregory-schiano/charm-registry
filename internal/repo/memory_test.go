@@ -734,4 +734,3 @@ func TestMemoryResolveDefaultReleaseFallback(t *testing.T) {
 	assert.Equal(t, 2, release.Revision, "should fall back to any release when no latest/stable")
 
 }
-

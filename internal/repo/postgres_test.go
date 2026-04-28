@@ -318,6 +318,8 @@ func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
 	err := repository.CreateCharmhubSyncRule(ctx, core.CharmhubSyncRule{
 		PackageName:        "demo",
 		Track:              "latest",
+		Bases:              []string{"ubuntu@24.04"},
+		Architectures:      []string{"amd64", "arm64"},
 		CreatedByAccountID: admin.ID,
 		CreatedAt:          now,
 		UpdatedAt:          now,
@@ -330,6 +332,8 @@ func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
 	require.Len(t, rules, 1)
 	assert.Equal(t, "demo", rules[0].PackageName)
 	assert.Equal(t, "latest", rules[0].Track)
+	assert.Equal(t, []string{"ubuntu@24.04"}, rules[0].Bases)
+	assert.Equal(t, []string{"amd64", "arm64"}, rules[0].Architectures)
 
 	startedAt := now.Add(time.Minute)
 	finishedAt := now.Add(2 * time.Minute)
@@ -353,6 +357,64 @@ func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
 	rules, err = repository.ListCharmhubSyncRulesByPackageName(ctx, "demo")
 	require.NoError(t, err)
 	assert.Empty(t, rules)
+
+}
+
+func TestPostgresReleaseVariantsByBase(t *testing.T) {
+
+	// Arrange
+	repository := newPostgresIntegrationRepository(t)
+	ctx := context.Background()
+	owner := ensureTestAccount(t, repository, "owner-release-variant", "owner-release-variant")
+	pkg := createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-release-variant",
+		Name: "release-variant",
+	})
+
+	// Act
+	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-amd64",
+		Channel:  "latest/stable",
+		Revision: 1,
+		Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		When:     time.Now().UTC(),
+	}))
+	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-arm64",
+		Channel:  "latest/stable",
+		Revision: 2,
+		Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
+		When:     time.Now().UTC().Add(time.Minute),
+	}))
+
+	// Assert
+	releases, err := repository.ListReleases(ctx, pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 2)
+
+	amd64Release, err := repository.ResolveReleaseForBase(
+		ctx,
+		pkg.ID,
+		"latest/stable",
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, amd64Release.Revision)
+
+	latestRelease, err := repository.ResolveRelease(ctx, pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.Equal(t, 2, latestRelease.Revision)
+
+	require.NoError(t, repository.DeleteReleaseForBase(
+		ctx,
+		pkg.ID,
+		"latest/stable",
+		&core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+	))
+	releases, err = repository.ListReleases(ctx, pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	assert.Equal(t, 2, releases[0].Revision)
 
 }
 

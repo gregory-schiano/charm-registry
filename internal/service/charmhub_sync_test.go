@@ -23,6 +23,7 @@ import (
 
 type fakeCharmhubClient struct {
 	channels     map[string]charmhubclient.PackageChannel
+	infos        map[string]charmhubclient.PackageChannel
 	downloads    map[string][]byte
 	downloadErrs map[string]error
 }
@@ -39,6 +40,24 @@ func (f *fakeCharmhubClient) GetChannel(_ context.Context, name, channel string)
 			Summary: "Synced summary",
 		},
 	}, nil
+}
+
+func (f *fakeCharmhubClient) GetInfo(_ context.Context, name string) (charmhubclient.PackageChannel, error) {
+	if item, ok := f.infos[name]; ok {
+		return item, nil
+	}
+	return charmhubclient.PackageChannel{ID: "upstream-" + name, Name: name}, nil
+}
+
+func (f *fakeCharmhubClient) RefreshChannel(
+	_ context.Context,
+	name, channel string,
+	base core.Base,
+) (charmhubclient.PackageChannel, error) {
+	if item, ok := f.channels[name+"|"+channel+"|"+base.Name+"@"+base.Channel+"|"+base.Architecture]; ok {
+		return item, nil
+	}
+	return f.GetChannel(context.Background(), name, channel)
 }
 
 func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]byte, error) {
@@ -88,7 +107,7 @@ func TestRegisterPackageConflictsWithCharmhubSyncReservation(t *testing.T) {
 	admin.Account.IsAdmin = true
 	user := newIdentity("user-1", "user")
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
 	_, err = svc.RegisterPackage(context.Background(), user, "demo", "charm", false)
@@ -106,7 +125,7 @@ func TestAddCharmhubSyncRuleConflictsWithManualPackage(t *testing.T) {
 	_, err := svc.RegisterPackage(context.Background(), user, "demo", "charm", false)
 	require.NoError(t, err)
 
-	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	assertServiceError(t, err, ErrorKindConflict)
 }
 
@@ -128,7 +147,7 @@ func TestTriggerCharmhubSyncAcceptsConfiguredPackage(t *testing.T) {
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
 	err = svc.TriggerCharmhubSync(context.Background(), admin, "demo")
@@ -145,7 +164,7 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
@@ -183,6 +202,112 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	assert.Nil(t, rules[0].LastSyncError)
 }
 
+func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
+	t.Parallel()
+
+	svc := newSyncTestService(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	addTrackVariantFixture(
+		t,
+		fakeClient,
+		"demo",
+		"upstream-demo",
+		"latest",
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
+		8,
+		4,
+		5,
+	)
+	svc.charmhub = fakeClient
+	svc.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+
+	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, err)
+	releases, err := svc.repo.ListReleases(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 2)
+
+	amd64Release, err := svc.repo.ResolveReleaseForBase(
+		context.Background(),
+		pkg.ID,
+		"latest/stable",
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 7, amd64Release.Revision)
+
+	arm64Release, err := svc.repo.ResolveReleaseForBase(
+		context.Background(),
+		pkg.ID,
+		"latest/stable",
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 8, arm64Release.Revision)
+}
+
+func TestCharmhubSyncFiltersVariantsByBaseAndArchitecture(t *testing.T) {
+	t.Parallel()
+
+	svc := newSyncTestService(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	addTrackVariantFixture(
+		t,
+		fakeClient,
+		"demo",
+		"upstream-demo",
+		"latest",
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
+		8,
+		4,
+		5,
+	)
+	addTrackVariantFixture(
+		t,
+		fakeClient,
+		"demo",
+		"upstream-demo",
+		"latest",
+		core.Base{Name: "ubuntu", Channel: "22.04", Architecture: "amd64"},
+		9,
+		6,
+		7,
+	)
+	svc.charmhub = fakeClient
+	svc.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := svc.AddCharmhubSyncRule(
+		context.Background(),
+		admin,
+		"demo",
+		"latest",
+		[]string{"ubuntu@24.04"},
+		[]string{"arm64"},
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+
+	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, err)
+	releases, err := svc.repo.ListReleases(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	require.NotNil(t, releases[0].Base)
+	assert.Equal(t, "24.04", releases[0].Base.Channel)
+	assert.Equal(t, "arm64", releases[0].Base.Architecture)
+	assert.Equal(t, 8, releases[0].Revision)
+}
+
 func TestCharmhubManagedPackagesBlockPublisherMutations(t *testing.T) {
 	t.Parallel()
 
@@ -195,7 +320,7 @@ func TestCharmhubManagedPackagesBlockPublisherMutations(t *testing.T) {
 	admin.Account.IsAdmin = true
 	publisher := newIdentity("publisher-1", "publisher")
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
@@ -231,7 +356,7 @@ func TestRemovingLastCharmhubSyncRuleDeletesPackage(t *testing.T) {
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
@@ -254,9 +379,9 @@ func TestRemovingOneTrackPrunesOnlyUnreferencedArtifacts(t *testing.T) {
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "2.0")
+	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "2.0", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
@@ -289,12 +414,13 @@ func TestCharmhubSyncFailureMarksRuleErrorAndKeepsExistingRelease(t *testing.T) 
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
 	addTrackFixture(t, fakeClient, "demo", "upstream-demo", "latest", 9, 4, 4)
-	fakeClient.downloadErrs["https://charmhub.test/demo/latest/stable/revision-9.charm"] = fmt.Errorf("upstream unavailable")
+	fakeClient.downloadErrs["https://charmhub.test/demo/latest/stable/ubuntu-24.04-amd64/revision-9.charm"] =
+		fmt.Errorf("upstream unavailable")
 
 	err = svc.reconcileCharmhubPackage(context.Background(), "demo")
 	require.Error(t, err)
@@ -325,7 +451,7 @@ func TestCharmhubSyncRemovesChannelWhenUpstreamDisappears(t *testing.T) {
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest")
+	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
@@ -352,6 +478,7 @@ func newSyncFixture(
 
 	client := &fakeCharmhubClient{
 		channels:     map[string]charmhubclient.PackageChannel{},
+		infos:        map[string]charmhubclient.PackageChannel{},
 		downloads:    map[string][]byte{},
 		downloadErrs: map[string]error{},
 	}
@@ -366,17 +493,56 @@ func addTrackFixture(
 	revisionNumber, ociResourceRevision, fileResourceRevision int,
 ) {
 	t.Helper()
+	addTrackVariantFixture(
+		t,
+		client,
+		packageName,
+		packageID,
+		track,
+		core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		revisionNumber,
+		ociResourceRevision,
+		fileResourceRevision,
+	)
+}
 
+func addTrackVariantFixture(
+	t *testing.T,
+	client *fakeCharmhubClient,
+	packageName, packageID, track string,
+	base core.Base,
+	revisionNumber, ociResourceRevision, fileResourceRevision int,
+) {
+	t.Helper()
 	archivePayload := buildSyncCharmArchive(t, packageName)
-	revisionURL := fmt.Sprintf("https://charmhub.test/%s/%s/stable/revision-%d.charm", packageName, track, revisionNumber)
+	baseKey := base.Name + "-" + base.Channel + "-" + base.Architecture
+	revisionURL := fmt.Sprintf(
+		"https://charmhub.test/%s/%s/stable/%s/revision-%d.charm",
+		packageName,
+		track,
+		baseKey,
+		revisionNumber,
+	)
 	client.downloads[revisionURL] = archivePayload
 
 	fileResourcePayload := []byte("config-data-" + track)
-	fileResourceURL := fmt.Sprintf("https://charmhub.test/%s/%s/stable/resource-config-%d", packageName, track, fileResourceRevision)
+	fileResourceURL := fmt.Sprintf(
+		"https://charmhub.test/%s/%s/stable/%s/resource-config-%d",
+		packageName,
+		track,
+		baseKey,
+		fileResourceRevision,
+	)
 	client.downloads[fileResourceURL] = fileResourcePayload
 
 	ociPayload := []byte(`{"ImageName":"registry.example.test/upstream/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","Username":"upstream","Password":"secret"}`)
-	ociResourceURL := fmt.Sprintf("https://charmhub.test/%s/%s/stable/resource-app-image-%d", packageName, track, ociResourceRevision)
+	ociResourceURL := fmt.Sprintf(
+		"https://charmhub.test/%s/%s/stable/%s/resource-app-image-%d",
+		packageName,
+		track,
+		baseKey,
+		ociResourceRevision,
+	)
 	client.downloads[ociResourceURL] = ociPayload
 
 	stable := charmhubclient.PackageChannel{
@@ -396,7 +562,7 @@ func addTrackFixture(
 				Track:      track,
 				Risk:       "stable",
 				ReleasedAt: time.Date(2026, 4, 13, 0, 0, 0, 0, time.UTC),
-				Base:       &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+				Base:       &base,
 			},
 			Resources: []charmhubclient.ReleaseResource{
 				makeFakeResource("config", "file", fileResourceRevision, fileResourceURL, fileResourcePayload),
@@ -418,6 +584,16 @@ func addTrackFixture(
 		},
 	}
 	client.channels[packageName+"|"+track+"/stable"] = stable
+	client.channels[packageName+"|"+track+"/stable|"+base.Name+"@"+base.Channel+"|"+base.Architecture] = stable
+	info := client.infos[packageName]
+	info.ID = packageID
+	info.Name = packageName
+	info.Result = stable.Result
+	info.ChannelMap = append(info.ChannelMap, charmhubclient.ChannelMap{
+		Channel:  stable.DefaultRelease.Channel,
+		Revision: stable.DefaultRelease.Revision,
+	})
+	client.infos[packageName] = info
 }
 
 func makeFakeResource(name, resourceType string, revision int, downloadURL string, payload []byte) charmhubclient.ReleaseResource {

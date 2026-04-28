@@ -6,6 +6,8 @@ import "time"
 type CharmhubSyncRule struct {
 	PackageName        string     `json:"name"`
 	Track              string     `json:"track"`
+	Bases              []string   `json:"bases,omitempty"`
+	Architectures      []string   `json:"architectures,omitempty"`
 	CreatedByAccountID string     `json:"-"`
 	CreatedAt          time.Time  `json:"created-at"`
 	UpdatedAt          time.Time  `json:"updated-at"`

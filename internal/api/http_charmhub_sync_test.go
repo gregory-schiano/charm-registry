@@ -23,14 +23,18 @@ func TestAddAndListCharmhubSyncRulesAsAdmin(t *testing.T) {
 	cfg.AdminUsernames = []string{"admin"}
 	handler := newTestHandler(t, cfg)
 
-	addResp := doRequest(t, handler, http.MethodPost, "/v1/admin/charmhub-sync", map[string]string{
-		"name":  "demo",
-		"track": "latest",
+	addResp := doRequest(t, handler, http.MethodPost, "/v1/admin/charmhub-sync", map[string]any{
+		"name":          "demo",
+		"track":         "latest",
+		"bases":         []string{"ubuntu@24.04"},
+		"architectures": []string{"amd64"},
 	}, "Bearer dev:admin:admin")
 	assert.Equal(t, http.StatusAccepted, addResp.Code)
 	addBody := decodeJSON(t, addResp)
 	assert.Equal(t, "demo", addBody["name"])
 	assert.Equal(t, "latest", addBody["track"])
+	assert.Equal(t, []any{"ubuntu@24.04"}, addBody["bases"])
+	assert.Equal(t, []any{"amd64"}, addBody["architectures"])
 	assert.Equal(t, "pending", addBody["status"])
 
 	listResp := doRequest(t, handler, http.MethodGet, "/v1/admin/charmhub-sync", nil, "Bearer dev:admin:admin")
@@ -41,6 +45,8 @@ func TestAddAndListCharmhubSyncRulesAsAdmin(t *testing.T) {
 	first := rules[0].(map[string]any)
 	assert.Equal(t, "demo", first["name"])
 	assert.Equal(t, "latest", first["track"])
+	assert.Equal(t, []any{"ubuntu@24.04"}, first["bases"])
+	assert.Equal(t, []any{"amd64"}, first["architectures"])
 }
 
 func TestDeleteCharmhubSyncRuleAsAdmin(t *testing.T) {

@@ -96,12 +96,18 @@ make down
 
 ## Charmhub synchronization
 
-The registry can mirror public Charmhub charms on a track-by-track basis. Each sync rule is `(charm name, track)`, and the worker mirrors the latest release for:
+The registry can mirror public Charmhub charms on a track-by-track basis. Each sync rule is `(charm name, track)`, and the worker mirrors every matching base/architecture variant for the latest release on:
 
 - `track/stable`
 - `track/candidate`
 - `track/beta`
 - `track/edge`
+
+By default, a rule syncs all upstream bases and architectures for that track. You can narrow the rule with repeatable base and architecture filters:
+
+- Base filters use `name@channel`, for example `ubuntu@24.04`.
+- Architecture filters use Juju/Charmhub architecture names, for example `amd64` or `arm64`.
+- Filters are inclusive allowlists. A release variant must match both the base filter and the architecture filter.
 
 Important behavior:
 
@@ -157,6 +163,7 @@ Then use the CLI:
 ```bash
 .bin/charm-registryctl sync list
 .bin/charm-registryctl sync add postgresql-k8s --track 14
+.bin/charm-registryctl sync add postgresql-k8s --track 14 --base ubuntu@24.04 --arch amd64
 .bin/charm-registryctl sync remove postgresql-k8s --track 14
 .bin/charm-registryctl sync run postgresql-k8s
 ```
@@ -170,7 +177,7 @@ You can also pass the connection details explicitly instead of using environment
 What the commands do:
 
 - `sync list`: show the configured rules and the last known sync status
-- `sync add <name> --track <track>`: create a sync rule and enqueue an immediate sync
+- `sync add <name> --track <track> [--base <name@channel> ...] [--arch <arch> ...]`: create a sync rule and enqueue an immediate sync
 - `sync remove <name> --track <track>`: remove the rule and enqueue cleanup/reconciliation
 - `sync run <name>`: trigger an immediate reconciliation for all synchronized tracks of that package
 

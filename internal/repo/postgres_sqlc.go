@@ -100,26 +100,103 @@ func accountFromSQLC(item sqlcdb.Account) core.Account {
 	}
 }
 
-func releaseFromSQLC(item sqlcdb.Release) (core.Release, error) {
+func releaseFromListRow(item sqlcdb.ListReleasesRow) (core.Release, error) {
+	return releaseFromParts(
+		item.ID,
+		item.PackageID,
+		item.Channel,
+		item.Revision,
+		item.Base,
+		item.Resources,
+		item.WhenCreated,
+		item.ExpirationDate,
+		item.Progressive,
+	)
+}
+
+func releaseFromResolveRow(item sqlcdb.ResolveReleaseRow) (core.Release, error) {
+	return releaseFromParts(
+		item.ID,
+		item.PackageID,
+		item.Channel,
+		item.Revision,
+		item.Base,
+		item.Resources,
+		item.WhenCreated,
+		item.ExpirationDate,
+		item.Progressive,
+	)
+}
+
+func releaseFromResolveForBaseRow(item sqlcdb.ResolveReleaseForBaseRow) (core.Release, error) {
+	return releaseFromParts(
+		item.ID,
+		item.PackageID,
+		item.Channel,
+		item.Revision,
+		item.Base,
+		item.Resources,
+		item.WhenCreated,
+		item.ExpirationDate,
+		item.Progressive,
+	)
+}
+
+func releaseFromDefaultRow(item sqlcdb.ResolveDefaultReleaseRow) (core.Release, error) {
+	return releaseFromParts(
+		item.ID,
+		item.PackageID,
+		item.Channel,
+		item.Revision,
+		item.Base,
+		item.Resources,
+		item.WhenCreated,
+		item.ExpirationDate,
+		item.Progressive,
+	)
+}
+
+func releaseFromLatestRow(item sqlcdb.ResolveLatestReleaseRow) (core.Release, error) {
+	return releaseFromParts(
+		item.ID,
+		item.PackageID,
+		item.Channel,
+		item.Revision,
+		item.Base,
+		item.Resources,
+		item.WhenCreated,
+		item.ExpirationDate,
+		item.Progressive,
+	)
+}
+
+func releaseFromParts(
+	id, packageID, channel string,
+	revision int32,
+	baseJSON, resourcesJSON json.RawMessage,
+	whenCreated time.Time,
+	expirationDate pgtype.Timestamptz,
+	progressive *float64,
+) (core.Release, error) {
 	release := core.Release{
-		ID:          item.ID,
-		PackageID:   item.PackageID,
-		Channel:     item.Channel,
-		Revision:    int(item.Revision),
-		When:        item.WhenCreated,
-		Progressive: item.Progressive,
+		ID:          id,
+		PackageID:   packageID,
+		Channel:     channel,
+		Revision:    int(revision),
+		When:        whenCreated,
+		Progressive: progressive,
 	}
-	if item.ExpirationDate.Valid {
-		release.ExpirationDate = &item.ExpirationDate.Time
+	if expirationDate.Valid {
+		release.ExpirationDate = &expirationDate.Time
 	}
-	if string(item.Base) != "null" && len(item.Base) != 0 {
+	if string(baseJSON) != "null" && len(baseJSON) != 0 {
 		var base core.Base
-		if err := unmarshalJSON(item.Base, &base); err != nil {
+		if err := unmarshalJSON(baseJSON, &base); err != nil {
 			return core.Release{}, err
 		}
 		release.Base = &base
 	}
-	if err := unmarshalJSON(item.Resources, &release.Resources); err != nil {
+	if err := unmarshalJSON(resourcesJSON, &release.Resources); err != nil {
 		return core.Release{}, err
 	}
 	return release, nil
@@ -434,23 +511,71 @@ func trackBatchFromSQLC(item sqlcdb.Track) core.Track {
 	}
 }
 
-func charmhubSyncRuleFromSQLC(item sqlcdb.CharmhubSyncRule) core.CharmhubSyncRule {
+func charmhubSyncRuleFromListRow(item sqlcdb.ListCharmhubSyncRulesRow) (core.CharmhubSyncRule, error) {
+	return charmhubSyncRuleFromParts(
+		item.PackageName,
+		item.Track,
+		item.Bases,
+		item.Architectures,
+		item.CreatedByAccountID,
+		item.CreatedAt,
+		item.UpdatedAt,
+		item.LastSyncStatus,
+		item.LastSyncStartedAt,
+		item.LastSyncFinishedAt,
+		item.LastSyncError,
+	)
+}
+
+func charmhubSyncRuleFromListByPackageRow(
+	item sqlcdb.ListCharmhubSyncRulesByPackageNameRow,
+) (core.CharmhubSyncRule, error) {
+	return charmhubSyncRuleFromParts(
+		item.PackageName,
+		item.Track,
+		item.Bases,
+		item.Architectures,
+		item.CreatedByAccountID,
+		item.CreatedAt,
+		item.UpdatedAt,
+		item.LastSyncStatus,
+		item.LastSyncStartedAt,
+		item.LastSyncFinishedAt,
+		item.LastSyncError,
+	)
+}
+
+func charmhubSyncRuleFromParts(
+	packageName, track string,
+	basesJSON, architecturesJSON json.RawMessage,
+	createdByAccountID string,
+	createdAt, updatedAt time.Time,
+	lastSyncStatus string,
+	lastSyncStartedAt, lastSyncFinishedAt pgtype.Timestamptz,
+	lastSyncError *string,
+) (core.CharmhubSyncRule, error) {
 	rule := core.CharmhubSyncRule{
-		PackageName:        item.PackageName,
-		Track:              item.Track,
-		CreatedByAccountID: item.CreatedByAccountID,
-		CreatedAt:          item.CreatedAt,
-		UpdatedAt:          item.UpdatedAt,
-		LastSyncStatus:     item.LastSyncStatus,
-		LastSyncError:      item.LastSyncError,
+		PackageName:        packageName,
+		Track:              track,
+		CreatedByAccountID: createdByAccountID,
+		CreatedAt:          createdAt,
+		UpdatedAt:          updatedAt,
+		LastSyncStatus:     lastSyncStatus,
+		LastSyncError:      lastSyncError,
 	}
-	if item.LastSyncStartedAt.Valid {
-		rule.LastSyncStartedAt = &item.LastSyncStartedAt.Time
+	if err := unmarshalJSON(basesJSON, &rule.Bases); err != nil {
+		return core.CharmhubSyncRule{}, fmt.Errorf("unmarshal charmhub sync bases: %w", err)
 	}
-	if item.LastSyncFinishedAt.Valid {
-		rule.LastSyncFinishedAt = &item.LastSyncFinishedAt.Time
+	if err := unmarshalJSON(architecturesJSON, &rule.Architectures); err != nil {
+		return core.CharmhubSyncRule{}, fmt.Errorf("unmarshal charmhub sync architectures: %w", err)
 	}
-	return rule
+	if lastSyncStartedAt.Valid {
+		rule.LastSyncStartedAt = &lastSyncStartedAt.Time
+	}
+	if lastSyncFinishedAt.Valid {
+		rule.LastSyncFinishedAt = &lastSyncFinishedAt.Time
+	}
+	return rule, nil
 }
 
 func pgxNotFound(err error) bool {

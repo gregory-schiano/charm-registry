@@ -271,7 +271,6 @@ func TestGetRootDocumentReturnsServiceMetadata(t *testing.T) {
 	assert.Equal(t, "https://registry.example.test", doc.APIURL)
 }
 
-
 func TestIssueStoreTokenDefaultPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -422,7 +421,6 @@ func TestReleaseRejectsResourceForDifferentPackageRevision(t *testing.T) {
 
 }
 
-
 func TestRevokeStoreToken(t *testing.T) {
 	t.Parallel()
 
@@ -451,8 +449,6 @@ func TestRevokeStoreToken(t *testing.T) {
 	assert.Len(t, all, 1)
 
 }
-
-
 
 func TestMacaroonInfoWithoutToken(t *testing.T) {
 	t.Parallel()
@@ -488,8 +484,6 @@ func TestDeprecatedWhoAmI(t *testing.T) {
 	assert.Equal(t, "acc-1", result.ID)
 
 }
-
-
 
 func TestRegisterPackageDuplicate(t *testing.T) {
 	t.Parallel()
@@ -566,7 +560,6 @@ func TestListRegisteredPackages(t *testing.T) {
 
 }
 
-
 func TestUpdatePackageMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -597,8 +590,6 @@ func TestUpdatePackageMetadata(t *testing.T) {
 	assert.False(t, updated.Private)
 
 }
-
-
 
 func TestUnregisterEmptyPackage(t *testing.T) {
 	t.Parallel()
@@ -646,8 +637,6 @@ func TestUnregisterPackageWithRevisions(t *testing.T) {
 	assertServiceError(t, err, ErrorKindInvalidRequest)
 
 }
-
-
 
 func TestCreateUploadSetsKindFromFilename(t *testing.T) {
 	t.Parallel()
@@ -1039,7 +1028,6 @@ func TestDownloadCharm(t *testing.T) {
 
 }
 
-
 func TestDownloadResource(t *testing.T) {
 	t.Parallel()
 
@@ -1147,8 +1135,6 @@ func TestDownloadResourceOCIImageRequiresProvisionedPackage(t *testing.T) {
 
 }
 
-
-
 func TestPushRevisionInvalidArchive(t *testing.T) {
 	t.Parallel()
 
@@ -1168,7 +1154,6 @@ func TestPushRevisionInvalidArchive(t *testing.T) {
 	assertServiceError(t, err, ErrorKindInvalidRequest)
 
 }
-
 
 func TestTokenPackageScoping(t *testing.T) {
 	t.Parallel()
@@ -1312,7 +1297,6 @@ func TestRefreshMissingIDAndName(t *testing.T) {
 	assert.Equal(t, "invalid-request", results[0].Error.Code)
 
 }
-
 
 func TestMultipleRevisions(t *testing.T) {
 	t.Parallel()
@@ -1480,15 +1464,6 @@ func TestListResourcesNoResources(t *testing.T) {
 	assert.Empty(t, resources)
 
 }
-
-
-
-
-
-
-
-
-
 
 func TestPushResourceUndeclaredResource(t *testing.T) {
 	t.Parallel()
@@ -1776,7 +1751,6 @@ func TestRefreshWithDirectRevisionAndResourceOverrideUsesAttachedReleaseResource
 
 }
 
-
 func TestListRegisteredPackagesWithCollaborations(t *testing.T) {
 	t.Parallel()
 
@@ -1946,7 +1920,6 @@ func TestPushRevisionNonExistentUpload(t *testing.T) {
 
 }
 
-
 func TestPushResourceNonExistentUpload(t *testing.T) {
 	t.Parallel()
 
@@ -1970,8 +1943,6 @@ func TestPushResourceNonExistentUpload(t *testing.T) {
 	assertServiceError(t, err, ErrorKindNotFound)
 
 }
-
-
 
 func TestInfoNoRelease(t *testing.T) {
 	t.Parallel()
@@ -2253,7 +2224,6 @@ func TestReleaseWithNilResourceRevision(t *testing.T) {
 
 }
 
-
 func TestOCIImageBlobPayload(t *testing.T) {
 	t.Parallel()
 
@@ -2493,10 +2463,6 @@ func TestRefreshNoChannelNoRelease(t *testing.T) {
 	assertRefreshActionError(t, result, "app/0", "not-found")
 
 }
-
-
-
-
 
 func TestUpdatePackageTokenDoesNotAllowPackage(t *testing.T) {
 	t.Parallel()

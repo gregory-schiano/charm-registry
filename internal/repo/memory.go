@@ -610,7 +610,7 @@ func (m *Memory) ReplaceRelease(_ context.Context, packageID string, release cor
 	if _, ok := m.releases[packageID]; !ok {
 		m.releases[packageID] = map[string]core.Release{}
 	}
-	m.releases[packageID][release.Channel] = release
+	m.releases[packageID][releaseVariantKey(release.Channel, release.Base)] = release
 	return nil
 }
 
@@ -622,10 +622,32 @@ func (m *Memory) DeleteRelease(_ context.Context, packageID, channel string) err
 	if !ok {
 		return ErrNotFound
 	}
-	if _, ok := releases[channel]; !ok {
+	removed := false
+	for key, release := range releases {
+		if release.Channel == channel {
+			delete(releases, key)
+			removed = true
+		}
+	}
+	if !removed {
 		return ErrNotFound
 	}
-	delete(releases, channel)
+	return nil
+}
+
+// DeleteReleaseForBase is part of the [Repository] interface.
+func (m *Memory) DeleteReleaseForBase(_ context.Context, packageID, channel string, base *core.Base) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	releases, ok := m.releases[packageID]
+	if !ok {
+		return ErrNotFound
+	}
+	key := releaseVariantKey(channel, base)
+	if _, ok := releases[key]; !ok {
+		return ErrNotFound
+	}
+	delete(releases, key)
 	return nil
 }
 
@@ -644,7 +666,35 @@ func (m *Memory) ListReleases(_ context.Context, packageID string) ([]core.Relea
 func (m *Memory) ResolveRelease(_ context.Context, packageID string, channel string) (core.Release, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	release, ok := m.releases[packageID][channel]
+	var (
+		selected core.Release
+		found    bool
+	)
+	for _, release := range m.releases[packageID] {
+		if release.Channel != channel {
+			continue
+		}
+		if !found || release.When.After(selected.When) {
+			selected = release
+			found = true
+		}
+	}
+	if !found {
+		return core.Release{}, ErrNotFound
+	}
+	return selected, nil
+}
+
+// ResolveReleaseForBase is part of the [Repository] interface.
+func (m *Memory) ResolveReleaseForBase(
+	_ context.Context,
+	packageID string,
+	channel string,
+	base core.Base,
+) (core.Release, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	release, ok := m.releases[packageID][releaseVariantKey(channel, &base)]
 	if !ok {
 		return core.Release{}, ErrNotFound
 	}
@@ -656,13 +706,30 @@ func (m *Memory) ResolveDefaultRelease(_ context.Context, packageID string) (cor
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	releases := m.releases[packageID]
-	if release, ok := releases["latest/stable"]; ok {
-		return release, nil
+	var latestStable *core.Release
+	for _, release := range releases {
+		if release.Channel != "latest/stable" {
+			continue
+		}
+		if latestStable == nil || release.When.After(latestStable.When) {
+			candidate := release
+			latestStable = &candidate
+		}
+	}
+	if latestStable != nil {
+		return *latestStable, nil
 	}
 	for _, release := range releases {
 		return release, nil
 	}
 	return core.Release{}, ErrNotFound
+}
+
+func releaseVariantKey(channel string, base *core.Base) string {
+	if base == nil {
+		return channel + "\x00"
+	}
+	return channel + "\x00" + base.Name + "\x00" + base.Channel + "\x00" + base.Architecture
 }
 
 // CreateCharmhubSyncRule is part of the [Repository] interface.

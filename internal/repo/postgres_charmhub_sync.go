@@ -12,9 +12,19 @@ import (
 
 // CreateCharmhubSyncRule is part of the [Repository] interface.
 func (p *Postgres) CreateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error {
-	err := p.queries().CreateCharmhubSyncRule(ctx, sqlcdb.CreateCharmhubSyncRuleParams{
+	basesJSON, err := rawJSON(rule.Bases)
+	if err != nil {
+		return err
+	}
+	architecturesJSON, err := rawJSON(rule.Architectures)
+	if err != nil {
+		return err
+	}
+	err = p.queries().CreateCharmhubSyncRule(ctx, sqlcdb.CreateCharmhubSyncRuleParams{
 		PackageName:        rule.PackageName,
 		Track:              rule.Track,
+		Bases:              basesJSON,
+		Architectures:      architecturesJSON,
 		CreatedByAccountID: rule.CreatedByAccountID,
 		CreatedAt:          rule.CreatedAt,
 		UpdatedAt:          rule.UpdatedAt,
@@ -56,7 +66,11 @@ func (p *Postgres) ListCharmhubSyncRules(ctx context.Context) ([]core.CharmhubSy
 	}
 	rules := make([]core.CharmhubSyncRule, 0, len(rows))
 	for _, row := range rows {
-		rules = append(rules, charmhubSyncRuleFromSQLC(row))
+		rule, err := charmhubSyncRuleFromListRow(row)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
 	}
 	return rules, nil
 }
@@ -72,7 +86,11 @@ func (p *Postgres) ListCharmhubSyncRulesByPackageName(
 	}
 	rules := make([]core.CharmhubSyncRule, 0, len(rows))
 	for _, row := range rows {
-		rules = append(rules, charmhubSyncRuleFromSQLC(row))
+		rule, err := charmhubSyncRuleFromListByPackageRow(row)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
 	}
 	return rules, nil
 }

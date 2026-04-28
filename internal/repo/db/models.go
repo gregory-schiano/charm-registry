@@ -44,6 +44,8 @@ type CharmhubSyncRule struct {
 	LastSyncStartedAt  pgtype.Timestamptz
 	LastSyncFinishedAt pgtype.Timestamptz
 	LastSyncError      *string
+	Bases              json.RawMessage
+	Architectures      json.RawMessage
 }
 
 type Package struct {
@@ -92,6 +94,7 @@ type Release struct {
 	WhenCreated    time.Time
 	ExpirationDate pgtype.Timestamptz
 	Progressive    *float64
+	BaseKey        *string
 }
 
 type ResourceDefinition struct {

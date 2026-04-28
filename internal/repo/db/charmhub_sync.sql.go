@@ -7,6 +7,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -14,14 +15,16 @@ import (
 
 const createCharmhubSyncRule = `-- name: CreateCharmhubSyncRule :exec
 INSERT INTO charmhub_sync_rules (
-    package_name, track, created_by_account_id, created_at, updated_at,
+    package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
     last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type CreateCharmhubSyncRuleParams struct {
 	PackageName        string
 	Track              string
+	Bases              json.RawMessage
+	Architectures      json.RawMessage
 	CreatedByAccountID string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -35,6 +38,8 @@ func (q *Queries) CreateCharmhubSyncRule(ctx context.Context, arg CreateCharmhub
 	_, err := q.db.Exec(ctx, createCharmhubSyncRule,
 		arg.PackageName,
 		arg.Track,
+		arg.Bases,
+		arg.Architectures,
 		arg.CreatedByAccountID,
 		arg.CreatedAt,
 		arg.UpdatedAt,
@@ -66,24 +71,40 @@ func (q *Queries) DeleteCharmhubSyncRule(ctx context.Context, arg DeleteCharmhub
 }
 
 const listCharmhubSyncRules = `-- name: ListCharmhubSyncRules :many
-SELECT package_name, track, created_by_account_id, created_at, updated_at,
+SELECT package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
        last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
 FROM charmhub_sync_rules
 ORDER BY package_name ASC, track ASC
 `
 
-func (q *Queries) ListCharmhubSyncRules(ctx context.Context) ([]CharmhubSyncRule, error) {
+type ListCharmhubSyncRulesRow struct {
+	PackageName        string
+	Track              string
+	Bases              json.RawMessage
+	Architectures      json.RawMessage
+	CreatedByAccountID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastSyncStatus     string
+	LastSyncStartedAt  pgtype.Timestamptz
+	LastSyncFinishedAt pgtype.Timestamptz
+	LastSyncError      *string
+}
+
+func (q *Queries) ListCharmhubSyncRules(ctx context.Context) ([]ListCharmhubSyncRulesRow, error) {
 	rows, err := q.db.Query(ctx, listCharmhubSyncRules)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CharmhubSyncRule{}
+	items := []ListCharmhubSyncRulesRow{}
 	for rows.Next() {
-		var i CharmhubSyncRule
+		var i ListCharmhubSyncRulesRow
 		if err := rows.Scan(
 			&i.PackageName,
 			&i.Track,
+			&i.Bases,
+			&i.Architectures,
 			&i.CreatedByAccountID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -103,25 +124,41 @@ func (q *Queries) ListCharmhubSyncRules(ctx context.Context) ([]CharmhubSyncRule
 }
 
 const listCharmhubSyncRulesByPackageName = `-- name: ListCharmhubSyncRulesByPackageName :many
-SELECT package_name, track, created_by_account_id, created_at, updated_at,
+SELECT package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
        last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
 FROM charmhub_sync_rules
 WHERE package_name = $1
 ORDER BY track ASC
 `
 
-func (q *Queries) ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]CharmhubSyncRule, error) {
+type ListCharmhubSyncRulesByPackageNameRow struct {
+	PackageName        string
+	Track              string
+	Bases              json.RawMessage
+	Architectures      json.RawMessage
+	CreatedByAccountID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastSyncStatus     string
+	LastSyncStartedAt  pgtype.Timestamptz
+	LastSyncFinishedAt pgtype.Timestamptz
+	LastSyncError      *string
+}
+
+func (q *Queries) ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]ListCharmhubSyncRulesByPackageNameRow, error) {
 	rows, err := q.db.Query(ctx, listCharmhubSyncRulesByPackageName, packageName)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CharmhubSyncRule{}
+	items := []ListCharmhubSyncRulesByPackageNameRow{}
 	for rows.Next() {
-		var i CharmhubSyncRule
+		var i ListCharmhubSyncRulesByPackageNameRow
 		if err := rows.Scan(
 			&i.PackageName,
 			&i.Track,
+			&i.Bases,
+			&i.Architectures,
 			&i.CreatedByAccountID,
 			&i.CreatedAt,
 			&i.UpdatedAt,

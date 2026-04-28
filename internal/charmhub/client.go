@@ -30,6 +30,7 @@ func (e *APIError) Error() string {
 type PackageChannel struct {
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
+	ChannelMap     []ChannelMap   `json:"channel-map"`
 	Result         PackageResult  `json:"result"`
 	DefaultRelease DefaultRelease `json:"default-release"`
 	Type           string         `json:"type"`
@@ -95,6 +96,11 @@ type ReleaseRevision struct {
 
 type Relation struct {
 	Interface string `json:"interface"`
+}
+
+type ChannelMap struct {
+	Channel  ReleaseChannel  `json:"channel"`
+	Revision ReleaseRevision `json:"revision"`
 }
 
 func (c *ReleaseChannel) UnmarshalJSON(data []byte) error {
@@ -237,6 +243,151 @@ func (c *Client) GetChannel(ctx context.Context, name, channel string) (PackageC
 	return out, nil
 }
 
+func (c *Client) GetInfo(ctx context.Context, name string) (PackageChannel, error) {
+	query := url.Values{}
+	query.Set("fields", "channel-map,result")
+	endpoint := c.baseURL + "/v2/charms/info/" + url.PathEscape(name) + "?" + query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return PackageChannel{}, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+
+	var out PackageChannel
+	if err := json.Unmarshal(body, &out); err != nil {
+		return PackageChannel{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) RefreshChannel(ctx context.Context, name, channel string, base core.Base) (PackageChannel, error) {
+	request := map[string]any{
+		"context": []any{},
+		"fields": []string{
+			"bases",
+			"config-yaml",
+			"download",
+			"id",
+			"metadata-yaml",
+			"name",
+			"resources",
+			"revision",
+			"summary",
+			"type",
+			"version",
+		},
+		"actions": []any{map[string]any{
+			"action":       "refresh",
+			"instance-key": "charmhub-sync",
+			"name":         name,
+			"channel":      channel,
+			"base": map[string]string{
+				"architecture": base.Architecture,
+				"name":         base.Name,
+				"channel":      base.Channel,
+			},
+		}},
+	}
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v2/charms/refresh", strings.NewReader(string(payload)))
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return PackageChannel{}, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+
+	var refresh refreshResponseEnvelope
+	if err := json.Unmarshal(body, &refresh); err != nil {
+		return PackageChannel{}, err
+	}
+	if len(refresh.ErrorList) > 0 {
+		return PackageChannel{}, fmt.Errorf("charmhub refresh failed: %s", refresh.ErrorList[0].Message)
+	}
+	if len(refresh.Results) == 0 {
+		return PackageChannel{}, fmt.Errorf("charmhub refresh returned no results")
+	}
+	result := refresh.Results[0]
+	if result.Error != nil {
+		return PackageChannel{}, fmt.Errorf("charmhub refresh failed: %s", result.Error.Message)
+	}
+	releasedAt, err := parseCharmhubTime(result.ReleasedAt)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	createdAt, err := parseCharmhubTime(result.Charm.CreatedAt)
+	if err != nil {
+		return PackageChannel{}, err
+	}
+	resources := make([]ReleaseResource, 0, len(result.Charm.Resources))
+	for _, resource := range result.Charm.Resources {
+		resources = append(resources, ReleaseResource{
+			Description: resource.Description,
+			Download:    resource.Download,
+			Filename:    resource.Filename,
+			Name:        resource.Name,
+			Revision:    resource.Revision,
+			Type:        resource.Type,
+		})
+	}
+	return PackageChannel{
+		ID:   result.ID,
+		Name: result.Name,
+		Type: result.Charm.Type,
+		DefaultRelease: DefaultRelease{
+			Channel: ReleaseChannel{
+				Base:       &base,
+				Name:       result.EffectiveChannel,
+				ReleasedAt: releasedAt,
+				Risk:       riskFromChannel(result.EffectiveChannel),
+				Track:      trackFromChannel(result.EffectiveChannel),
+			},
+			Resources: resources,
+			Revision: ReleaseRevision{
+				Bases:        result.Charm.Bases,
+				ConfigYAML:   result.Charm.ConfigYAML,
+				CreatedAt:    createdAt,
+				Download:     result.Charm.Download,
+				MetadataYAML: result.Charm.MetadataYAML,
+				Revision:     result.Charm.Revision,
+				Version:      result.Charm.Version,
+			},
+		},
+	}, nil
+}
+
 func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifactURL, nil)
 	if err != nil {
@@ -257,6 +408,53 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
+}
+
+type refreshResponseEnvelope struct {
+	Results   []refreshResult `json:"results"`
+	ErrorList []apiError      `json:"error-list"`
+}
+
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type refreshResult struct {
+	Charm            refreshCharm `json:"charm"`
+	EffectiveChannel string       `json:"effective-channel"`
+	Error            *apiError    `json:"error"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	ReleasedAt       string       `json:"released-at"`
+}
+
+type refreshCharm struct {
+	Bases        []core.Base       `json:"bases"`
+	ConfigYAML   string            `json:"config-yaml"`
+	CreatedAt    string            `json:"created-at"`
+	Download     core.Download     `json:"download"`
+	ID           string            `json:"id"`
+	MetadataYAML string            `json:"metadata-yaml"`
+	Name         string            `json:"name"`
+	Resources    []ReleaseResource `json:"resources"`
+	Revision     int               `json:"revision"`
+	Summary      string            `json:"summary"`
+	Type         string            `json:"type"`
+	Version      string            `json:"version"`
+}
+
+func trackFromChannel(channel string) string {
+	track, _, _ := strings.Cut(channel, "/")
+	return track
+}
+
+func riskFromChannel(channel string) string {
+	_, risk, ok := strings.Cut(channel, "/")
+	if !ok {
+		return ""
+	}
+	return risk
 }
 
 func parseCharmhubTime(raw string) (time.Time, error) {

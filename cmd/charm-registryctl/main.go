@@ -23,12 +23,25 @@ type cliConfig struct {
 type charmhubSyncRule struct {
 	Name               string     `json:"name"`
 	Track              string     `json:"track"`
+	Bases              []string   `json:"bases"`
+	Architectures      []string   `json:"architectures"`
 	Status             string     `json:"status"`
 	LastSyncStartedAt  *time.Time `json:"last-sync-started-at"`
 	LastSyncFinishedAt *time.Time `json:"last-sync-finished-at"`
 	LastSyncError      *string    `json:"last-sync-error"`
 	CreatedAt          time.Time  `json:"created-at"`
 	UpdatedAt          time.Time  `json:"updated-at"`
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
 }
 
 type charmhubSyncRuleListResponse struct {
@@ -103,13 +116,22 @@ func runSyncList(ctx context.Context, cfg cliConfig, stdout io.Writer) error {
 		return err
 	}
 	writer := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(writer, "NAME\tTRACK\tSTATUS\tLAST_ERROR")
+	fmt.Fprintln(writer, "NAME\tTRACK\tBASES\tARCHES\tSTATUS\tLAST_ERROR")
 	for _, rule := range payload.Rules {
 		lastError := ""
 		if rule.LastSyncError != nil {
 			lastError = *rule.LastSyncError
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", rule.Name, rule.Track, rule.Status, lastError)
+		fmt.Fprintf(
+			writer,
+			"%s\t%s\t%s\t%s\t%s\t%s\n",
+			rule.Name,
+			rule.Track,
+			formatFilter(rule.Bases),
+			formatFilter(rule.Architectures),
+			rule.Status,
+			lastError,
+		)
 	}
 	return writer.Flush()
 }
@@ -118,7 +140,11 @@ func runSyncAdd(ctx context.Context, cfg cliConfig, args []string, stdout, stder
 	fs := flag.NewFlagSet("sync add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var track string
+	var bases stringListFlag
+	var architectures stringListFlag
 	fs.StringVar(&track, "track", "", "Charmhub track to synchronize")
+	fs.Var(&bases, "base", "Base to synchronize, for example ubuntu@22.04. May be repeated")
+	fs.Var(&architectures, "arch", "Architecture to synchronize, for example amd64. May be repeated")
 	name := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name = args[0]
@@ -137,14 +163,23 @@ func runSyncAdd(ctx context.Context, cfg cliConfig, args []string, stdout, stder
 		return errors.New("usage: charm-registryctl sync add <name> --track <track>")
 	}
 	var payload charmhubSyncRule
-	if err := doJSON(ctx, cfg, http.MethodPost, "/v1/admin/charmhub-sync", map[string]string{
-		"name":  name,
-		"track": track,
+	if err := doJSON(ctx, cfg, http.MethodPost, "/v1/admin/charmhub-sync", map[string]any{
+		"name":          name,
+		"track":         track,
+		"bases":         []string(bases),
+		"architectures": []string(architectures),
 	}, &payload); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "scheduled sync for %s track %s\n", payload.Name, payload.Track)
 	return nil
+}
+
+func formatFilter(values []string) string {
+	if len(values) == 0 {
+		return "all"
+	}
+	return strings.Join(values, ",")
 }
 
 func runSyncRemove(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {

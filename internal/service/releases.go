@@ -336,7 +336,13 @@ func (s *Service) resolveReleaseAndRevision(
 	}
 
 	if channel != "" {
-		release, err := s.repo.ResolveRelease(ctx, pkg.ID, channel)
+		var release core.Release
+		var err error
+		if action.Base != nil {
+			release, err = s.repo.ResolveReleaseForBase(ctx, pkg.ID, channel, *action.Base)
+		} else {
+			release, err = s.repo.ResolveRelease(ctx, pkg.ID, channel)
+		}
 		if err != nil {
 			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
 		}
