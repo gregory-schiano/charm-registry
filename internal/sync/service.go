@@ -131,6 +131,7 @@ func (m *Manager) Enqueue(packageName string) {
 	case m.wake <- struct{}{}:
 	default:
 	}
+	slog.DebugContext(context.Background(), "charmhub sync enqueued", "package", packageName)
 }
 
 func (m *Manager) run(ctx context.Context) {
@@ -157,6 +158,9 @@ func (m *Manager) run(ctx context.Context) {
 
 func (m *Manager) runPending(ctx context.Context) {
 	packageNames := m.takePending()
+	if len(packageNames) > 0 {
+		slog.DebugContext(ctx, "processing pending charmhub sync queue", "package_count", len(packageNames))
+	}
 	for _, packageName := range packageNames {
 		if err := m.service.reconcilePackage(ctx, packageName); err != nil {
 			slog.ErrorContext(ctx, "charmhub sync failed", "package", packageName, "error", err)
@@ -179,6 +183,7 @@ func (m *Manager) runAll(ctx context.Context) {
 		packageNames = append(packageNames, packageName)
 	}
 	slices.Sort(packageNames)
+	slog.DebugContext(ctx, "processing scheduled charmhub sync", "package_count", len(packageNames))
 	for _, packageName := range packageNames {
 		if err := m.service.reconcilePackage(ctx, packageName); err != nil {
 			slog.ErrorContext(ctx, "charmhub sync failed", "package", packageName, "error", err)
@@ -255,6 +260,13 @@ func (s *Service) AddCharmhubSyncRule(
 	if err := s.syncRules.CreateCharmhubSyncRule(ctx, rule); err != nil {
 		return core.CharmhubSyncRule{}, translateRepoError(err, messageSyncRuleAlreadyExists)
 	}
+	slog.InfoContext(ctx, "charmhub sync rule added",
+		"package", rule.PackageName,
+		"track", rule.Track,
+		"base_count", len(rule.Bases),
+		"architecture_count", len(rule.Architectures),
+		"account_id", identity.Account.ID,
+	)
 	s.enqueue(packageName)
 	return rule, nil
 }
@@ -284,6 +296,11 @@ func (s *Service) RemoveCharmhubSyncRule(ctx context.Context, identity core.Iden
 		if err := s.syncRules.UpdateCharmhubSyncRule(ctx, rule); err != nil {
 			return translateRepoError(err, messageSyncRuleNotFound)
 		}
+		slog.InfoContext(ctx, "charmhub sync rule marked for deletion",
+			"package", rule.PackageName,
+			"track", rule.Track,
+			"account_id", identity.Account.ID,
+		)
 		s.enqueue(packageName)
 		return nil
 	}
@@ -305,6 +322,11 @@ func (s *Service) TriggerCharmhubSync(ctx context.Context, identity core.Identit
 	if len(rules) == 0 {
 		return newError(service.ErrorKindNotFound, "not-found", "package is not configured for Charmhub synchronization")
 	}
+	slog.InfoContext(ctx, "charmhub sync manually triggered",
+		"package", packageName,
+		"rule_count", len(rules),
+		"account_id", identity.Account.ID,
+	)
 	s.enqueue(packageName)
 	return nil
 }
@@ -420,6 +442,13 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func firstLink(values []string) string {

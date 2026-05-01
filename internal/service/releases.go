@@ -58,6 +58,14 @@ func (s *Service) CreateRelease(
 		if err := s.repo.ReplaceRelease(ctx, pkg.ID, request); err != nil {
 			return nil, err
 		}
+		slog.InfoContext(ctx, "release published",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"channel", request.Channel,
+			"revision", request.Revision,
+			"resource_count", len(request.Resources),
+			"account_id", identity.Account.ID,
+		)
 		released = append(released, request)
 	}
 	pkg.Status = "published"
@@ -190,7 +198,18 @@ func (s *Service) CreateTracks(
 			tracks[index].CreatedAt = now
 		}
 	}
-	return s.repo.CreateTracks(ctx, pkg.ID, tracks)
+	created, err := s.repo.CreateTracks(ctx, pkg.ID, tracks)
+	if err != nil {
+		return 0, err
+	}
+	slog.InfoContext(ctx, "tracks created",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"requested_count", len(tracks),
+		"created_count", created,
+		"account_id", identity.Account.ID,
+	)
+	return created, nil
 }
 
 // ResolveRefresh resolves refresh actions for one or more packages.
@@ -347,6 +366,13 @@ func (s *Service) resolveReleaseAndRevision(
 			When:           revision.CreatedAt,
 			ExpirationDate: nil,
 		}
+		slog.DebugContext(ctx, "refresh resolved explicit revision",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"revision", revision.Revision,
+			"requested_channel", requestedChannel,
+			"normalized_channel", channel,
+		)
 		return release, revision, channel, redirect, nil
 	}
 
@@ -368,6 +394,14 @@ func (s *Service) resolveReleaseAndRevision(
 		if err != nil {
 			return core.Release{}, core.Revision{}, "", "", err
 		}
+		slog.DebugContext(ctx, "refresh resolved channel",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"requested_channel", requestedChannel,
+			"resolved_channel", resolvedChannel,
+			"revision", release.Revision,
+			"base", release.Base,
+		)
 		return release, revision, resolvedChannel, redirect, nil
 	}
 
@@ -379,6 +413,13 @@ func (s *Service) resolveReleaseAndRevision(
 	if err != nil {
 		return core.Release{}, core.Revision{}, "", "", err
 	}
+	slog.DebugContext(ctx, "refresh resolved default release",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"channel", release.Channel,
+		"revision", release.Revision,
+		"base", release.Base,
+	)
 	return release, revision, release.Channel, release.Channel, nil
 }
 

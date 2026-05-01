@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -131,6 +132,12 @@ func (s *Service) PushResource(
 		resourceRevision.OCIImageDigest = descriptor.Digest
 		resourceRevision.ObjectKey = ""
 		resourceRevision.Size = int64(len(payload))
+		slog.DebugContext(ctx, "resource upload treated as OCI image blob",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"resource", resourceName,
+			"digest", resourceRevision.OCIImageDigest,
+		)
 	}
 	if err := s.repo.CreateResourceRevision(ctx, resourceRevision); err != nil {
 		return "", err
@@ -138,6 +145,16 @@ func (s *Service) PushResource(
 	if err := s.repo.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "resource revision published",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"resource", resourceDef.Name,
+		"resource_type", resourceRevision.Type,
+		"revision", resourceRevision.Revision,
+		"package_revision", intPtrValue(resourceRevision.PackageRevision),
+		"upload_id", upload.ID,
+		"account_id", identity.Account.ID,
+	)
 	return fmt.Sprintf("/v1/charm/%s/revisions/review?upload-id=%s", charmName, upload.ID), nil
 }
 
@@ -203,8 +220,24 @@ func (s *Service) UpdateResourceRevisions(
 		if err := s.repo.UpdateResourceRevision(ctx, item); err != nil {
 			return updated, err
 		}
+		slog.DebugContext(ctx, "resource revision metadata updated",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"resource", resourceDef.Name,
+			"revision", item.Revision,
+			"base_count", len(item.Bases),
+			"architecture_count", len(item.Architectures),
+			"account_id", identity.Account.ID,
+		)
 		updated++
 	}
+	slog.InfoContext(ctx, "resource revisions updated",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"resource", resourceDef.Name,
+		"updated_count", updated,
+		"account_id", identity.Account.ID,
+	)
 	return updated, nil
 }
 
@@ -242,6 +275,13 @@ func (s *Service) OCIImageUploadCredentials(
 	if err != nil {
 		return ociImageUploadCredentialsResponse{}, err
 	}
+	slog.InfoContext(ctx, "OCI image upload credentials issued",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"resource", resourceName,
+		"image_name", imageName,
+		"account_id", identity.Account.ID,
+	)
 	return ociImageUploadCredentialsResponse{
 		ImageName: imageName,
 		Username:  username,
@@ -276,6 +316,15 @@ func (s *Service) OCIImageBlob(
 		return "", err
 	}
 	content, err := s.renderOCIImageBlob(pkg, resourceName, digest)
+	if err == nil {
+		slog.DebugContext(ctx, "OCI image blob rendered",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"resource", resourceName,
+			"digest", digest,
+			"account_id", identity.Account.ID,
+		)
+	}
 	return string(content), err
 }
 

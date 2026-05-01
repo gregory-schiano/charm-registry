@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -85,6 +86,14 @@ func (s *Service) IssueStoreToken(
 	if err := s.accounts.CreateStoreToken(ctx, token); err != nil {
 		return "", core.StoreToken{}, err
 	}
+	slog.InfoContext(ctx, "store token issued",
+		"account_id", identity.Account.ID,
+		"session_id", token.SessionID,
+		"permission_count", len(token.Permissions),
+		"package_scope_count", len(token.Packages),
+		"channel_scope_count", len(token.Channels),
+		"valid_until", token.ValidUntil,
+	)
 	return raw, token, nil
 }
 
@@ -126,7 +135,14 @@ func (s *Service) RevokeStoreToken(ctx context.Context, identity core.Identity, 
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
-	return s.accounts.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID)
+	if err := s.accounts.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "store token revoked",
+		"account_id", identity.Account.ID,
+		"session_id", sessionID,
+	)
+	return nil
 }
 
 // MacaroonInfo returns Charmhub-compatible token account details.

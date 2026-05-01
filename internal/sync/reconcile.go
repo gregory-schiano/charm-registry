@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,11 +24,13 @@ import (
 )
 
 func (s *Service) reconcilePackage(ctx context.Context, packageName string) error {
+	slog.InfoContext(ctx, "charmhub sync reconciliation started", "package", packageName)
 	rules, err := s.syncRules.ListCharmhubSyncRulesByPackageName(ctx, packageName)
 	if err != nil {
 		return err
 	}
 	if len(rules) == 0 {
+		slog.DebugContext(ctx, "charmhub sync has no rules; cleaning package", "package", packageName)
 		return s.cleanupSyncedPackage(ctx, packageName)
 	}
 	slices.SortFunc(rules, func(left, right core.CharmhubSyncRule) int {
@@ -49,11 +52,21 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 	}
 
 	if len(activeRules) == 0 {
+		slog.InfoContext(ctx, "charmhub sync deleting package after final rule removal",
+			"package", packageName,
+			"deleting_rule_count", len(deletingRules),
+		)
 		return s.reconcileDeletingPackage(ctx, packageName, deletingRules)
 	}
 
 	var errs []error
 	for _, rule := range activeRules {
+		slog.InfoContext(ctx, "charmhub sync track started",
+			"package", packageName,
+			"track", rule.Track,
+			"base_count", len(rule.Bases),
+			"architecture_count", len(rule.Architectures),
+		)
 		rule = s.ruleWithStatus(rule, charmhubSyncStatusRunning, nil)
 		if updateErr := s.syncRules.UpdateCharmhubSyncRule(ctx, rule); updateErr != nil {
 			errs = append(errs, updateErr)
@@ -62,6 +75,11 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 
 		updatedPkg, syncErr := s.syncCharmhubTrack(ctx, pkg, activeRules, rule)
 		if syncErr != nil {
+			slog.InfoContext(ctx, "charmhub sync track failed",
+				"package", packageName,
+				"track", rule.Track,
+				"error", syncErr,
+			)
 			errs = append(errs, syncErr)
 			rule = s.ruleWithStatus(rule, charmhubSyncStatusError, syncErr)
 			if updateErr := s.syncRules.UpdateCharmhubSyncRule(ctx, rule); updateErr != nil {
@@ -70,6 +88,11 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 			continue
 		}
 		pkg = updatedPkg
+		slog.InfoContext(ctx, "charmhub sync track completed",
+			"package", packageName,
+			"track", rule.Track,
+			"package_id", pkg.ID,
+		)
 		rule = s.ruleWithStatus(rule, charmhubSyncStatusOK, nil)
 		if updateErr := s.syncRules.UpdateCharmhubSyncRule(ctx, rule); updateErr != nil {
 			errs = append(errs, updateErr)
@@ -79,7 +102,15 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 	if pruneErr := s.pruneDeletedRules(ctx, pkg, activeRules, deletingRules); pruneErr != nil {
 		errs = append(errs, pruneErr)
 	}
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "charmhub sync reconciliation completed",
+		"package", packageName,
+		"active_rule_count", len(activeRules),
+		"deleting_rule_count", len(deletingRules),
+	)
+	return nil
 }
 
 func (s *Service) reconcileDeletingPackage(
@@ -199,6 +230,11 @@ func (s *Service) syncCharmhubTrack(
 	if err != nil {
 		return pkg, err
 	}
+	slog.DebugContext(ctx, "charmhub sync selected channel variants",
+		"package", rule.PackageName,
+		"track", rule.Track,
+		"variant_count", len(present),
+	)
 	if len(present) == 0 {
 		return s.pruneEmptyTrack(ctx, pkg, rule.Track)
 	}
@@ -320,6 +356,11 @@ func (s *Service) ensureSyncedPackage(
 	if err := s.repo.CreatePackage(ctx, created); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "charmhub synced package created",
+		"package", created.Name,
+		"package_id", created.ID,
+		"default_track", stringValue(created.DefaultTrack),
+	)
 	return created, s.ensureCharmhubTrack(ctx, created, rule.Track)
 }
 
@@ -354,6 +395,14 @@ func (s *Service) syncTrackReleases(
 		if err := s.repo.ReplaceRelease(ctx, pkg.ID, release); err != nil {
 			return core.Package{}, err
 		}
+		slog.InfoContext(ctx, "charmhub release synced",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"channel", release.Channel,
+			"revision", release.Revision,
+			"resource_count", len(release.Resources),
+			"base", release.Base,
+		)
 	}
 	return pkg, nil
 }
@@ -383,6 +432,13 @@ func (s *Service) removeStaleTrackReleases(
 			!errors.Is(err, repo.ErrNotFound) {
 			return err
 		}
+		slog.InfoContext(ctx, "stale charmhub release pruned",
+			"package_id", packageID,
+			"track", track,
+			"channel", release.Channel,
+			"revision", release.Revision,
+			"base", release.Base,
+		)
 	}
 	return nil
 }
@@ -395,6 +451,12 @@ func (s *Service) persistSyncedPackage(ctx context.Context, pkg core.Package) (c
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
 		return core.Package{}, err
 	}
+	slog.DebugContext(ctx, "charmhub synced package persisted",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"default_track", stringValue(pkg.DefaultTrack),
+		"track_count", len(pkg.Tracks),
+	)
 	return pkg, nil
 }
 
@@ -412,6 +474,13 @@ func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, tra
 		Name:      track,
 		CreatedAt: s.now(),
 	}})
+	if err == nil {
+		slog.InfoContext(ctx, "charmhub track created",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"track", track,
+		)
+	}
 	return err
 }
 
@@ -502,6 +571,11 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 	_, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
 	switch {
 	case err == nil:
+		slog.DebugContext(ctx, "charmhub revision already present",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"revision", revisionNumber,
+		)
 		return pkg, nil
 	case !errors.Is(err, repo.ErrNotFound):
 		return core.Package{}, err
@@ -527,6 +601,13 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 	if err := s.upsertManifestResourceDefinitions(ctx, updatedPkg.ID, archive.Manifest); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "charmhub revision imported",
+		"package", updatedPkg.Name,
+		"package_id", updatedPkg.ID,
+		"revision", revisionNumber,
+		"size", len(revisionPayload),
+		"resource_definition_count", len(archive.Manifest.Resources),
+	)
 	return updatedPkg, nil
 }
 
@@ -563,6 +644,12 @@ func (s *Service) ensureCharmhubResourceRevision(
 	_, err = s.repo.GetResourceRevision(ctx, resourceDef.ID, resource.Revision)
 	switch {
 	case err == nil:
+		slog.DebugContext(ctx, "charmhub resource revision already present",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"resource", resource.Name,
+			"revision", resource.Revision,
+		)
 		return nil
 	case !errors.Is(err, repo.ErrNotFound):
 		return err
@@ -592,7 +679,20 @@ func (s *Service) ensureCharmhubResourceRevision(
 	if item.Size == 0 {
 		item.Size = int64(len(resourcePayload))
 	}
-	return s.repo.CreateResourceRevision(ctx, item)
+	if err := s.repo.CreateResourceRevision(ctx, item); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "charmhub resource revision imported",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"resource", item.Name,
+		"resource_type", item.Type,
+		"revision", item.Revision,
+		"package_revision", revisionNumber,
+		"size", item.Size,
+		"oci_digest", item.OCIImageDigest,
+	)
+	return nil
 }
 
 func (s *Service) downloadAndParseRevision(ctx context.Context, downloadURL string) ([]byte, core.CharmArchive, error) {
@@ -632,6 +732,12 @@ func (s *Service) updatePackageFromUpstream(
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
 		return core.Package{}, err
 	}
+	slog.DebugContext(ctx, "charmhub package metadata updated from upstream",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"title", stringValue(pkg.Title),
+		"track_count", len(pkg.Tracks),
+	)
 	return pkg, nil
 }
 
@@ -680,7 +786,17 @@ func (s *Service) createRevisionRecord(
 	if err != nil {
 		return err
 	}
-	return s.repo.CreateRevision(ctx, revision)
+	if err := s.repo.CreateRevision(ctx, revision); err != nil {
+		return err
+	}
+	slog.DebugContext(ctx, "charmhub revision record created",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"revision", revision.Revision,
+		"version", revision.Version,
+		"base_count", len(revision.Bases),
+	)
+	return nil
 }
 
 func (s *Service) upsertManifestResourceDefinitions(ctx context.Context, packageID string, manifest core.CharmManifest) error {
@@ -767,6 +883,12 @@ func (s *Service) populateOCIResourceRevision(
 	if err != nil {
 		return core.Package{}, core.ResourceRevision{}, err
 	}
+	slog.InfoContext(ctx, "charmhub OCI resource mirrored",
+		"package", updatedPkg.Name,
+		"package_id", updatedPkg.ID,
+		"resource", resource.Name,
+		"digest", core.FirstNonEmpty(mirroredDigest, blob.Digest),
+	)
 	item.OCIImageDigest = core.FirstNonEmpty(mirroredDigest, blob.Digest)
 	item.ObjectKey = ""
 	if item.Size == 0 {
@@ -836,7 +958,14 @@ func (s *Service) cleanupSyncedPackage(ctx context.Context, packageName string) 
 	if err := s.deleteAllTracks(ctx, pkg.ID); err != nil {
 		return err
 	}
-	return s.repo.DeletePackage(ctx, pkg.ID)
+	if err := s.repo.DeletePackage(ctx, pkg.ID); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "charmhub synced package deleted",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+	)
+	return nil
 }
 
 func validTracksFromRules(rules []core.CharmhubSyncRule) map[string]struct{} {
@@ -864,6 +993,11 @@ func (s *Service) pruneOutOfScopeReleases(
 			if err := s.repo.DeleteRelease(ctx, packageID, release.Channel); err != nil && !errors.Is(err, repo.ErrNotFound) {
 				return nil, nil, err
 			}
+			slog.InfoContext(ctx, "out-of-scope charmhub release deleted",
+				"package_id", packageID,
+				"channel", release.Channel,
+				"revision", release.Revision,
+			)
 			continue
 		}
 		referencedRevisions[release.Revision] = struct{}{}
@@ -897,6 +1031,10 @@ func (s *Service) pruneDanglingRevisions(ctx context.Context, packageID string, 
 		if err := s.repo.DeleteRevision(ctx, packageID, revision.Revision); err != nil {
 			return err
 		}
+		slog.InfoContext(ctx, "dangling charmhub revision deleted",
+			"package_id", packageID,
+			"revision", revision.Revision,
+		)
 	}
 	return nil
 }
@@ -944,6 +1082,12 @@ func (s *Service) pruneResourceDefinitionRevisions(
 		if err := s.repo.DeleteResourceRevision(ctx, def.ID, revision.Revision); err != nil {
 			return err
 		}
+		slog.InfoContext(ctx, "dangling charmhub resource revision deleted",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"resource", def.Name,
+			"revision", revision.Revision,
+		)
 	}
 
 	remaining, err := s.repo.ListResourceRevisions(ctx, def.ID)
@@ -976,6 +1120,12 @@ func (s *Service) deleteResourceArtifact(
 		return err
 	}
 	seenDigests[revision.OCIImageDigest] = struct{}{}
+	slog.InfoContext(ctx, "dangling charmhub OCI image deleted",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"resource", resourceName,
+		"digest", revision.OCIImageDigest,
+	)
 	return nil
 }
 
@@ -989,6 +1139,10 @@ func (s *Service) pruneDanglingTracks(ctx context.Context, packageID string, val
 			continue
 		}
 		_ = s.repo.DeleteTrack(ctx, packageID, track.Name)
+		slog.InfoContext(ctx, "dangling charmhub track deleted",
+			"package_id", packageID,
+			"track", track.Name,
+		)
 	}
 	return nil
 }

@@ -270,6 +270,13 @@ func stringValue(value *string) string {
 	return *value
 }
 
+func intPtrValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 func firstLink(values []string) string {
 	if len(values) == 0 {
 		return ""

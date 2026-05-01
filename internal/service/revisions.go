@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -70,6 +71,12 @@ func (s *Service) CreateUploadStream(ctx context.Context, filename string, paylo
 	if err := s.repo.CreateUpload(ctx, upload); err != nil {
 		return core.Upload{}, err
 	}
+	slog.DebugContext(ctx, "upload stored",
+		"upload_id", upload.ID,
+		"filename", upload.Filename,
+		"kind", upload.Kind,
+		"size", upload.Size,
+	)
 	return upload, nil
 }
 
@@ -110,6 +117,12 @@ func (s *Service) PushRevision(
 	}
 	archive, err := charm.ParseArchiveWithMaxFileSize(payload, s.cfg.MaxArchiveFileBytes)
 	if err != nil {
+		slog.InfoContext(ctx, "revision upload rejected",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"upload_id", upload.ID,
+			"error", err,
+		)
 		reviewErr := []core.APIError{{Code: "invalid-archive", Message: err.Error()}}
 		if approveErr := s.repo.ApproveUpload(ctx, upload.ID, nil, reviewErr); approveErr != nil {
 			return "", fmt.Errorf("cannot record upload review failure: %w", approveErr)
@@ -194,6 +207,14 @@ func (s *Service) PushRevision(
 	}); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "revision published",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"revision", rev.Revision,
+		"upload_id", upload.ID,
+		"size", rev.Size,
+		"account_id", identity.Account.ID,
+	)
 	return fmt.Sprintf("/v1/charm/%s/revisions/review?upload-id=%s", charmName, upload.ID), nil
 }
 

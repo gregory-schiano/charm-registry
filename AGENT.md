@@ -214,6 +214,138 @@ From `.github/workflows/ci.yml`:
 - Don’t remove “unused” code in this repo without checking whether it is part of compatibility, test scaffolding, or generated workflow.
 - Don’t bypass the service layer for business workflows that need auth, transactions, or invariants.
 
+## Avoiding AI Sloppiness
+
+This section records concrete antipatterns that appeared in this codebase during the initial AI-assisted authoring and were cleaned up during a deep review. The goal is to keep future agent contributions from regenerating the same noise.
+
+### Tests
+
+- Don't narrate the test.
+  - No `// Arrange`, `// Act`, `// Assert` block headers.
+  - No comments that restate the assertion immediately below them.
+  - The test name and the code itself are the documentation.
+
+- Don't enumerate every interface method just to inflate coverage.
+  - One representative test per error kind beats a 15-row table that calls every method and asserts the same `ErrNotFound` on each.
+  - If every method genuinely needs to be exercised, generate the cases via reflection rather than hand-writing them.
+  - See `TestMemoryRepresentativeMethodsReturnNotFoundForMissingKeys` for the right shape.
+
+- Don't property-dump structs.
+  - Avoid long sequences of `assert.Equal(t, expected, cfg.Field)` over every field.
+  - Compare against an expected struct literal in one assertion, or assert only the fields whose parsing is non-trivial.
+  - See `TestLoadDefaults` and `configSnapshot` for the right shape.
+
+- Don't write fakes that mirror the production implementation 1:1.
+  - A fake that returns `"upstream-" + name` for any input is a trampoline; tests using it pass even when the integration is wrong.
+  - Prefer the real component (in-memory repo, `httptest.Server`) or a fake that captures intent the real one cannot — forced failures, deterministic IDs, recorded calls.
+
+- Don't assert on raw error message strings.
+  - `assert.Contains(t, err.Error(), "package not found")` couples the test to wording.
+  - Use `errors.Is`, `errors.As`, or compare `service.Error.Kind` / `Code`.
+
+- Don't call `time.Now()` inside tests when ordering or equality matters.
+  - Inject a clock. `Service.Clock` and `sync.Service.Clock` exist for this.
+  - In repo tests where ordering matters, use `time.Unix(int64(i), 0).UTC()` so values are deterministic.
+
+- Don't use placeholder fixtures like `"foo"`, `"bar"`, `"test1"`.
+  - Use realistic shapes: `"postgresql-k8s"`, `"alice@example.com"`, real-ish hash widths.
+  - Bugs around length, allowed characters, and Unicode only surface against realistic data.
+
+- Don't write hollow fuzz tests.
+  - Round-trip fuzz (`parse(format(x)) == x`) only proves invertibility.
+  - Targets should assert real invariants: no panic, parsed values inside expected ranges, no path escape, parses-or-errors-cleanly.
+
+- Don't add `t.Parallel()` to a test that calls `t.Setenv`.
+  - `Setenv` is incompatible with parallel tests or parallel ancestors and will panic at runtime.
+  - This is not a Go-version thing; it has always been the contract.
+
+- Do cover the things that actually matter, even when they're harder.
+  - Transaction rollback under partial failure — see `TestPostgresPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure`.
+  - Concurrent writers on the in-memory repo.
+  - Upload-size boundaries (`MaxUploadBytes`, `±1`).
+  - Auth-required routes returning `401` for missing or invalid tokens.
+
+### Code
+
+- Don't nil-check collaborators that are wired in `New` and never set to nil afterwards.
+  - `if s.oci == nil { ... }` inside service methods is dead code when `Service.New` always assigns it.
+  - Tests should inject a no-op or fake, never `nil`.
+
+- Don't write wrapper methods that only forward to the repo.
+  - A service method that takes an identity, calls `s.repo.X`, and returns its result earns its place only if it adds an auth check, a transaction, a transformation, or an invariant.
+
+- Don't comment what the code already says.
+  - Skip `// CreatePackage creates a package`.
+  - Skip `// is part of the [Repository] interface` — the compiler enforces it.
+  - Comments earn their place by explaining a non-obvious decision or workflow.
+
+- Don't introduce magic numbers; name them.
+  - Token TTLs, poll intervals, body-size limits, default ports — all should be named constants in the package or in `config.Config`.
+
+- Don't silently swallow errors with `_ = …`.
+  - Either handle the error (return, log, retry) or document explicitly why ignoring it is correct.
+  - Especially in cleanup paths: a failed `ApproveUpload` after a failed archive parse leaves state inconsistent.
+
+- Don't add belt-and-braces validation that masks corrupt data.
+  - `if id == nil || *id == 0 || username == "" || secret == "" { return nil }` silently drops partial rows.
+  - Distinguish "absent" (`(nil, nil)`) from "corrupt" (`(nil, error)`); fail loudly on corrupt. See the post-review `robotFromSQLC` for the right shape.
+
+- Don't duplicate string literals across handlers and helpers.
+  - Common error messages (`"package not found"`, `"upload not found"`) live as `const` in `internal/service/errors.go`.
+  - URL-construction helpers (`charmDownloadURL`, resource-download URLs) belong in one place.
+
+- Don't `io.ReadAll` an HTTP response body without a size cap.
+  - Wrap with `io.LimitReader`, or use a configured `Max*Bytes` limit. See `charmhub.NewWithLimits` and `oci.checkManifestDescriptor`.
+
+- Don't buffer large artifacts when the contract is streaming.
+  - Charm and resource downloads thread `io.ReadCloser` through the service into the handler and use `io.Copy`. The `[]byte` shortcut OOMs under modest concurrency.
+  - Uploads: `io.TeeReader` into hashers and `blob.Put` rather than `io.ReadAll` followed by `Put`.
+
+- Don't paper over complexity with `//nolint:gocognit,cyclop,nestif`.
+  - The lint disable flags a smell, not a fix. Factor the function or document a real reason it must stay monolithic.
+
+- Don't repeat handler boilerplate.
+  - Auth extraction, body-size limiting, identity propagation belong in middleware, not in every handler.
+  - The pattern is in place (`requireIdentity`); use it. The single anonymous route is grouped explicitly so the absence of auth is visible at the routing site.
+
+- Don't return `200 OK` from a POST that creates a resource.
+  - Use `201 Created` with a `Location` header for synchronous creates.
+  - Use `202 Accepted` for async work (the charmhub-sync admin endpoints already do this).
+
+### Architecture
+
+- Don't grow god interfaces.
+  - `Repository` was 50+ methods; it is now split into `HealthRepo`, `AccountRepo`, `PackageRepo`, `CharmhubSyncRepo`, with `CompositeRepo` and `Backend` for code that genuinely needs all of it.
+  - New repo methods belong in the smallest interface that covers the aggregate. Resist adding to `Backend` directly.
+
+- Don't grow god services.
+  - The Charmhub sync flow lives in `internal/sync`, not `internal/service`.
+  - When a feature has its own state machine, background loop, or system actor, give it its own package.
+
+- Don't fake authorization with synthetic accounts.
+  - Use `core.Identity.System = true`; the auth helpers (`requireAuth`, `requirePermission`, `requirePackageView`, `requirePackageManage`) short-circuit on it explicitly.
+
+- Domain types in `internal/core` should validate themselves.
+  - Use `core.NewPackage`, `core.NewRevision`, `core.NewRelease`, `core.NewStoreToken` rather than constructing the struct directly.
+  - New domain types should ship with a constructor that enforces required fields.
+
+### Reviewer self-check before sending changes
+
+Run through this list before posting a diff:
+
+- Did I add `t.Parallel()` to a test that calls `t.Setenv`? (It will panic.)
+- Did I add a comment that restates what the next line of code does?
+- Did I assert on an error message string instead of `errors.Is` or error kind?
+- Did I add an `if x == nil` for an injected dependency that is set in `New`?
+- Did I add an `_ = something` that swallows an error?
+- Did I add a `//nolint` to make a CI rule pass without addressing what it flagged?
+- Did I add `io.ReadAll` on an HTTP response body without a size cap?
+- Did I add a method to `Backend` without considering which sub-interface it belongs to?
+- Did I add a POST that returns `200 OK` instead of `201 Created` for a created resource?
+- Did I construct a `core.Package` / `core.Revision` / `core.Release` directly instead of using its `New*` constructor?
+
+If any of these are yes, fix it before sending the change.
+
 ## Good First Questions To Ask Before Changing Code
 
 - Is this a compatibility surface for `juju` or `charmcraft`?

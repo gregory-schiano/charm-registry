@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -62,6 +63,13 @@ func (s *Service) RegisterPackage(
 	}); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "package registered",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"package_type", pkg.Type,
+		"private", pkg.Private,
+		"account_id", identity.Account.ID,
+	)
 	return pkg, nil
 }
 
@@ -160,6 +168,13 @@ func (s *Service) UpdatePackage(
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "package metadata updated",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"private", pkg.Private,
+		"default_track", stringValue(pkg.DefaultTrack),
+		"account_id", identity.Account.ID,
+	)
 	return s.enrichPackage(ctx, pkg)
 }
 
@@ -183,6 +198,12 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 		return "", err
 	}
 	if len(revisions) > 0 {
+		slog.DebugContext(ctx, "package unregister rejected because revisions exist",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"revision_count", len(revisions),
+			"account_id", identity.Account.ID,
+		)
 		// The caller is authorised — the business rule (not a permission
 		// violation) prevents deletion.  HTTP 400 / "invalid-request" matches
 		// the Charmhub API contract; 403 is reserved for auth failures.
@@ -191,6 +212,11 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 	if err := s.repo.DeletePackage(ctx, pkg.ID); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "package unregistered",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"account_id", identity.Account.ID,
+	)
 	return pkg.ID, nil
 }
 
