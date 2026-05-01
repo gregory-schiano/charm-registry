@@ -7,7 +7,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// CreateTracks is part of the [Repository] interface.
 func (p *Postgres) CreateTracks(ctx context.Context, packageID string, tracks []core.Track) (int, error) {
 	var created int
 	for _, track := range tracks {
@@ -26,7 +25,6 @@ func (p *Postgres) CreateTracks(ctx context.Context, packageID string, tracks []
 	return created, nil
 }
 
-// DeleteTrack is part of the [Repository] interface.
 func (p *Postgres) DeleteTrack(ctx context.Context, packageID, trackName string) error {
 	rowsAffected, err := p.queries().DeleteTrack(ctx, sqlcdb.DeleteTrackParams{
 		PackageID: packageID,
@@ -41,7 +39,6 @@ func (p *Postgres) DeleteTrack(ctx context.Context, packageID, trackName string)
 	return nil
 }
 
-// ListTracks is part of the [Repository] interface.
 func (p *Postgres) ListTracks(ctx context.Context, packageID string) ([]core.Track, error) {
 	rows, err := p.queries().ListTracks(ctx, packageID)
 	if err != nil {
@@ -54,7 +51,6 @@ func (p *Postgres) ListTracks(ctx context.Context, packageID string) ([]core.Tra
 	return out, nil
 }
 
-// ListTracksForPackages is part of the [Repository] interface.
 func (p *Postgres) ListTracksForPackages(ctx context.Context, packageIDs []string) (map[string][]core.Track, error) {
 	out := make(map[string][]core.Track, len(packageIDs))
 	if len(packageIDs) == 0 {
@@ -64,15 +60,10 @@ func (p *Postgres) ListTracksForPackages(ctx context.Context, packageIDs []strin
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]struct{}, len(packageIDs))
 	for _, row := range rows {
 		out[row.PackageID] = append(out[row.PackageID], trackBatchFromSQLC(row))
 	}
 	for _, packageID := range packageIDs {
-		if _, ok := seen[packageID]; ok {
-			continue
-		}
-		seen[packageID] = struct{}{}
 		if _, ok := out[packageID]; !ok {
 			out[packageID] = nil
 		}

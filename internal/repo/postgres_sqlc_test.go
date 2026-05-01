@@ -42,14 +42,8 @@ func TestToInt32(t *testing.T) {
 
 func TestInt32Ptr(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	value := 42
-
-	// Act
 	ptr, err := int32Ptr(&value)
-
-	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, ptr)
 	assert.Equal(t, int32(42), *ptr)

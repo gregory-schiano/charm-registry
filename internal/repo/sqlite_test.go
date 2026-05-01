@@ -129,7 +129,7 @@ func TestSQLiteTransactionRollsBack(t *testing.T) {
 	repository := newSQLiteTestRepository(t)
 	owner := ensureSQLiteAccount(t, repository, "acc-1", "owner")
 
-	err := repository.WithinTransaction(ctx, func(tx Repository) error {
+	err := repository.WithinTransaction(ctx, func(tx CompositeRepo) error {
 		return tx.CreatePackage(ctx, core.Package{
 			ID:             "pkg-rollback",
 			Name:           "rollback",
@@ -142,7 +142,7 @@ func TestSQLiteTransactionRollsBack(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = repository.WithinTransaction(ctx, func(tx Repository) error {
+	err = repository.WithinTransaction(ctx, func(tx CompositeRepo) error {
 		if err := tx.CreatePackage(ctx, core.Package{
 			ID:             "pkg-rollback-2",
 			Name:           "rollback-2",

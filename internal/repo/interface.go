@@ -6,11 +6,12 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
-type Repository interface {
+type HealthRepo interface {
 	Ping(ctx context.Context) error
 	Migrate(ctx context.Context) error
-	WithinTransaction(ctx context.Context, fn func(Repository) error) error
+}
 
+type AccountRepo interface {
 	EnsureAccount(ctx context.Context, account core.Account) (core.Account, error)
 	GetAccountByID(ctx context.Context, accountID string) (core.Account, error)
 
@@ -18,7 +19,9 @@ type Repository interface {
 	ListStoreTokens(ctx context.Context, accountID string, includeInactive bool) ([]core.StoreToken, error)
 	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
 	RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error
+}
 
+type PackageRepo interface {
 	CreatePackage(ctx context.Context, pkg core.Package) error
 	UpdatePackage(ctx context.Context, pkg core.Package) error
 	DeletePackage(ctx context.Context, packageID string) error
@@ -61,10 +64,33 @@ type Repository interface {
 	ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error)
 	ResolveReleaseForBase(ctx context.Context, packageID string, channel string, base core.Base) (core.Release, error)
 	ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error)
+}
 
+type CharmhubSyncRepo interface {
 	CreateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error
 	DeleteCharmhubSyncRule(ctx context.Context, packageName, track string) error
 	ListCharmhubSyncRules(ctx context.Context) ([]core.CharmhubSyncRule, error)
 	ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]core.CharmhubSyncRule, error)
 	UpdateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error
 }
+
+type CompositeRepo interface {
+	AccountRepo
+	PackageRepo
+	CharmhubSyncRepo
+}
+
+type Transactor interface {
+	WithinTransaction(ctx context.Context, fn func(CompositeRepo) error) error
+}
+
+type Backend interface {
+	HealthRepo
+	Transactor
+	CompositeRepo
+}
+
+// Repository is retained as a compatibility alias for code paths that still
+// operate on a full backend implementation during the transition to smaller
+// focused repository interfaces.
+type Repository = Backend

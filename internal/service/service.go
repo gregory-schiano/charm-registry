@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gschiano/charm-registry/internal/blob"
-	charmhubclient "github.com/gschiano/charm-registry/internal/charmhub"
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -112,34 +112,43 @@ type RefreshAction struct {
 
 // Service is the application service layer.
 type Service struct {
-	cfg         config.Config
-	repo        repo.Repository
-	blobs       blob.Store
-	oci         OCIRegistry
-	charmhub    charmhubClient
-	syncManager *CharmhubSyncManager
-}
-
-type charmhubClient interface {
-	GetChannel(ctx context.Context, name, channel string) (charmhubclient.PackageChannel, error)
-	GetInfo(ctx context.Context, name string) (charmhubclient.PackageChannel, error)
-	RefreshChannel(ctx context.Context, name, channel string, base core.Base) (charmhubclient.PackageChannel, error)
-	Download(ctx context.Context, artifactURL string) ([]byte, error)
+	cfg       config.Config
+	health    repo.HealthRepo
+	tx        repo.Transactor
+	accounts  repo.AccountRepo
+	repo      repo.PackageRepo
+	syncRules repo.CharmhubSyncRepo
+	blobs     blob.Store
+	oci       OCIRegistry
+	Clock     func() time.Time
 }
 
 // New returns a [Service] backed by the provided repository and blob store.
-func New(cfg config.Config, repository repo.Repository, blobs blob.Store, oci OCIRegistry) *Service {
+func New(cfg config.Config, repository repo.Backend, blobs blob.Store, oci OCIRegistry) *Service {
 	return &Service{
-		cfg:      cfg,
-		repo:     repository,
-		blobs:    blobs,
-		oci:      oci,
-		charmhub: charmhubclient.New(cfg.CharmhubURL),
+		cfg:       cfg,
+		health:    repository,
+		tx:        repository,
+		accounts:  repository,
+		repo:      repository,
+		syncRules: repository,
+		blobs:     blobs,
+		oci:       oci,
+		Clock:     time.Now,
 	}
 }
 
-func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.Repository) error) error {
-	if err := s.repo.WithinTransaction(ctx, fn); err != nil {
+func (s *Service) now() time.Time {
+	if s.Clock == nil {
+		return time.Now().UTC()
+	}
+	return s.Clock().UTC()
+}
+
+func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.PackageRepo) error) error {
+	if err := s.tx.WithinTransaction(ctx, func(repository repo.CompositeRepo) error {
+		return fn(repository)
+	}); err != nil {
 		return fmt.Errorf("cannot complete repository transaction: %w", err)
 	}
 	return nil
@@ -147,7 +156,7 @@ func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.Re
 
 // CheckReady reports whether the service dependencies are ready to serve requests.
 func (s *Service) CheckReady(ctx context.Context) error {
-	return s.repo.Ping(ctx)
+	return s.health.Ping(ctx)
 }
 
 // GetRootDocument returns the top-level service metadata document.

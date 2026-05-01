@@ -10,12 +10,7 @@ import (
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
-func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.ListReleases(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
 		writeError(w, r, err)
@@ -24,12 +19,7 @@ func (a *API) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleRelease(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req []struct {
 		Channel   string                    `json:"channel"`
 		Revision  int                       `json:"revision"`
@@ -53,15 +43,10 @@ func (a *API) handleRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, releasedResponse{Released: released})
+	writeCreatedJSON(w, "/v1/charm/"+chi.URLParam(r, "name")+"/releases", releasedResponse{Released: released})
 }
 
-func (a *API) handleCreateTracks(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleCreateTracks(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req []core.Track
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))
@@ -72,15 +57,10 @@ func (a *API) handleCreateTracks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tracksCreatedResponse{NumTracksCreated: created})
+	writeCreatedJSON(w, "/v1/charm/"+chi.URLParam(r, "name"), tracksCreatedResponse{NumTracksCreated: created})
 }
 
-func (a *API) handleFind(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleFind(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.SearchPackages(r.Context(), identity, r.URL.Query().Get("q"))
 	if err != nil {
 		writeError(w, r, err)
@@ -89,12 +69,7 @@ func (a *API) handleFind(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleInfo(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.GetPackageInfo(r.Context(), identity, chi.URLParam(r, "name"))
 	if channel := r.URL.Query().Get("channel"); channel != "" {
 		payload, err = a.svc.GetPackageInfoForChannel(r.Context(), identity, chi.URLParam(r, "name"), channel)
@@ -111,12 +86,7 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleRefresh(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.RefreshRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))

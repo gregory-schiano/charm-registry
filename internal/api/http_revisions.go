@@ -7,15 +7,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
-func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var revision *int
 	if raw := r.URL.Query().Get("revision"); raw != "" {
 		value, parseErr := strconv.Atoi(raw)
@@ -47,12 +43,7 @@ func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, revisionListResponse{Revisions: rows})
 }
 
-func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.PushRevisionRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))
@@ -63,15 +54,10 @@ func (a *API) handlePushRevision(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, statusURLResponse{StatusURL: statusURL})
+	writeCreatedJSON(w, statusURL, statusURLResponse{StatusURL: statusURL})
 }
 
-func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.ReviewUpload(r.Context(), identity, chi.URLParam(r, "name"), r.URL.Query().Get("upload-id"))
 	if err != nil {
 		writeError(w, r, err)
@@ -80,59 +66,61 @@ func (a *API) handleReviewUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	if err := a.svc.AuthorizeUpload(identity); err != nil {
 		writeError(w, r, err)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadBytes)
-	// #nosec G120 -- MaxBytesReader bounds the multipart body size.
-	if err := r.ParseMultipartForm(a.cfg.MaxUploadBytes); err != nil {
-		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
-		return
-	}
-	file, header, err := r.FormFile("binary")
+	reader, err := r.MultipartReader()
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
 		return
 	}
-	defer file.Close()
-	payload, err := io.ReadAll(file)
-	if err != nil {
+	var uploadID *string
+	for {
+		part, partErr := reader.NextPart()
+		if partErr == io.EOF {
+			break
+		}
+		if partErr != nil {
+			writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
+			return
+		}
+		if part.FormName() != "binary" || part.FileName() == "" {
+			_, _ = io.Copy(io.Discard, part)
+			_ = part.Close()
+			continue
+		}
+		upload, uploadErr := a.svc.CreateUploadStream(r.Context(), part.FileName(), part)
+		_ = part.Close()
+		if uploadErr != nil {
+			writeJSON(w, http.StatusInternalServerError, uploadResultResponse{Successful: false})
+			return
+		}
+		uploadID = &upload.ID
+	}
+	if uploadID == nil {
 		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
 		return
 	}
-	upload, err := a.svc.CreateUpload(r.Context(), header.Filename, payload)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, uploadResultResponse{Successful: false})
-		return
-	}
-	writeJSON(w, http.StatusOK, uploadResultResponse{Successful: true, UploadID: &upload.ID})
+	writeJSON(w, http.StatusOK, uploadResultResponse{
+		Successful:     true,
+		UploadID:       uploadID,
+		UploadIDCompat: uploadID,
+	})
 }
 
-func (a *API) handleCharmDownload(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleCharmDownload(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	packageID, revision, parseErr := parseCharmDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
 		writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
-	payload, err := a.svc.DownloadCharm(r.Context(), identity, packageID, revision)
+	reader, size, err := a.svc.DownloadCharmStream(r.Context(), identity, packageID, revision)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="artifact.charm"`)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	// #nosec G705 -- This endpoint streams attachment bytes.
-	_, _ = w.Write(payload)
+	writeAttachment(w, r, "artifact.charm", reader, size)
 }

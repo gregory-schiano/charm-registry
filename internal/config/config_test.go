@@ -8,21 +8,109 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRequiresDatabaseURLForPostgresBackend(t *testing.T) {
+type configSnapshot struct {
+	ListenAddress           string
+	PublicAPIURL            string
+	PublicStorageURL        string
+	PublicRegistryURL       string
+	DatabaseBackend         string
+	ResolvedDatabaseBackend string
+	StorageBackend          string
+	ResolvedStorageBackend  string
+	DataDir                 string
+	SQLitePath              string
+	BlobDir                 string
+	S3Bucket                string
+	S3Region                string
+	S3UsePathStyle          bool
+	S3DisableTLS            bool
+	OIDCUsernameClaim       string
+	OIDCDisplayNameClaim    string
+	OIDCEmailClaim          string
+	EnableInsecureDevAuth   bool
+	OCIListenAddress        string
+	OCIInternalURL          string
+	OCIStorageBackend       string
+	ResolvedOCIStorage      string
+	OCIStorageDir           string
+	OCIStorageBucket        string
+	OCIStoragePrefix        string
+	OCIStorageRegion        string
+	OCIStorageEndpoint      string
+	OCIStorageUsePathStyle  bool
+	OCISecretKey            string
+	OCIProjectPrefix        string
+	MaxJSONBodyBytes        int64
+	MaxArchiveFileBytes     int64
+	MaxUploadBytes          int64
+	CharmhubMaxResponse     int64
+	CharmhubMaxArtifact     int64
+	OCIMaxManifestBytes     int64
+	ServerReadHeaderTimeout time.Duration
+	ServerReadTimeout       time.Duration
+	ServerWriteTimeout      time.Duration
+	ServerIdleTimeout       time.Duration
+	ServerShutdownTimeout   time.Duration
+	ServerMaxHeaderBytes    int
+}
 
-	// Arrange
+func snapshotConfig(cfg Config) configSnapshot {
+	return configSnapshot{
+		ListenAddress:           cfg.ListenAddress,
+		PublicAPIURL:            cfg.PublicAPIURL,
+		PublicStorageURL:        cfg.PublicStorageURL,
+		PublicRegistryURL:       cfg.PublicRegistryURL,
+		DatabaseBackend:         cfg.DatabaseBackend,
+		ResolvedDatabaseBackend: cfg.ResolvedDatabaseBackend(),
+		StorageBackend:          cfg.StorageBackend,
+		ResolvedStorageBackend:  cfg.ResolvedStorageBackend(),
+		DataDir:                 cfg.DataDir,
+		SQLitePath:              cfg.SQLitePath,
+		BlobDir:                 cfg.BlobDir,
+		S3Bucket:                cfg.S3Bucket,
+		S3Region:                cfg.S3Region,
+		S3UsePathStyle:          cfg.S3UsePathStyle,
+		S3DisableTLS:            cfg.S3DisableTLS,
+		OIDCUsernameClaim:       cfg.OIDCUsernameClaim,
+		OIDCDisplayNameClaim:    cfg.OIDCDisplayNameClaim,
+		OIDCEmailClaim:          cfg.OIDCEmailClaim,
+		EnableInsecureDevAuth:   cfg.EnableInsecureDevAuth,
+		OCIListenAddress:        cfg.OCIListenAddress,
+		OCIInternalURL:          cfg.OCIInternalURL,
+		OCIStorageBackend:       cfg.OCIStorageBackend,
+		ResolvedOCIStorage:      cfg.ResolvedOCIStorageBackend(),
+		OCIStorageDir:           cfg.OCIStorageDir,
+		OCIStorageBucket:        cfg.OCIStorageBucket,
+		OCIStoragePrefix:        cfg.OCIStoragePrefix,
+		OCIStorageRegion:        cfg.OCIStorageRegion,
+		OCIStorageEndpoint:      cfg.OCIStorageEndpoint,
+		OCIStorageUsePathStyle:  cfg.OCIStorageUsePathStyle,
+		OCISecretKey:            cfg.OCISecretKey,
+		OCIProjectPrefix:        cfg.OCIProjectPrefix,
+		MaxJSONBodyBytes:        cfg.MaxJSONBodyBytes,
+		MaxArchiveFileBytes:     cfg.MaxArchiveFileBytes,
+		MaxUploadBytes:          cfg.MaxUploadBytes,
+		CharmhubMaxResponse:     cfg.CharmhubMaxResponseBytes,
+		CharmhubMaxArtifact:     cfg.CharmhubMaxArtifactBytes,
+		OCIMaxManifestBytes:     cfg.OCIMaxManifestBytes,
+		ServerReadHeaderTimeout: cfg.ServerReadHeaderTimeout,
+		ServerReadTimeout:       cfg.ServerReadTimeout,
+		ServerWriteTimeout:      cfg.ServerWriteTimeout,
+		ServerIdleTimeout:       cfg.ServerIdleTimeout,
+		ServerShutdownTimeout:   cfg.ServerShutdownTimeout,
+		ServerMaxHeaderBytes:    cfg.ServerMaxHeaderBytes,
+	}
+}
+
+func TestLoadRequiresDatabaseURLForPostgresBackend(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_DATABASE_BACKEND", "postgres")
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot load config:")
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_DATABASE_URL is required when CHARM_REGISTRY_DATABASE_BACKEND=postgres")
+	assert.ErrorContains(t, err, "cannot load config:")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_DATABASE_URL is required when CHARM_REGISTRY_DATABASE_BACKEND=postgres")
 
 }
 
@@ -39,31 +127,44 @@ func TestLoadAutoDatabaseBackendResolvesToSQLiteWithoutDatabaseURL(t *testing.T)
 	assert.Equal(t, "data/registry.sqlite", cfg.SQLitePath)
 }
 
-func TestLoadRejectsInvalidBackendValues(t *testing.T) {
+func TestValidateBackendConfigRejectsInvalidBackendValues(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
-		name string
-		env  string
+		name    string
+		mutate  func(*Config)
+		wantErr string
 	}{
-		{name: "database", env: "CHARM_REGISTRY_DATABASE_BACKEND"},
-		{name: "storage", env: "CHARM_REGISTRY_STORAGE_BACKEND"},
-		{name: "OCI storage", env: "CHARM_REGISTRY_OCI_STORAGE_BACKEND"},
+		{name: "database", mutate: func(cfg *Config) { cfg.DatabaseBackend = "invalid" }, wantErr: "CHARM_REGISTRY_DATABASE_BACKEND"},
+		{name: "storage", mutate: func(cfg *Config) { cfg.StorageBackend = "invalid" }, wantErr: "CHARM_REGISTRY_STORAGE_BACKEND"},
+		{name: "OCI storage", mutate: func(cfg *Config) { cfg.OCIStorageBackend = "invalid" }, wantErr: "CHARM_REGISTRY_OCI_STORAGE_BACKEND"},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv(tt.env, "invalid")
-			t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
-			t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+			t.Parallel()
+			cfg := Config{
+				DatabaseBackend:   DatabaseBackendAuto,
+				StorageBackend:    StorageBackendAuto,
+				OCIStorageBackend: StorageBackendAuto,
+				SQLitePath:        "data/registry.sqlite",
+				BlobDir:           "data/blobs",
+				OCIStorageDir:     "data/oci-registry",
+			}
+			tt.mutate(&cfg)
 
-			_, err := Load()
+			err := validateBackendConfig(cfg)
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.env)
+			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }
 
 func TestValidateBackendConfigChecksResolvedAutoBackends(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		cfg     Config
@@ -106,73 +207,73 @@ func TestValidateBackendConfigChecksResolvedAutoBackends(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := validateBackendConfig(tt.cfg)
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }
 
 func TestLoadDefaults(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
-
-	// Act
 	cfg, err := Load()
 
-	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, ":8080", cfg.ListenAddress)
-	assert.Equal(t, "http://localhost:8080", cfg.PublicAPIURL)
-	assert.Equal(t, "http://localhost:8080", cfg.PublicStorageURL)
-	assert.Equal(t, "https://localhost:5000", cfg.PublicRegistryURL)
-	assert.Equal(t, DatabaseBackendAuto, cfg.DatabaseBackend)
-	assert.Equal(t, DatabaseBackendPostgres, cfg.ResolvedDatabaseBackend())
-	assert.Equal(t, StorageBackendAuto, cfg.StorageBackend)
-	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedStorageBackend())
-	assert.Equal(t, "data", cfg.DataDir)
-	assert.Equal(t, "data/registry.sqlite", cfg.SQLitePath)
-	assert.Equal(t, "data/blobs", cfg.BlobDir)
-	assert.Equal(t, "charm-registry", cfg.S3Bucket)
-	assert.Equal(t, "us-east-1", cfg.S3Region)
-	assert.True(t, cfg.S3UsePathStyle)
-	assert.False(t, cfg.S3DisableTLS)
-	assert.Equal(t, "preferred_username", cfg.OIDCUsernameClaim)
-	assert.Equal(t, "name", cfg.OIDCDisplayNameClaim)
-	assert.Equal(t, "email", cfg.OIDCEmailClaim)
-	assert.True(t, cfg.EnableInsecureDevAuth)
-	assert.Equal(t, ":5000", cfg.OCIListenAddress)
-	assert.Equal(t, "https://127.0.0.1:5000", cfg.OCIInternalURL)
-	assert.Equal(t, StorageBackendAuto, cfg.OCIStorageBackend)
-	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedOCIStorageBackend())
-	assert.Equal(t, "data/oci-registry", cfg.OCIStorageDir)
-	assert.Equal(t, "charm-registry-oci", cfg.OCIStorageBucket)
-	assert.Equal(t, "oci", cfg.OCIStoragePrefix)
-	assert.Equal(t, "us-east-1", cfg.OCIStorageRegion)
-	assert.Equal(t, "", cfg.OCIStorageEndpoint)
-	assert.True(t, cfg.OCIStorageUsePathStyle)
-	assert.Equal(t, "oci-secret", cfg.OCISecretKey)
-	assert.Equal(t, "charm", cfg.OCIProjectPrefix)
-	assert.Equal(t, int64(1<<20), cfg.MaxJSONBodyBytes)
-	assert.Equal(t, int64(10<<20), cfg.MaxArchiveFileBytes)
-	assert.Equal(t, int64(64<<20), cfg.MaxUploadBytes)
-	assert.Equal(t, 10*time.Second, cfg.ServerReadHeaderTimeout)
-	assert.Equal(t, 30*time.Second, cfg.ServerReadTimeout)
-	assert.Equal(t, 30*time.Second, cfg.ServerWriteTimeout)
-	assert.Equal(t, 120*time.Second, cfg.ServerIdleTimeout)
-	assert.Equal(t, 30*time.Second, cfg.ServerShutdownTimeout)
-	assert.Equal(t, 1<<20, cfg.ServerMaxHeaderBytes)
+	assert.Equal(t, configSnapshot{
+		ListenAddress:           ":8080",
+		PublicAPIURL:            "http://localhost:8080",
+		PublicStorageURL:        "http://localhost:8080",
+		PublicRegistryURL:       "https://localhost:5000",
+		DatabaseBackend:         DatabaseBackendAuto,
+		ResolvedDatabaseBackend: DatabaseBackendPostgres,
+		StorageBackend:          StorageBackendAuto,
+		ResolvedStorageBackend:  StorageBackendFilesystem,
+		DataDir:                 "data",
+		SQLitePath:              "data/registry.sqlite",
+		BlobDir:                 "data/blobs",
+		S3Bucket:                "charm-registry",
+		S3Region:                "us-east-1",
+		S3UsePathStyle:          true,
+		S3DisableTLS:            false,
+		OIDCUsernameClaim:       "preferred_username",
+		OIDCDisplayNameClaim:    "name",
+		OIDCEmailClaim:          "email",
+		EnableInsecureDevAuth:   true,
+		OCIListenAddress:        ":5000",
+		OCIInternalURL:          "https://127.0.0.1:5000",
+		OCIStorageBackend:       StorageBackendAuto,
+		ResolvedOCIStorage:      StorageBackendFilesystem,
+		OCIStorageDir:           "data/oci-registry",
+		OCIStorageBucket:        "charm-registry-oci",
+		OCIStoragePrefix:        "oci",
+		OCIStorageRegion:        "us-east-1",
+		OCIStorageEndpoint:      "",
+		OCIStorageUsePathStyle:  true,
+		OCISecretKey:            "oci-secret",
+		OCIProjectPrefix:        "charm",
+		MaxJSONBodyBytes:        1 << 20,
+		MaxArchiveFileBytes:     10 << 20,
+		MaxUploadBytes:          64 << 20,
+		CharmhubMaxResponse:     4 << 20,
+		CharmhubMaxArtifact:     64 << 20,
+		OCIMaxManifestBytes:     16 << 20,
+		ServerReadHeaderTimeout: 10 * time.Second,
+		ServerReadTimeout:       30 * time.Second,
+		ServerWriteTimeout:      30 * time.Second,
+		ServerIdleTimeout:       120 * time.Second,
+		ServerShutdownTimeout:   30 * time.Second,
+		ServerMaxHeaderBytes:    1 << 20,
+	}, snapshotConfig(cfg))
 
 }
 
 func TestLoadCustomValues(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_LISTEN", ":9090")
 	// Explicit sqlite selection should override the postgres URL that auto-detection would otherwise use.
@@ -190,37 +291,64 @@ func TestLoadCustomValues(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", "2048")
 	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "4096")
 	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "1024")
+	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES", "512")
+	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES", "768")
+	t.Setenv("CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES", "1536")
 	t.Setenv("CHARM_REGISTRY_SERVER_READ_TIMEOUT", "5s")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
-
-	// Act
 	cfg, err := Load()
 
-	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, ":9090", cfg.ListenAddress)
-	assert.Equal(t, DatabaseBackendSQLite, cfg.ResolvedDatabaseBackend())
-	assert.Equal(t, "/var/lib/charm-registry", cfg.DataDir)
-	assert.Equal(t, "/srv/registry.sqlite", cfg.SQLitePath)
-	assert.Equal(t, StorageBackendS3, cfg.ResolvedStorageBackend())
-	assert.Equal(t, "/srv/blobs", cfg.BlobDir)
-	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedOCIStorageBackend())
-	assert.Equal(t, "/srv/oci", cfg.OCIStorageDir)
-	assert.Equal(t, "custom-bucket", cfg.S3Bucket)
-	assert.Equal(t, "eu-west-1", cfg.S3Region)
-	assert.False(t, cfg.S3UsePathStyle)
-	assert.True(t, cfg.S3DisableTLS)
-	assert.Equal(t, int64(2048), cfg.MaxJSONBodyBytes)
-	assert.Equal(t, int64(4096), cfg.MaxArchiveFileBytes)
-	assert.Equal(t, int64(1024), cfg.MaxUploadBytes)
-	assert.Equal(t, 5*time.Second, cfg.ServerReadTimeout)
+	assert.Equal(t, configSnapshot{
+		ListenAddress:           ":9090",
+		PublicAPIURL:            "http://localhost:8080",
+		PublicStorageURL:        "http://localhost:8080",
+		PublicRegistryURL:       "https://localhost:5000",
+		DatabaseBackend:         DatabaseBackendSQLite,
+		ResolvedDatabaseBackend: DatabaseBackendSQLite,
+		StorageBackend:          StorageBackendS3,
+		ResolvedStorageBackend:  StorageBackendS3,
+		DataDir:                 "/var/lib/charm-registry",
+		SQLitePath:              "/srv/registry.sqlite",
+		BlobDir:                 "/srv/blobs",
+		S3Bucket:                "custom-bucket",
+		S3Region:                "eu-west-1",
+		S3UsePathStyle:          false,
+		S3DisableTLS:            true,
+		OIDCUsernameClaim:       "preferred_username",
+		OIDCDisplayNameClaim:    "name",
+		OIDCEmailClaim:          "email",
+		EnableInsecureDevAuth:   true,
+		OCIListenAddress:        ":5000",
+		OCIInternalURL:          "https://127.0.0.1:5000",
+		OCIStorageBackend:       StorageBackendFilesystem,
+		ResolvedOCIStorage:      StorageBackendFilesystem,
+		OCIStorageDir:           "/srv/oci",
+		OCIStorageBucket:        "charm-registry-oci",
+		OCIStoragePrefix:        "oci",
+		OCIStorageRegion:        "eu-west-1",
+		OCIStorageEndpoint:      "",
+		OCIStorageUsePathStyle:  false,
+		OCISecretKey:            "oci-secret",
+		OCIProjectPrefix:        "charm",
+		MaxJSONBodyBytes:        2048,
+		MaxArchiveFileBytes:     4096,
+		MaxUploadBytes:          1024,
+		CharmhubMaxResponse:     512,
+		CharmhubMaxArtifact:     768,
+		OCIMaxManifestBytes:     1536,
+		ServerReadHeaderTimeout: 10 * time.Second,
+		ServerReadTimeout:       5 * time.Second,
+		ServerWriteTimeout:      30 * time.Second,
+		ServerIdleTimeout:       120 * time.Second,
+		ServerShutdownTimeout:   30 * time.Second,
+		ServerMaxHeaderBytes:    1 << 20,
+	}, snapshotConfig(cfg))
 
 }
 
 func TestLoadPaaSCharmEnvironmentFallbacks(t *testing.T) {
-
-	// Arrange
 	t.Setenv("APP_PORT", "9090")
 	t.Setenv("APP_PUBLIC_API_URL", "https://api.example.com/")
 	t.Setenv("APP_PUBLIC_STORAGE_URL", "https://storage.example.com/")
@@ -246,11 +374,7 @@ func TestLoadPaaSCharmEnvironmentFallbacks(t *testing.T) {
 	t.Setenv("APP_CHARMHUB_SYNC_INTERVAL", "10m")
 	t.Setenv("CHARM_REGISTRY_ADMIN_USERNAMES", "")
 	t.Setenv("APP_ADMIN_USERNAMES", "admin,owner")
-
-	// Act
 	cfg, err := Load()
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, ":9090", cfg.ListenAddress)
 	assert.Equal(t, "https://api.example.com", cfg.PublicAPIURL)
@@ -280,17 +404,11 @@ func TestLoadPaaSCharmEnvironmentFallbacks(t *testing.T) {
 }
 
 func TestLoadPaaSCharmOAuthFallbacks(t *testing.T) {
-
-	// Arrange
 	t.Setenv("POSTGRESQL_DB_CONNECT_STRING", "postgres://postgres:secret@postgresql:5432/registry")
 	t.Setenv("APP_SECRET_KEY", "oci-secret")
 	t.Setenv("APP_HYDRA_API_BASE_URL", "https://auth.example.com/")
 	t.Setenv("APP_HYDRA_CLIENT_ID", "registry")
-
-	// Act
 	cfg, err := Load()
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "https://auth.example.com", cfg.OIDCIssuerURL)
 	assert.Equal(t, "registry", cfg.OIDCClientID)
@@ -298,8 +416,6 @@ func TestLoadPaaSCharmOAuthFallbacks(t *testing.T) {
 }
 
 func TestLoadTrimsTrailingSlashes(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_PUBLIC_API_URL", "https://api.example.com/")
 	t.Setenv("CHARM_REGISTRY_PUBLIC_STORAGE_URL", "https://storage.example.com/")
@@ -309,11 +425,7 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_OIDC_ISSUER_URL", "https://auth.example.com/")
 	t.Setenv("CHARM_REGISTRY_OIDC_CLIENT_ID", "registry")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
-
-	// Act
 	cfg, err := Load()
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.example.com", cfg.PublicAPIURL)
 	assert.Equal(t, "https://storage.example.com", cfg.PublicStorageURL)
@@ -325,24 +437,16 @@ func TestLoadTrimsTrailingSlashes(t *testing.T) {
 }
 
 func TestEnvBoolInvalidFallsBack(t *testing.T) {
-
-	// Arrange
 	t.Setenv("TEST_BOOL", "not-a-bool")
-
-	// Act + Assert
 	_, err := envBool("TEST_BOOL", true)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot parse TEST_BOOL as bool")
+	assert.ErrorContains(t, err, "cannot parse TEST_BOOL as bool")
 
 }
 
 func TestEnvBoolValid(t *testing.T) {
-
-	// Arrange
 	t.Setenv("TEST_BOOL_T", "true")
 	t.Setenv("TEST_BOOL_F", "false")
-
-	// Act + Assert
 	valueTrue, err := envBool("TEST_BOOL_T", false)
 	require.NoError(t, err)
 	assert.True(t, valueTrue)
@@ -353,35 +457,29 @@ func TestEnvBoolValid(t *testing.T) {
 }
 
 func TestEnvIntInvalidFallsBack(t *testing.T) {
-
-	// Act + Assert
 	t.Setenv("TEST_INT", "not-a-number")
 	_, err := envInt("TEST_INT", 42)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot parse TEST_INT as int")
+	assert.ErrorContains(t, err, "cannot parse TEST_INT as int")
 }
 
 func TestEnvInt64InvalidFallsBack(t *testing.T) {
-
-	// Act + Assert
 	t.Setenv("TEST_INT64", "not-a-number")
 	_, err := envInt64("TEST_INT64", 42)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot parse TEST_INT64 as int64")
+	assert.ErrorContains(t, err, "cannot parse TEST_INT64 as int64")
 }
 
 func TestEnvDurationInvalidFallsBack(t *testing.T) {
-
-	// Act + Assert
 	t.Setenv("TEST_DUR", "not-a-duration")
 	_, err := envDuration("TEST_DUR", 10*time.Second)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot parse TEST_DUR as duration")
+	assert.ErrorContains(t, err, "cannot parse TEST_DUR as duration")
 }
 
 func TestEnvMissingKeyFallsBack(t *testing.T) {
+	t.Parallel()
 
-	// Act + Assert
 	assert.Equal(t, "fallback", env("NONEXISTENT_KEY_XYZZY_12345", "fallback"))
 	boolValue, err := envBool("NONEXISTENT_KEY_XYZZY_12345", true)
 	require.NoError(t, err)
@@ -398,11 +496,7 @@ func TestEnvMissingKeyFallsBack(t *testing.T) {
 }
 
 func TestEnvEmptyValueFallsBack(t *testing.T) {
-
-	// Arrange
 	t.Setenv("EMPTY_VAL", "")
-
-	// Act + Assert
 	assert.Equal(t, "fallback", env("EMPTY_VAL", "fallback"))
 	boolValue, err := envBool("EMPTY_VAL", true)
 	require.NoError(t, err)
@@ -420,100 +514,64 @@ func TestEnvEmptyValueFallsBack(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidConfiguredValues(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "abc")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_MAX_UPLOAD_BYTES")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_MAX_UPLOAD_BYTES")
 
 }
 
 func TestLoadRejectsInvalidArchiveFileLimit(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "0")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES")
 
 }
 
 func TestLoadTrimsOCIPrefixes(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 	t.Setenv("CHARM_REGISTRY_OCI_PROJECT_PREFIX", "-my-charms-")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
-
-	// Act
 	cfg, err := Load()
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "my-charms", cfg.OCIProjectPrefix)
 
 }
 
 func TestLoadRequiresCompleteOIDCConfig(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_OIDC_ISSUER_URL", "https://auth.example.com")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be set together")
+	assert.ErrorContains(t, err, "must be set together")
 
 }
 
 func TestLoadRequiresAuthProviderWhenDevAuthDisabled(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "false")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "configure OIDC")
+	assert.ErrorContains(t, err, "configure OIDC")
 
 }
 
 func TestLoadParsesAdminLists(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_ADMIN_SUBJECTS", "sub-1, sub-2")
 	t.Setenv("CHARM_REGISTRY_ADMIN_EMAILS", "admin@example.com")
 	t.Setenv("CHARM_REGISTRY_ADMIN_USERNAMES", "admin")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
-
-	// Act
 	cfg, err := Load()
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sub-1", "sub-2"}, cfg.AdminSubjects)
 	assert.Equal(t, []string{"admin@example.com"}, cfg.AdminEmails)
@@ -525,34 +583,22 @@ func TestLoadParsesAdminLists(t *testing.T) {
 }
 
 func TestLoadRequiresOCISecret(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_OCI_SECRET_KEY is required")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_OCI_SECRET_KEY is required")
 
 }
 
 func TestLoadRequiresCompleteOCITLSConfig(t *testing.T) {
-
-	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 	t.Setenv("CHARM_REGISTRY_OCI_TLS_CERT_FILE", "cert.pem")
-
-	// Act
 	_, err := Load()
-
-	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_OCI_TLS_CERT_FILE")
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_OCI_TLS_KEY_FILE")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_OCI_TLS_CERT_FILE")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_OCI_TLS_KEY_FILE")
 
 }

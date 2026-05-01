@@ -7,7 +7,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// ReplaceRelease is part of the [Repository] interface.
 func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release core.Release) error {
 	baseJSON, err := rawJSON(release.Base)
 	if err != nil {
@@ -34,7 +33,6 @@ func (p *Postgres) ReplaceRelease(ctx context.Context, packageID string, release
 	})
 }
 
-// DeleteRelease is part of the [Repository] interface.
 func (p *Postgres) DeleteRelease(ctx context.Context, packageID, channel string) error {
 	rowsAffected, err := p.queries().DeleteRelease(ctx, sqlcdb.DeleteReleaseParams{
 		PackageID: packageID,
@@ -49,7 +47,6 @@ func (p *Postgres) DeleteRelease(ctx context.Context, packageID, channel string)
 	return nil
 }
 
-// DeleteReleaseForBase is part of the [Repository] interface.
 func (p *Postgres) DeleteReleaseForBase(ctx context.Context, packageID, channel string, base *core.Base) error {
 	baseJSON, err := rawJSON(base)
 	if err != nil {
@@ -69,7 +66,6 @@ func (p *Postgres) DeleteReleaseForBase(ctx context.Context, packageID, channel 
 	return nil
 }
 
-// ListReleases is part of the [Repository] interface.
 func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
 	rows, err := p.queries().ListReleases(ctx, packageID)
 	if err != nil {
@@ -86,7 +82,6 @@ func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.R
 	return out, nil
 }
 
-// ResolveRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error) {
 	row, err := p.queries().ResolveRelease(ctx, sqlcdb.ResolveReleaseParams{
 		PackageID: packageID,
@@ -101,7 +96,6 @@ func (p *Postgres) ResolveRelease(ctx context.Context, packageID string, channel
 	return releaseFromResolveRow(row)
 }
 
-// ResolveReleaseForBase is part of the [Repository] interface.
 func (p *Postgres) ResolveReleaseForBase(
 	ctx context.Context,
 	packageID string,
@@ -126,7 +120,6 @@ func (p *Postgres) ResolveReleaseForBase(
 	return releaseFromResolveForBaseRow(row)
 }
 
-// ResolveDefaultRelease is part of the [Repository] interface.
 func (p *Postgres) ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error) {
 	release, err := p.queries().ResolveDefaultRelease(ctx, packageID)
 	if pgxNotFound(err) {

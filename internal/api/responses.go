@@ -84,8 +84,9 @@ type statusURLResponse struct {
 }
 
 type uploadResultResponse struct {
-	Successful bool    `json:"successful"`
-	UploadID   *string `json:"upload_id"`
+	Successful     bool    `json:"successful"`
+	UploadID       *string `json:"upload_id"`
+	UploadIDCompat *string `json:"upload-id"`
 }
 
 type resourceRevisionListItemResponse struct {

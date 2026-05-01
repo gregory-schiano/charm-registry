@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err != nil {
 			return err
 		}
-		if err := s.WithinTransaction(ctx, func(repository Repository) error {
+		if err := s.WithinTransaction(ctx, func(repository CompositeRepo) error {
 			sqliteRepo := repository.(*SQLite)
 			if _, err := sqliteRepo.db.ExecContext(ctx, string(payload)); err != nil {
 				return fmt.Errorf("cannot apply migration %s: %w", entry.Name(), err)
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	return nil
 }
 
-func (s *SQLite) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
+func (s *SQLite) WithinTransaction(ctx context.Context, fn func(CompositeRepo) error) error {
 	db, ok := s.db.(*sql.DB)
 	if !ok {
 		return fn(s)
@@ -816,8 +816,14 @@ func (s *SQLite) scanPackage(scanner interface{ Scan(dest ...any) error }) (core
 	if err != nil {
 		return core.Package{}, err
 	}
-	pkg.OCIPushRobot = robotFromSQLC(nullInt64Ptr(pushID), pushName, pushSecret)
-	pkg.OCIPullRobot = robotFromSQLC(nullInt64Ptr(pullID), pullName, pullSecret)
+	pkg.OCIPushRobot, err = robotFromSQLC(nullInt64Ptr(pushID), pushName, pushSecret)
+	if err != nil {
+		return core.Package{}, fmt.Errorf("load OCI push robot: %w", err)
+	}
+	pkg.OCIPullRobot, err = robotFromSQLC(nullInt64Ptr(pullID), pullName, pullSecret)
+	if err != nil {
+		return core.Package{}, fmt.Errorf("load OCI pull robot: %w", err)
+	}
 	pkg.OCISyncedAt = nullTimePtr(ociSyncedAt)
 	pkg.Authority = nullStringPtr(authority)
 	pkg.Contact = nullStringPtr(contact)

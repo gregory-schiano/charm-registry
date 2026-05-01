@@ -25,6 +25,21 @@ const (
 	ErrorKindConflict ErrorKind = "conflict"
 )
 
+const (
+	messageNoReleasedRevisionsFound = "no released revisions found"
+	messagePackageAlreadyExists     = "package already exists"
+	messagePackageNotFound          = "package not found"
+	messagePackageRevisionNotFound  = "package revision not found"
+	messageReleaseNotFound          = "release not found"
+	messageResourceNotDeclared      = "resource not declared"
+	messageResourceNotFound         = "resource not found"
+	messageResourceRevisionNotFound = "resource revision not found"
+	messageRevisionNotFound         = "revision not found"
+	messageSyncRuleAlreadyExists    = "sync rule already exists"
+	messageSyncRuleNotFound         = "sync rule not found"
+	messageUploadNotFound           = "upload not found"
+)
+
 // Error implements the [error] interface.
 func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)

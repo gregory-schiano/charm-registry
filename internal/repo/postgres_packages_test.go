@@ -31,13 +31,9 @@ func (m mockPostgresDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row 
 
 func TestPostgresCreatePackageMapsUniqueViolationToConflict(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	repository := &Postgres{db: mockPostgresDB{
 		execErr: &pgconn.PgError{Code: "23505"},
 	}}
-
-	// Act
 	err := repository.CreatePackage(context.Background(), core.Package{
 		ID:             "pkg-1",
 		Name:           "demo",
@@ -45,8 +41,6 @@ func TestPostgresCreatePackageMapsUniqueViolationToConflict(t *testing.T) {
 		Status:         "registered",
 		OwnerAccountID: "acc-1",
 	})
-
-	// Assert
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrConflict)
 	assert.Contains(t, err.Error(), "cannot create package")
@@ -55,12 +49,8 @@ func TestPostgresCreatePackageMapsUniqueViolationToConflict(t *testing.T) {
 
 func TestPostgresCreatePackageReturnsOriginalErrorWhenNotUniqueViolation(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	execErr := errors.New("boom")
 	repository := &Postgres{db: mockPostgresDB{execErr: execErr}}
-
-	// Act
 	err := repository.CreatePackage(context.Background(), core.Package{
 		ID:             "pkg-1",
 		Name:           "demo",
@@ -68,8 +58,6 @@ func TestPostgresCreatePackageReturnsOriginalErrorWhenNotUniqueViolation(t *test
 		Status:         "registered",
 		OwnerAccountID: "acc-1",
 	})
-
-	// Assert
 	require.Error(t, err)
 	assert.ErrorIs(t, err, execErr)
 

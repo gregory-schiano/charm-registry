@@ -116,12 +116,8 @@ func createTestPackage(t *testing.T, repository *Postgres, owner core.Account, p
 }
 
 func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
-
-	// Act
 	owner := ensureTestAccount(t, repository, "owner-1", "owner")
 	editor := ensureTestAccount(t, repository, "editor-1", "editor")
 	pkg := createTestPackage(t, repository, owner, core.Package{
@@ -129,8 +125,6 @@ func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
 		Name:    "manage-me",
 		Private: true,
 	})
-
-	// Assert
 	_, err := repository.pool.Exec(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
 		VALUES ($1, $2, $3, $4)
@@ -153,12 +147,8 @@ func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
 }
 
 func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
-
-	// Act
 	owner := ensureTestAccount(t, repository, "owner-2", "owner2")
 	viewer := ensureTestAccount(t, repository, "viewer-1", "viewer")
 	pkg := createTestPackage(t, repository, owner, core.Package{
@@ -166,8 +156,6 @@ func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
 		Name:    "view-me",
 		Private: true,
 	})
-
-	// Assert
 	_, err := repository.pool.Exec(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
 		VALUES ($1, $2, $3, $4)
@@ -194,20 +182,14 @@ func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
 }
 
 func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
-
-	// Act
 	owner := ensureTestAccount(t, repository, "owner-3", "owner3")
 	pkg := createTestPackage(t, repository, owner, core.Package{
 		ID:           "pkg-release",
 		Name:         "release-me",
 		DefaultTrack: stringPtr("2.0"),
 	})
-
-	// Assert
 	older := time.Now().UTC().Add(-time.Hour)
 	newer := time.Now().UTC()
 	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
@@ -231,14 +213,10 @@ func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
 }
 
 func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
-
-	// Act
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
-
-	// Assert
 	owner := ensureTestAccount(t, repository, "owner-4", "owner4")
-	err := repository.WithinTransaction(ctx, func(txRepo Repository) error {
+	err := repository.WithinTransaction(ctx, func(txRepo CompositeRepo) error {
 		return txRepo.CreatePackage(ctx, core.Package{
 			ID:             "pkg-tx",
 			Name:           "tx-package",
@@ -251,7 +229,7 @@ func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = repository.WithinTransaction(ctx, func(txRepo Repository) error {
+	err = repository.WithinTransaction(ctx, func(txRepo CompositeRepo) error {
 		if err := txRepo.CreatePackage(ctx, core.Package{
 			ID:             "pkg-rollback",
 			Name:           "rollback-package",
@@ -272,13 +250,69 @@ func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
 
 }
 
-func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
+func TestPostgresPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *testing.T) {
 
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
+	owner := ensureTestAccount(t, repository, "owner-push-revision", "owner-push-revision")
+	now := time.Now().UTC()
+	pkg := createTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-push-revision-tx",
+		Name: "push-revision-tx",
+	})
+	upload := core.Upload{
+		ID:        "upload-push-revision-tx",
+		Filename:  "push-revision-tx.charm",
+		ObjectKey: "uploads/push-revision-tx.charm",
+		Size:      123,
+		SHA256:    "sha256",
+		SHA384:    "sha384",
+		Status:    "pending",
+		Kind:      "revision",
+		CreatedAt: now,
+	}
+	require.NoError(t, repository.CreateUpload(ctx, upload))
+	pkg.Status = "published"
+	pkg.UpdatedAt = now.Add(time.Minute)
+	revisionNumber := 1
 
-	// Act
+	err := repository.WithinTransaction(ctx, func(txRepo CompositeRepo) error {
+		failingTx := postgresUpdatePackageFailingRepository{CompositeRepo: txRepo, err: assert.AnError}
+		if err := failingTx.CreateRevision(ctx, core.Revision{
+			ID:        "rev-push-revision-tx",
+			PackageID: pkg.ID,
+			Revision:  revisionNumber,
+			Version:   "1",
+			Status:    "approved",
+			CreatedAt: now,
+			CreatedBy: owner.ID,
+			Size:      upload.Size,
+			SHA256:    upload.SHA256,
+			SHA384:    upload.SHA384,
+			ObjectKey: upload.ObjectKey,
+		}); err != nil {
+			return err
+		}
+		if err := failingTx.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
+			return err
+		}
+		return failingTx.UpdatePackage(ctx, pkg)
+	})
+	require.ErrorIs(t, err, assert.AnError)
+
+	_, err = repository.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	storedUpload, err := repository.GetUpload(ctx, upload.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", storedUpload.Status)
+	assert.Nil(t, storedUpload.ApprovedAt)
+	assert.Nil(t, storedUpload.Revision)
+}
+
+func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
+	repository := newPostgresIntegrationRepository(t)
+	ctx := context.Background()
 	owner := ensureTestAccount(t, repository, "owner-search", "owner-search")
 	createTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-percent",
@@ -292,8 +326,6 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 		ID:   "pkg-plain",
 		Name: "literalxname",
 	})
-
-	// Assert
 	percentMatches, err := repository.SearchPackages(ctx, "%")
 	require.NoError(t, err)
 	require.Len(t, percentMatches, 1)
@@ -307,14 +339,10 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 }
 
 func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 	admin := ensureTestAccount(t, repository, "admin-sync", "admin-sync")
 	now := time.Now().UTC()
-
-	// Act
 	err := repository.CreateCharmhubSyncRule(ctx, core.CharmhubSyncRule{
 		PackageName:        "demo",
 		Track:              "latest",
@@ -361,8 +389,6 @@ func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
 }
 
 func TestPostgresReleaseVariantsByBase(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 	owner := ensureTestAccount(t, repository, "owner-release-variant", "owner-release-variant")
@@ -370,8 +396,6 @@ func TestPostgresReleaseVariantsByBase(t *testing.T) {
 		ID:   "pkg-release-variant",
 		Name: "release-variant",
 	})
-
-	// Act
 	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
 		ID:       "rel-amd64",
 		Channel:  "latest/stable",
@@ -386,8 +410,6 @@ func TestPostgresReleaseVariantsByBase(t *testing.T) {
 		Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
 		When:     time.Now().UTC().Add(time.Minute),
 	}))
-
-	// Assert
 	releases, err := repository.ListReleases(ctx, pkg.ID)
 	require.NoError(t, err)
 	require.Len(t, releases, 2)
@@ -419,8 +441,6 @@ func TestPostgresReleaseVariantsByBase(t *testing.T) {
 }
 
 func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
-
-	// Arrange
 	repository := newPostgresIntegrationRepository(t)
 	ctx := context.Background()
 	owner := ensureTestAccount(t, repository, "owner-sync-delete", "owner-sync-delete")
@@ -428,8 +448,6 @@ func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
 		ID:   "pkg-sync-delete",
 		Name: "sync-delete",
 	})
-
-	// Act
 	_, err := repository.CreateTracks(ctx, pkg.ID, []core.Track{{
 		Name:      "latest",
 		CreatedAt: time.Now().UTC(),
@@ -478,8 +496,6 @@ func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
 		}},
 		When: time.Now().UTC(),
 	}))
-
-	// Assert
 	require.NoError(t, repository.DeleteRelease(ctx, pkg.ID, "latest/stable"))
 	_, err = repository.ResolveRelease(ctx, pkg.ID, "latest/stable")
 	require.ErrorIs(t, err, ErrNotFound)
@@ -505,6 +521,15 @@ func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+type postgresUpdatePackageFailingRepository struct {
+	CompositeRepo
+	err error
+}
+
+func (r postgresUpdatePackageFailingRepository) UpdatePackage(_ context.Context, _ core.Package) error {
+	return r.err
 }
 
 func intPtr(value int) *int {

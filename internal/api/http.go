@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,19 +23,33 @@ import (
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
+type syncAdminService interface {
+	ListCharmhubSyncRules(ctx context.Context, identity core.Identity) ([]core.CharmhubSyncRule, error)
+	AddCharmhubSyncRule(
+		ctx context.Context,
+		identity core.Identity,
+		packageName, track string,
+		bases, architectures []string,
+	) (core.CharmhubSyncRule, error)
+	RemoveCharmhubSyncRule(ctx context.Context, identity core.Identity, packageName, track string) error
+	TriggerCharmhubSync(ctx context.Context, identity core.Identity, packageName string) error
+}
+
 // API is the HTTP handler for the registry.
 type API struct {
 	cfg          config.Config
 	svc          *service.Service
+	sync         syncAdminService
 	auth         *auth.Authenticator
 	tokenLimiter *tokenIssueLimiter
 }
 
 // New builds the HTTP handler for the registry API.
-func New(cfg config.Config, svc *service.Service, authenticator *auth.Authenticator) http.Handler {
+func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, authenticator *auth.Authenticator) http.Handler {
 	api := &API{
 		cfg:          cfg,
 		svc:          svc,
+		sync:         syncSvc,
 		auth:         authenticator,
 		tokenLimiter: newTokenIssueLimiter(5, time.Minute),
 	}
@@ -53,48 +68,52 @@ func New(cfg config.Config, svc *service.Service, authenticator *auth.Authentica
 	router.Get("/openapi.yaml", api.handleOpenAPI)
 	router.Get("/docs", api.handleDocs)
 
-	router.Get("/v1/tokens", api.handleGetTokens)
-	router.Post("/v1/tokens", api.handleIssueToken)
-	router.Post("/v1/tokens/exchange", api.handleExchangeToken)
-	router.Post("/v1/tokens/offline/exchange", api.handleExchangeToken)
-	router.Post("/v1/tokens/revoke", api.handleRevokeToken)
-	router.Get("/v1/tokens/whoami", api.handleTokenWhoAmI)
-	router.Post("/v1/tokens/dashboard/exchange", api.handleDashboardExchange)
-	router.Get("/v1/whoami", api.handleWhoAmI)
-	router.Get("/v1/admin/charmhub-sync", api.handleListCharmhubSyncRules)
-	router.Post("/v1/admin/charmhub-sync", api.handleAddCharmhubSyncRule)
-	router.Delete("/v1/admin/charmhub-sync/{name}/{track}", api.handleDeleteCharmhubSyncRule)
-	router.Post("/v1/admin/charmhub-sync/{name}/run", api.handleRunCharmhubSync)
+	router.Group(func(r chi.Router) {
+		r.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
+	})
+	router.Group(func(r chi.Router) {
+		r.Get("/v1/tokens", api.requireIdentity(api.handleGetTokens))
+		r.Post("/v1/tokens", api.requireIdentity(api.handleIssueToken))
+		r.Post("/v1/tokens/exchange", api.requireIdentity(api.handleExchangeToken))
+		r.Post("/v1/tokens/offline/exchange", api.requireIdentity(api.handleExchangeToken))
+		r.Post("/v1/tokens/revoke", api.requireIdentity(api.handleRevokeToken))
+		r.Get("/v1/tokens/whoami", api.requireIdentity(api.handleTokenWhoAmI))
+		r.Post("/v1/tokens/dashboard/exchange", api.requireIdentity(api.handleDashboardExchange))
+		r.Get("/v1/whoami", api.requireIdentity(api.handleWhoAmI))
+		r.Get("/v1/admin/charmhub-sync", api.requireIdentity(api.handleListCharmhubSyncRules))
+		r.Post("/v1/admin/charmhub-sync", api.requireIdentity(api.handleAddCharmhubSyncRule))
+		r.Delete("/v1/admin/charmhub-sync/{name}/{track}", api.requireIdentity(api.handleDeleteCharmhubSyncRule))
+		r.Post("/v1/admin/charmhub-sync/{name}/run", api.requireIdentity(api.handleRunCharmhubSync))
 
-	router.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
-	router.Get("/v1/charm", api.handleListPackages)
-	router.Post("/v1/charm", api.handleRegisterPackage)
-	router.Get("/v1/charm/{name}", api.handleGetPackage)
-	router.Patch("/v1/charm/{name}", api.handlePatchPackage)
-	router.Delete("/v1/charm/{name}", api.handleDeletePackage)
+		r.Get("/v1/charm", api.requireIdentity(api.handleListPackages))
+		r.Post("/v1/charm", api.requireIdentity(api.handleRegisterPackage))
+		r.Get("/v1/charm/{name}", api.requireIdentity(api.handleGetPackage))
+		r.Patch("/v1/charm/{name}", api.requireIdentity(api.handlePatchPackage))
+		r.Delete("/v1/charm/{name}", api.requireIdentity(api.handleDeletePackage))
 
-	router.Get("/v1/charm/{name}/revisions", api.handleListRevisions)
-	router.Post("/v1/charm/{name}/revisions", api.handlePushRevision)
-	router.Get("/v1/charm/{name}/revisions/review", api.handleReviewUpload)
-	router.Get("/v1/charm/{name}/resources", api.handleListResources)
-	router.Get("/v1/charm/{name}/resources/{resource}/revisions", api.handleListResourceRevisions)
-	router.Post("/v1/charm/{name}/resources/{resource}/revisions", api.handlePushResource)
-	router.Patch("/v1/charm/{name}/resources/{resource}/revisions", api.handleUpdateResourceRevisions)
-	router.Get("/v1/charm/{name}/resources/{resource}/oci-image/upload-credentials", api.handleOCIUploadCredentials)
-	router.Post("/v1/charm/{name}/resources/{resource}/oci-image/blob", api.handleOCIImageBlob)
-	router.Get("/v1/charm/{name}/releases", api.handleListReleases)
-	router.Post("/v1/charm/{name}/releases", api.handleRelease)
-	router.Post("/v1/charm/{name}/tracks", api.handleCreateTracks)
+		r.Get("/v1/charm/{name}/revisions", api.requireIdentity(api.handleListRevisions))
+		r.Post("/v1/charm/{name}/revisions", api.requireIdentity(api.handlePushRevision))
+		r.Get("/v1/charm/{name}/revisions/review", api.requireIdentity(api.handleReviewUpload))
+		r.Get("/v1/charm/{name}/resources", api.requireIdentity(api.handleListResources))
+		r.Get("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handleListResourceRevisions))
+		r.Post("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handlePushResource))
+		r.Patch("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handleUpdateResourceRevisions))
+		r.Get("/v1/charm/{name}/resources/{resource}/oci-image/upload-credentials", api.requireIdentity(api.handleOCIUploadCredentials))
+		r.Post("/v1/charm/{name}/resources/{resource}/oci-image/blob", api.requireIdentity(api.handleOCIImageBlob))
+		r.Get("/v1/charm/{name}/releases", api.requireIdentity(api.handleListReleases))
+		r.Post("/v1/charm/{name}/releases", api.requireIdentity(api.handleRelease))
+		r.Post("/v1/charm/{name}/tracks", api.requireIdentity(api.handleCreateTracks))
 
-	router.Post("/unscanned-upload/", api.handleUnscannedUpload)
+		r.Post("/unscanned-upload/", api.requireIdentity(api.handleUnscannedUpload))
 
-	router.Get("/v2/charms/find", api.handleFind)
-	router.Get("/v2/charms/info/{name}", api.handleInfo)
-	router.Post("/v2/charms/refresh", api.handleRefresh)
-	router.Get("/v2/charms/resources/{name}/{resource}/revisions", api.handleListResourceRevisions)
+		r.Get("/v2/charms/find", api.requireIdentity(api.handleFind))
+		r.Get("/v2/charms/info/{name}", api.requireIdentity(api.handleInfo))
+		r.Post("/v2/charms/refresh", api.requireIdentity(api.handleRefresh))
+		r.Get("/v2/charms/resources/{name}/{resource}/revisions", api.requireIdentity(api.handleListResourceRevisions))
 
-	router.Get("/api/v1/charms/download/{filename}", api.handleCharmDownload)
-	router.Get("/api/v1/resources/download/{filename}", api.handleResourceDownload)
+		r.Get("/api/v1/charms/download/{filename}", api.requireIdentity(api.handleCharmDownload))
+		r.Get("/api/v1/resources/download/{filename}", api.requireIdentity(api.handleResourceDownload))
+	})
 	return router
 }
 
@@ -162,12 +181,23 @@ func (l *tokenIssueLimiter) cleanup(cutoff time.Time) {
 	}
 }
 
-func (a *API) identity(r *http.Request) (core.Identity, error) {
+func (a *API) resolveIdentity(r *http.Request) (core.Identity, error) {
 	claims, token, err := a.auth.Authenticate(r)
 	if err != nil {
 		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	return a.svc.ResolveIdentity(r.Context(), claims, token)
+}
+
+func (a *API) requireIdentity(next func(w http.ResponseWriter, r *http.Request, identity core.Identity)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, err := a.resolveIdentity(r)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		next(w, r, identity)
+	}
 }
 
 func (a *API) securityHeaders(next http.Handler) http.Handler {
@@ -224,6 +254,28 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeCreatedJSON(w http.ResponseWriter, location string, payload any) {
+	if location != "" {
+		w.Header().Set("Location", location)
+	}
+	writeJSON(w, http.StatusCreated, payload)
+}
+
+func writeAttachment(w http.ResponseWriter, r *http.Request, filename string, body io.ReadCloser, size int64) {
+	defer body.Close()
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	if _, err := io.Copy(w, body); err != nil {
+		slog.ErrorContext(r.Context(), "stream attachment",
+			"request_id", chimiddleware.GetReqID(r.Context()),
+			"error", err,
+		)
+	}
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {

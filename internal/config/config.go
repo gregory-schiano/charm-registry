@@ -74,6 +74,10 @@ type Config struct {
 	MaxJSONBodyBytes        int64
 	MaxArchiveFileBytes     int64
 	MaxUploadBytes          int64
+
+	CharmhubMaxResponseBytes int64
+	CharmhubMaxArtifactBytes int64
+	OCIMaxManifestBytes      int64
 }
 
 type parsedConfig struct {
@@ -91,6 +95,19 @@ type parsedConfig struct {
 	maxJSONBodyBytes        int64
 	maxArchiveFileBytes     int64
 	maxUploadBytes          int64
+
+	charmhubMaxResponseBytes int64
+	charmhubMaxArtifactBytes int64
+	ociMaxManifestBytes      int64
+}
+
+type parsedByteLimits struct {
+	maxJSONBodyBytes         int64
+	maxArchiveFileBytes      int64
+	maxUploadBytes           int64
+	charmhubMaxResponseBytes int64
+	charmhubMaxArtifactBytes int64
+	ociMaxManifestBytes      int64
 }
 
 // Load reads the registry configuration from environment variables.
@@ -169,6 +186,10 @@ func Load() (Config, error) {
 		MaxJSONBodyBytes:        parsed.maxJSONBodyBytes,
 		MaxArchiveFileBytes:     parsed.maxArchiveFileBytes,
 		MaxUploadBytes:          parsed.maxUploadBytes,
+
+		CharmhubMaxResponseBytes: parsed.charmhubMaxResponseBytes,
+		CharmhubMaxArtifactBytes: parsed.charmhubMaxArtifactBytes,
+		OCIMaxManifestBytes:      parsed.ociMaxManifestBytes,
 	}
 
 	return validateConfig(cfg)
@@ -223,15 +244,7 @@ func loadParsedConfig() (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	maxJSONBodyBytes, err := envInt64("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", 1<<20)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	maxArchiveFileBytes, err := envInt64("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", 10<<20)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	maxUploadBytes, err := envInt64("CHARM_REGISTRY_MAX_UPLOAD_BYTES", 64<<20)
+	byteLimits, err := loadParsedByteLimits()
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -248,9 +261,48 @@ func loadParsedConfig() (parsedConfig, error) {
 		serverIdleTimeout:       serverIdleTimeout,
 		serverShutdownTimeout:   serverShutdownTimeout,
 		serverMaxHeaderBytes:    serverMaxHeaderBytes,
-		maxJSONBodyBytes:        maxJSONBodyBytes,
-		maxArchiveFileBytes:     maxArchiveFileBytes,
-		maxUploadBytes:          maxUploadBytes,
+		maxJSONBodyBytes:        byteLimits.maxJSONBodyBytes,
+		maxArchiveFileBytes:     byteLimits.maxArchiveFileBytes,
+		maxUploadBytes:          byteLimits.maxUploadBytes,
+
+		charmhubMaxResponseBytes: byteLimits.charmhubMaxResponseBytes,
+		charmhubMaxArtifactBytes: byteLimits.charmhubMaxArtifactBytes,
+		ociMaxManifestBytes:      byteLimits.ociMaxManifestBytes,
+	}, nil
+}
+
+func loadParsedByteLimits() (parsedByteLimits, error) {
+	maxJSONBodyBytes, err := envInt64("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", 1<<20)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	maxArchiveFileBytes, err := envInt64("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", 10<<20)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	maxUploadBytes, err := envInt64("CHARM_REGISTRY_MAX_UPLOAD_BYTES", 64<<20)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	charmhubMaxResponseBytes, err := envInt64("CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES", 4<<20)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	charmhubMaxArtifactBytes, err := envInt64("CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES", maxUploadBytes)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	ociMaxManifestBytes, err := envInt64("CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES", 16<<20)
+	if err != nil {
+		return parsedByteLimits{}, err
+	}
+	return parsedByteLimits{
+		maxJSONBodyBytes:         maxJSONBodyBytes,
+		maxArchiveFileBytes:      maxArchiveFileBytes,
+		maxUploadBytes:           maxUploadBytes,
+		charmhubMaxResponseBytes: charmhubMaxResponseBytes,
+		charmhubMaxArtifactBytes: charmhubMaxArtifactBytes,
+		ociMaxManifestBytes:      ociMaxManifestBytes,
 	}, nil
 }
 
@@ -266,6 +318,15 @@ func validateConfig(cfg Config) (Config, error) {
 	}
 	if cfg.MaxArchiveFileBytes <= 0 {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
+	}
+	if cfg.CharmhubMaxResponseBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES must be greater than zero")
+	}
+	if cfg.CharmhubMaxArtifactBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES must be greater than zero")
+	}
+	if cfg.OCIMaxManifestBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES must be greater than zero")
 	}
 
 	return cfg, nil

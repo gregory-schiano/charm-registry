@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,31 @@ func TestGetInfoParsesChannelMapVariants(t *testing.T) {
 	require.NotNil(t, info.ChannelMap[0].Channel.Base)
 	require.Equal(t, "amd64", info.ChannelMap[0].Channel.Base.Architecture)
 	require.Equal(t, 43, info.ChannelMap[1].Revision.Revision)
+}
+
+func TestGetInfoRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat("x", 6)))
+	}))
+	defer server.Close()
+
+	client := NewWithLimits(server.URL, 5, 1024)
+	_, err := client.GetInfo(context.Background(), "postgresql-k8s")
+
+	require.ErrorContains(t, err, "Charmhub API response exceeds 5 bytes")
+}
+
+func TestDownloadRejectsOversizedArtifact(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 6)))
+	}))
+	defer server.Close()
+
+	client := NewWithLimits(server.URL, 1024, 5)
+	_, err := client.Download(context.Background(), server.URL+"/artifact.charm")
+
+	require.ErrorContains(t, err, "Charmhub artifact exceeds 5 bytes")
 }
 
 func TestRefreshChannelResolvesBaseVariant(t *testing.T) {

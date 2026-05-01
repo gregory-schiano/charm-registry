@@ -23,7 +23,7 @@ func (s *Service) ResolveIdentity(
 	if claims.Subject == "" {
 		return core.Identity{}, nil
 	}
-	account, err := s.repo.EnsureAccount(ctx, core.Account{
+	account, err := s.accounts.EnsureAccount(ctx, core.Account{
 		ID:          uuid.NewString(),
 		Subject:     claims.Subject,
 		Username:    core.FirstNonEmpty(claims.Username, strings.ReplaceAll(claims.Subject, "|", "_")),
@@ -31,7 +31,7 @@ func (s *Service) ResolveIdentity(
 		Email:       core.FirstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
 		Validation:  "verified",
 		IsAdmin:     s.cfg.IsAdminIdentity(claims.Subject, claims.Email, claims.Username),
-		CreatedAt:   time.Now().UTC(),
+		CreatedAt:   s.now(),
 	})
 	if err != nil {
 		return core.Identity{}, err
@@ -67,8 +67,8 @@ func (s *Service) IssueStoreToken(
 	if err != nil {
 		return "", core.StoreToken{}, err
 	}
-	now := time.Now().UTC()
-	token := core.StoreToken{
+	now := s.now()
+	token, err := core.NewStoreToken(core.StoreToken{
 		SessionID:   uuid.NewString(),
 		TokenHash:   hash,
 		AccountID:   identity.Account.ID,
@@ -78,8 +78,11 @@ func (s *Service) IssueStoreToken(
 		Permissions: permissions,
 		ValidSince:  now,
 		ValidUntil:  now.Add(ttl),
+	})
+	if err != nil {
+		return "", core.StoreToken{}, err
 	}
-	if err := s.repo.CreateStoreToken(ctx, token); err != nil {
+	if err := s.accounts.CreateStoreToken(ctx, token); err != nil {
 		return "", core.StoreToken{}, err
 	}
 	return raw, token, nil
@@ -100,7 +103,7 @@ func (s *Service) ExchangeStoreToken(ctx context.Context, identity core.Identity
 	return raw, err
 }
 
-// ListStoreTokens lists store tokens for the authenticated account.
+// ListStoreTokens enforces auth and account scoping before listing store tokens.
 //
 // The following errors may be returned:
 // - Authentication or repository errors.
@@ -112,7 +115,7 @@ func (s *Service) ListStoreTokens(
 	if err := s.requireAuth(identity); err != nil {
 		return nil, err
 	}
-	return s.repo.ListStoreTokens(ctx, identity.Account.ID, includeInactive)
+	return s.accounts.ListStoreTokens(ctx, identity.Account.ID, includeInactive)
 }
 
 // RevokeStoreToken revokes a store token for the authenticated account.
@@ -123,7 +126,7 @@ func (s *Service) RevokeStoreToken(ctx context.Context, identity core.Identity, 
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
-	return s.repo.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID)
+	return s.accounts.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID)
 }
 
 // MacaroonInfo returns Charmhub-compatible token account details.

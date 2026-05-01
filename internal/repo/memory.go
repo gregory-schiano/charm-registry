@@ -26,7 +26,7 @@ type Memory struct {
 	syncRules         map[string]map[string]core.CharmhubSyncRule
 }
 
-// NewMemory returns an in-memory [Repository] implementation.
+// NewMemory returns an in-memory [Backend] implementation.
 //
 // This is a test-oriented approximation of the repository contract, not the
 // canonical source of access-control behavior. PostgreSQL remains the
@@ -47,18 +47,18 @@ func NewMemory() *Memory {
 	}
 }
 
-// Ping is part of the [Repository] interface.
+// Ping is part of the [HealthRepo] interface.
 func (m *Memory) Ping(_ context.Context) error {
 	return nil
 }
 
-// Migrate is part of the [Repository] interface.
+// Migrate is part of the [HealthRepo] interface.
 func (m *Memory) Migrate(_ context.Context) error {
 	return nil
 }
 
-// WithinTransaction is part of the [Repository] interface.
-func (m *Memory) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
+// WithinTransaction is part of the [Transactor] interface.
+func (m *Memory) WithinTransaction(ctx context.Context, fn func(CompositeRepo) error) error {
 	return fn(m)
 }
 

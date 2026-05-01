@@ -41,4 +41,19 @@ type Identity struct {
 	Account       Account
 	Token         *StoreToken
 	Authenticated bool
+	System        bool
+}
+
+// NewSystemIdentity returns an internal system identity that bypasses normal
+// end-user authorization checks.
+func NewSystemIdentity(account Account) Identity {
+	account.IsAdmin = true
+	if account.Validation == "" {
+		account.Validation = "verified"
+	}
+	return Identity{
+		Account:       account,
+		Authenticated: true,
+		System:        true,
+	}
 }

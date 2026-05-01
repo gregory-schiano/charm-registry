@@ -1,4 +1,4 @@
-package service
+package registrysync
 
 import (
 	"archive/zip"
@@ -16,8 +16,10 @@ import (
 
 	"github.com/gschiano/charm-registry/internal/blob"
 	charmhubclient "github.com/gschiano/charm-registry/internal/charmhub"
+	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
+	registryservice "github.com/gschiano/charm-registry/internal/service"
 	"github.com/gschiano/charm-registry/internal/testutil"
 )
 
@@ -26,6 +28,19 @@ type fakeCharmhubClient struct {
 	infos        map[string]charmhubclient.PackageChannel
 	downloads    map[string][]byte
 	downloadErrs map[string]error
+}
+
+type trackingOCIRegistry struct {
+	testutil.OCIRegistry
+	deletedImages   []string
+	deletedPackages []string
+	mirrorErr       error
+}
+
+type syncTestHarness struct {
+	registry *registryservice.Service
+	sync     *Service
+	repo     repo.Backend
 }
 
 func (f *fakeCharmhubClient) GetChannel(_ context.Context, name, channel string) (charmhubclient.PackageChannel, error) {
@@ -71,13 +86,6 @@ func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]
 	return append([]byte(nil), payload...), nil
 }
 
-type trackingOCIRegistry struct {
-	testutil.OCIRegistry
-	deletedImages   []string
-	deletedPackages []string
-	mirrorErr       error
-}
-
 func (o *trackingOCIRegistry) MirrorImage(
 	ctx context.Context,
 	pkg core.Package,
@@ -99,104 +107,133 @@ func (o *trackingOCIRegistry) DeletePackage(_ context.Context, pkg core.Package)
 	return nil
 }
 
+func TestStartManagerIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	manager := env.sync.StartManager(context.Background())
+	require.NotNil(t, manager)
+	assert.Same(t, manager, env.sync.StartManager(context.Background()))
+	require.NoError(t, manager.Close())
+}
+
+func TestManagerEnqueueNormalizesPackageName(t *testing.T) {
+	t.Parallel()
+
+	manager := &Manager{
+		wake:    make(chan struct{}, 1),
+		pending: map[string]struct{}{},
+	}
+	manager.Enqueue(" sync-charm ")
+	manager.Enqueue(" ")
+
+	manager.mu.Lock()
+	_, ok := manager.pending["sync-charm"]
+	pendingCount := len(manager.pending)
+	manager.mu.Unlock()
+
+	assert.True(t, ok)
+	assert.Equal(t, 1, pendingCount)
+}
+
 func TestRegisterPackageConflictsWithCharmhubSyncReservation(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 	user := newIdentity("user-1", "user")
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
-	_, err = svc.RegisterPackage(context.Background(), user, "demo", "charm", false)
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.registry.RegisterPackage(context.Background(), user, "demo", "charm", false)
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 }
 
 func TestAddCharmhubSyncRuleConflictsWithManualPackage(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 	user := newIdentity("user-1", "user")
 
-	_, err := svc.RegisterPackage(context.Background(), user, "demo", "charm", false)
+	_, err := env.registry.RegisterPackage(context.Background(), user, "demo", "charm", false)
 	require.NoError(t, err)
 
-	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 }
 
 func TestTriggerCharmhubSyncRequiresExistingRule(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 
-	err := svc.TriggerCharmhubSync(context.Background(), admin, "demo")
-	assertServiceError(t, err, ErrorKindNotFound)
+	err := env.sync.TriggerCharmhubSync(context.Background(), admin, "demo")
+	assertServiceError(t, err, registryservice.ErrorKindNotFound)
 }
 
 func TestTriggerCharmhubSyncAcceptsConfiguredPackage(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
-	err = svc.TriggerCharmhubSync(context.Background(), admin, "demo")
+	err = env.sync.TriggerCharmhubSync(context.Background(), admin, "demo")
 	require.NoError(t, err)
 }
 
 func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
 	require.NotNil(t, pkg.Authority)
 	assert.Equal(t, charmhubAuthority, *pkg.Authority)
 	assert.Equal(t, charmhubSyncAccountID, pkg.OwnerAccountID)
 
-	tracks, err := svc.repo.ListTracks(context.Background(), pkg.ID)
+	tracks, err := env.repo.ListTracks(context.Background(), pkg.ID)
 	require.NoError(t, err)
 	require.Len(t, tracks, 1)
 	assert.Equal(t, "latest", tracks[0].Name)
 
-	revision, err := svc.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
+	revision, err := env.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
 	require.NoError(t, err)
 	assert.Equal(t, "7", revision.Version)
 
-	resourceDef, err := svc.repo.GetResourceDefinition(context.Background(), pkg.ID, "app-image")
+	resourceDef, err := env.repo.GetResourceDefinition(context.Background(), pkg.ID, "app-image")
 	require.NoError(t, err)
-	resourceRevision, err := svc.repo.GetResourceRevision(context.Background(), resourceDef.ID, 3)
+	resourceRevision, err := env.repo.GetResourceRevision(context.Background(), resourceDef.ID, 3)
 	require.NoError(t, err)
 	assert.Equal(t, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", resourceRevision.OCIImageDigest)
 
-	release, err := svc.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
+	release, err := env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
 	require.NoError(t, err)
 	assert.Equal(t, 7, release.Revision)
 	require.Len(t, release.Resources, 2)
 
-	refresh, err := svc.ResolveRefresh(context.Background(), admin, RefreshRequest{
-		Actions: []RefreshAction{{
+	refresh, err := env.registry.ResolveRefresh(context.Background(), admin, registryservice.RefreshRequest{
+		Actions: []registryservice.RefreshAction{{
 			Action:      "install",
 			InstanceKey: "demo/0",
 			Name:        stringPtr("demo"),
@@ -210,17 +247,84 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	require.NotNil(t, refresh.Results[0].Charm)
 	assert.Equal(t, 7, refresh.Results[0].Charm.Revision)
 
-	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, charmhubSyncStatusOK, rules[0].LastSyncStatus)
 	assert.Nil(t, rules[0].LastSyncError)
 }
 
+func TestReconcileCharmhubPackagePersistsSyncAccountOnSQLite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	env := newSQLiteSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := ensurePersistedIdentity(t, env.repo, "admin-1", "admin", true)
+	_, err := env.sync.AddCharmhubSyncRule(ctx, admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, env.sync.reconcilePackage(ctx, "demo"))
+
+	pkg, err := env.repo.GetPackageByName(ctx, "demo")
+	require.NoError(t, err)
+	assert.Equal(t, charmhubSyncAccountID, pkg.OwnerAccountID)
+
+	account, err := env.repo.GetAccountByID(ctx, charmhubSyncAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, charmhubSyncAccountSubject, account.Subject)
+	assert.Equal(t, charmhubSyncAccountName, account.Username)
+	assert.True(t, account.IsAdmin)
+	assert.Equal(t, "verified", account.Validation)
+}
+
+func TestReconcileCharmhubPackageFallsBackWhenUpstreamTimestampsMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	env := newSyncTestHarness(t)
+	fixedNow := time.Date(2026, time.May, 1, 17, 45, 0, 0, time.FixedZone("UTC+2", 2*60*60))
+	expected := fixedNow.UTC()
+	env.sync.Clock = func() time.Time { return fixedNow }
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	stable := fakeClient.channels["demo|latest/stable"]
+	stable.DefaultRelease.Channel.ReleasedAt = time.Time{}
+	stable.DefaultRelease.Revision.CreatedAt = time.Time{}
+	fakeClient.channels["demo|latest/stable"] = stable
+
+	variant := fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"]
+	variant.DefaultRelease.Channel.ReleasedAt = time.Time{}
+	variant.DefaultRelease.Revision.CreatedAt = time.Time{}
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"] = variant
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(ctx, admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, env.sync.reconcilePackage(ctx, "demo"))
+
+	pkg, err := env.repo.GetPackageByName(ctx, "demo")
+	require.NoError(t, err)
+	revision, err := env.repo.GetRevisionByNumber(ctx, pkg.ID, 7)
+	require.NoError(t, err)
+	assert.True(t, revision.CreatedAt.Equal(expected))
+
+	release, err := env.repo.ResolveRelease(ctx, pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.True(t, release.When.Equal(expected))
+}
+
 func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
 	addTrackVariantFixture(
 		t,
@@ -233,23 +337,23 @@ func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
 		4,
 		5,
 	)
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
-	releases, err := svc.repo.ListReleases(context.Background(), pkg.ID)
+	releases, err := env.repo.ListReleases(context.Background(), pkg.ID)
 	require.NoError(t, err)
 	require.Len(t, releases, 2)
 
-	amd64Release, err := svc.repo.ResolveReleaseForBase(
+	amd64Release, err := env.repo.ResolveReleaseForBase(
 		context.Background(),
 		pkg.ID,
 		"latest/stable",
@@ -258,7 +362,7 @@ func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7, amd64Release.Revision)
 
-	arm64Release, err := svc.repo.ResolveReleaseForBase(
+	arm64Release, err := env.repo.ResolveReleaseForBase(
 		context.Background(),
 		pkg.ID,
 		"latest/stable",
@@ -271,7 +375,7 @@ func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
 func TestCharmhubSyncFiltersVariantsByBaseAndArchitecture(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
 	addTrackVariantFixture(
 		t,
@@ -295,12 +399,12 @@ func TestCharmhubSyncFiltersVariantsByBaseAndArchitecture(t *testing.T) {
 		6,
 		7,
 	)
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(
+	_, err := env.sync.AddCharmhubSyncRule(
 		context.Background(),
 		admin,
 		"demo",
@@ -310,11 +414,11 @@ func TestCharmhubSyncFiltersVariantsByBaseAndArchitecture(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
-	releases, err := svc.repo.ListReleases(context.Background(), pkg.ID)
+	releases, err := env.repo.ListReleases(context.Background(), pkg.ID)
 	require.NoError(t, err)
 	require.Len(t, releases, 1)
 	require.NotNil(t, releases[0].Base)
@@ -326,66 +430,106 @@ func TestCharmhubSyncFiltersVariantsByBaseAndArchitecture(t *testing.T) {
 func TestCharmhubManagedPackagesBlockPublisherMutations(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
 	publisher := newIdentity("publisher-1", "publisher")
 
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	_, err = svc.UpdatePackage(context.Background(), publisher, "demo", MetadataPatch{Summary: stringPtr("manual")})
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.registry.UpdatePackage(context.Background(), publisher, "demo", registryservice.MetadataPatch{Summary: stringPtr("manual")})
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 
-	_, err = svc.CreateTracks(context.Background(), publisher, "demo", []core.Track{{Name: "2.0"}})
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.registry.CreateTracks(context.Background(), publisher, "demo", []core.Track{{Name: "2.0"}})
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 
-	_, err = svc.CreateRelease(context.Background(), publisher, "demo", []core.Release{{Channel: "latest/stable", Revision: 7}})
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.registry.CreateRelease(context.Background(), publisher, "demo", []core.Release{{Channel: "latest/stable", Revision: 7}})
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 
-	_, err = svc.PushRevision(context.Background(), publisher, "demo", PushRevisionRequest{UploadID: "upload-1"})
-	assertServiceError(t, err, ErrorKindConflict)
+	_, err = env.registry.PushRevision(context.Background(), publisher, "demo", registryservice.PushRevisionRequest{UploadID: "upload-1"})
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
 
-	_, err = svc.PushResource(
+	_, err = env.registry.PushResource(
 		context.Background(),
 		publisher,
 		"demo",
 		"app-image",
-		PushResourceRequest{UploadID: "upload-1"},
+		registryservice.PushResourceRequest{UploadID: "upload-1"},
 	)
-	assertServiceError(t, err, ErrorKindConflict)
+	assertServiceError(t, err, registryservice.ErrorKindConflict)
+}
+
+func TestCharmhubSyncMirrorFailureMarksRuleErrorAndRetries(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	oci.mirrorErr = assert.AnError
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.ErrorIs(t, err, assert.AnError)
+
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusError, rules[0].LastSyncStatus)
+	require.NotNil(t, rules[0].LastSyncError)
+	assert.Contains(t, *rules[0].LastSyncError, assert.AnError.Error())
+
+	oci.mirrorErr = nil
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
+
+	rules, err = env.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusOK, rules[0].LastSyncStatus)
+	assert.Nil(t, rules[0].LastSyncError)
+
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, err)
+	release, err := env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.Equal(t, 7, release.Revision)
 }
 
 func TestRemovingLastCharmhubSyncRuleDeletesPackage(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	require.NoError(t, svc.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
-	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, env.sync.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, charmhubSyncStatusDeleting, rules[0].LastSyncStatus)
 
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	_, err = svc.repo.GetPackageByName(context.Background(), "demo")
+	_, err = env.repo.GetPackageByName(context.Background(), "demo")
 	require.ErrorIs(t, err, repo.ErrNotFound)
-	rules, err = svc.repo.ListCharmhubSyncRules(context.Background())
+	rules, err = env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, rules)
 	assert.Contains(t, oci.deletedPackages, "demo")
@@ -394,43 +538,43 @@ func TestRemovingLastCharmhubSyncRuleDeletesPackage(t *testing.T) {
 func TestRemovingOneTrackPrunesOnlyUnreferencedArtifacts(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
 	addTrackFixture(t, fakeClient, "demo", "upstream-demo", "2.0", 11, 8, 6)
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	_, err = svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "2.0", nil, nil)
+	_, err = env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "2.0", nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	require.NoError(t, svc.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
-	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, env.sync.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rules, 2)
 	assert.Equal(t, charmhubSyncStatusDeleting, syncRuleByTrack(t, rules, "latest").LastSyncStatus)
 
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
-	rules, err = svc.repo.ListCharmhubSyncRules(context.Background())
+	rules, err = env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, "2.0", rules[0].Track)
 
-	_, err = svc.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
+	_, err = env.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
 	require.ErrorIs(t, err, repo.ErrNotFound)
-	_, err = svc.repo.GetRevisionByNumber(context.Background(), pkg.ID, 11)
+	_, err = env.repo.GetRevisionByNumber(context.Background(), pkg.ID, 11)
 	require.NoError(t, err)
 
-	_, err = svc.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
+	_, err = env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
 	require.ErrorIs(t, err, repo.ErrNotFound)
-	release, err := svc.repo.ResolveRelease(context.Background(), pkg.ID, "2.0/stable")
+	release, err := env.repo.ResolveRelease(context.Background(), pkg.ID, "2.0/stable")
 	require.NoError(t, err)
 	assert.Equal(t, 11, release.Revision)
 	assert.NotEmpty(t, oci.deletedImages)
@@ -439,31 +583,31 @@ func TestRemovingOneTrackPrunesOnlyUnreferencedArtifacts(t *testing.T) {
 func TestCharmhubSyncFailureMarksRuleErrorAndKeepsExistingRelease(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
 	addTrackFixture(t, fakeClient, "demo", "upstream-demo", "latest", 9, 4, 4)
 	fakeClient.downloadErrs["https://charmhub.test/demo/latest/stable/ubuntu-24.04-amd64/revision-9.charm"] =
 		fmt.Errorf("upstream unavailable")
 
-	err = svc.reconcileCharmhubPackage(context.Background(), "demo")
+	err = env.sync.reconcilePackage(context.Background(), "demo")
 	require.Error(t, err)
 
-	pkg, getErr := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, getErr := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, getErr)
-	release, getErr := svc.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
+	release, getErr := env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
 	require.NoError(t, getErr)
 	assert.Equal(t, 7, release.Revision)
 
-	rules, getErr := svc.repo.ListCharmhubSyncRules(context.Background())
+	rules, getErr := env.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, getErr)
 	require.Len(t, rules, 1)
 	assert.Equal(t, charmhubSyncStatusError, rules[0].LastSyncStatus)
@@ -474,32 +618,57 @@ func TestCharmhubSyncFailureMarksRuleErrorAndKeepsExistingRelease(t *testing.T) 
 func TestCharmhubSyncRemovesChannelWhenUpstreamDisappears(t *testing.T) {
 	t.Parallel()
 
-	svc := newSyncTestService(t)
+	env := newSyncTestHarness(t)
 	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
 	addTrackFixture(t, fakeClient, "demo", "upstream-demo", "latest", 7, 3, 2)
 	fakeClient.channels["demo|latest/candidate"] = cloneCharmhubChannel(fakeClient.channels["demo|latest/stable"], "latest/candidate", "candidate")
-	svc.charmhub = fakeClient
-	svc.oci = oci
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
 
 	admin := newIdentity("admin-1", "admin")
 	admin.Account.IsAdmin = true
-	_, err := svc.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
 	delete(fakeClient.channels, "demo|latest/candidate")
-	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
 
-	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
-	_, err = svc.repo.ResolveRelease(context.Background(), pkg.ID, "latest/candidate")
+	_, err = env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/candidate")
 	require.ErrorIs(t, err, repo.ErrNotFound)
 }
 
-func newSyncTestService(t *testing.T) *Service {
+func newSyncTestHarness(t *testing.T) *syncTestHarness {
 	t.Helper()
 	repository := repo.NewMemory()
-	return New(testConfig(), repository, blob.NewMemoryStore(), testutil.OCIRegistry{RegistryHost: "oci.test"})
+	storage := blob.NewMemoryStore()
+	ociRegistry := testutil.OCIRegistry{RegistryHost: "oci.test"}
+	return &syncTestHarness{
+		registry: registryservice.New(testConfig(), repository, storage, ociRegistry),
+		sync:     New(testConfig(), repository, storage, ociRegistry),
+		repo:     repository,
+	}
+}
+
+func newSQLiteSyncTestHarness(t *testing.T) *syncTestHarness {
+	t.Helper()
+	ctx := context.Background()
+	repository, err := repo.NewSQLite(ctx, t.TempDir()+"/registry.sqlite")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, repository.Close())
+	})
+	require.NoError(t, repository.Migrate(ctx))
+
+	storage := blob.NewMemoryStore()
+	ociRegistry := testutil.OCIRegistry{RegistryHost: "oci.test"}
+	return &syncTestHarness{
+		registry: registryservice.New(testConfig(), repository, storage, ociRegistry),
+		sync:     New(testConfig(), repository, storage, ociRegistry),
+		repo:     repository,
+	}
 }
 
 func newSyncFixture(
@@ -708,4 +877,55 @@ func buildSyncCharmArchive(t *testing.T, name string) []byte {
 
 	require.NoError(t, writer.Close())
 	return payload.Bytes()
+}
+
+func newIdentity(id, username string) core.Identity {
+	return core.Identity{
+		Account: core.Account{
+			ID:          id,
+			Subject:     username,
+			Username:    username,
+			DisplayName: username,
+			Email:       username + "@example.com",
+			Validation:  "verified",
+		},
+		Authenticated: true,
+	}
+}
+
+func ensurePersistedIdentity(t *testing.T, repository repo.AccountRepo, id, username string, isAdmin bool) core.Identity {
+	t.Helper()
+	account, err := repository.EnsureAccount(context.Background(), core.Account{
+		ID:          id,
+		Subject:     username,
+		Username:    username,
+		DisplayName: username,
+		Email:       username + "@example.com",
+		Validation:  "verified",
+		IsAdmin:     isAdmin,
+		CreatedAt:   time.Unix(0, 0).UTC(),
+	})
+	require.NoError(t, err)
+	return core.Identity{Account: account, Authenticated: true}
+}
+
+func testConfig() config.Config {
+	return config.Config{
+		PublicAPIURL:          "https://registry.example.test",
+		PublicStorageURL:      "https://storage.example.test",
+		PublicRegistryURL:     "https://oci.example.test",
+		EnableInsecureDevAuth: true,
+		OCIProjectPrefix:      "charm",
+		OCIPullRobotPrefix:    "pull",
+		OCIPushRobotPrefix:    "push",
+		OCISecretKey:          "test-oci-secret",
+	}
+}
+
+func assertServiceError(t *testing.T, err error, expectedKind registryservice.ErrorKind) {
+	t.Helper()
+	require.Error(t, err)
+	var svcErr *registryservice.Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, expectedKind, svcErr.Kind)
 }

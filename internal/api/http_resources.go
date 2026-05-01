@@ -6,15 +6,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
-func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleListResources(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	resources, err := a.svc.ListResources(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
 		writeError(w, r, err)
@@ -23,12 +19,7 @@ func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resourceListResponse{Resources: resources})
 }
 
-func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	revisions, err := a.svc.ListResourceRevisions(
 		r.Context(),
 		identity,
@@ -54,12 +45,7 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resourceRevisionListResponse{Revisions: rows})
 }
 
-func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.PushResourceRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))
@@ -76,15 +62,10 @@ func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, statusURLResponse{StatusURL: statusURL})
+	writeCreatedJSON(w, statusURL, statusURLResponse{StatusURL: statusURL})
 }
 
-func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.UpdateResourceRevisionRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
 		writeError(w, r, invalidRequestError(err))
@@ -104,12 +85,7 @@ func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, resourceRevisionUpdatesResponse{NumResourceRevisionsUpdated: updated})
 }
 
-func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.OCIImageUploadCredentials(
 		r.Context(),
 		identity,
@@ -123,12 +99,7 @@ func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req struct {
 		ImageDigest string `json:"image-digest"`
 	}
@@ -153,24 +124,16 @@ func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, content)
 }
 
-func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	packageID, resourceName, revision, parseErr := parseResourceDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
 		writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
-	payload, err := a.svc.DownloadResource(r.Context(), identity, packageID, resourceName, revision)
+	reader, size, err := a.svc.DownloadResourceStream(r.Context(), identity, packageID, resourceName, revision)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="resource.bin"`)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	// #nosec G705 -- This endpoint streams attachment bytes.
-	_, _ = w.Write(payload)
+	writeAttachment(w, r, "resource.bin", reader, size)
 }

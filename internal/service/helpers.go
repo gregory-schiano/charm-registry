@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -17,6 +16,9 @@ import (
 // --- Authorization guards ---
 
 func (s *Service) requireAuth(identity core.Identity) error {
+	if identity.System {
+		return nil
+	}
 	if !identity.Authenticated {
 		return newError(ErrorKindUnauthorized, "unauthorized", "authentication required")
 	}
@@ -24,6 +26,9 @@ func (s *Service) requireAuth(identity core.Identity) error {
 }
 
 func (s *Service) requirePermission(identity core.Identity, permission string) error {
+	if identity.System {
+		return nil
+	}
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
@@ -41,16 +46,6 @@ func (s *Service) requirePermission(identity core.Identity, permission string) e
 	return newError(ErrorKindForbidden, "forbidden", "token does not grant required permission")
 }
 
-func (s *Service) requireAdmin(identity core.Identity) error {
-	if err := s.requireAuth(identity); err != nil {
-		return err
-	}
-	if identity.Account.IsAdmin {
-		return nil
-	}
-	return newError(ErrorKindForbidden, "forbidden", "admin access is required")
-}
-
 func (s *Service) requirePermissionOrAnonymous(identity core.Identity, permission string) error {
 	if !identity.Authenticated {
 		return nil
@@ -64,6 +59,9 @@ func (s *Service) requirePackageView(
 	pkg core.Package,
 	requireTokenPermission bool,
 ) error {
+	if identity.System {
+		return nil
+	}
 	if !pkg.Private {
 		if requireTokenPermission {
 			return s.requirePermissionOrAnonymous(identity, permPackageView)
@@ -101,6 +99,9 @@ func (s *Service) requirePackageManage(
 	pkg core.Package,
 	permission string,
 ) error {
+	if identity.System {
+		return nil
+	}
 	if err := s.requirePermission(identity, permission); err != nil {
 		return err
 	}
@@ -134,6 +135,33 @@ func (s *Service) enforceChannelRestriction(identity core.Identity, channel stri
 
 func (s *Service) canSeePackage(ctx context.Context, identity core.Identity, pkg core.Package) bool {
 	return s.requirePackageView(ctx, identity, pkg, false) == nil
+}
+
+func (s *Service) ensurePackageNotSynchronized(ctx context.Context, packageName string) error {
+	if s.syncRules == nil {
+		return nil
+	}
+	rules, err := s.syncRules.ListCharmhubSyncRulesByPackageName(ctx, packageName)
+	if err != nil {
+		return err
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return newError(
+		ErrorKindConflict,
+		"package-synchronized",
+		"package is managed by Charmhub synchronization",
+	)
+}
+
+func checkContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // --- URL helpers ---
@@ -240,10 +268,6 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func timePtr(value time.Time) *time.Time {
-	return &value
 }
 
 func firstLink(values []string) string {

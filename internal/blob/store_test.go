@@ -45,32 +45,20 @@ func (m *mockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectI
 
 func TestMemoryStorePutAndGet(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	ctx := context.Background()
 	store := NewMemoryStore()
-
-	// Act
-	err := store.Put(ctx, "key1", []byte("hello"), "text/plain")
+	err := store.Put(ctx, "key1", bytes.NewReader([]byte("hello")), "text/plain")
 	require.NoError(t, err)
 	data, err := store.Get(ctx, "key1")
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []byte("hello"), data)
 }
 
 func TestMemoryStoreGetNotFound(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	ctx := context.Background()
 	store := NewMemoryStore()
-
-	// Act
 	_, err := store.Get(ctx, "nonexistent")
-
-	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 
@@ -78,17 +66,11 @@ func TestMemoryStoreGetNotFound(t *testing.T) {
 
 func TestMemoryStoreOverwrite(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	ctx := context.Background()
 	store := NewMemoryStore()
-
-	// Act
-	_ = store.Put(ctx, "key", []byte("v1"), "text/plain")
-	_ = store.Put(ctx, "key", []byte("v2"), "text/plain")
+	_ = store.Put(ctx, "key", bytes.NewReader([]byte("v1")), "text/plain")
+	_ = store.Put(ctx, "key", bytes.NewReader([]byte("v2")), "text/plain")
 	data, err := store.Get(ctx, "key")
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v2"), data)
 
@@ -102,7 +84,7 @@ func TestMemoryStoreIsolatesCopies(t *testing.T) {
 
 	// Arrange: store data
 	original := []byte("original")
-	_ = store.Put(ctx, "key", original, "text/plain")
+	_ = store.Put(ctx, "key", bytes.NewReader(original), "text/plain")
 
 	// Act: mutate the original slice
 	original[0] = 'x'
@@ -121,16 +103,10 @@ func TestMemoryStoreIsolatesCopies(t *testing.T) {
 
 func TestMemoryStoreMultipleKeys(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	ctx := context.Background()
 	store := NewMemoryStore()
-
-	// Act
-	_ = store.Put(ctx, "a", []byte("alpha"), "text/plain")
-	_ = store.Put(ctx, "b", []byte("beta"), "text/plain")
-
-	// Assert
+	_ = store.Put(ctx, "a", bytes.NewReader([]byte("alpha")), "text/plain")
+	_ = store.Put(ctx, "b", bytes.NewReader([]byte("beta")), "text/plain")
 	a, _ := store.Get(ctx, "a")
 	b, _ := store.Get(ctx, "b")
 	assert.Equal(t, []byte("alpha"), a)
@@ -144,7 +120,7 @@ func TestMemoryStoreDelete(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryStore()
 
-	require.NoError(t, store.Put(ctx, "key", []byte("hello"), "text/plain"))
+	require.NoError(t, store.Put(ctx, "key", bytes.NewReader([]byte("hello")), "text/plain"))
 	require.NoError(t, store.Delete(ctx, "key"))
 	_, err := store.Get(ctx, "key")
 	require.Error(t, err)
@@ -166,12 +142,12 @@ func TestFileStorePutGetOverwriteAndDelete(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	require.NoError(t, err)
 
-	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", []byte("v1"), "text/plain"))
+	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", bytes.NewReader([]byte("v1")), "text/plain"))
 	payload, err := store.Get(ctx, "uploads/one/blob.txt")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v1"), payload)
 
-	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", []byte("v2"), "text/plain"))
+	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", bytes.NewReader([]byte("v2")), "text/plain"))
 	payload, err = store.Get(ctx, "uploads/one/blob.txt")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("v2"), payload)
@@ -198,7 +174,7 @@ func TestFileStoreCreatesParentDirectories(t *testing.T) {
 	store, err := NewFileStore(root)
 	require.NoError(t, err)
 
-	require.NoError(t, store.Put(context.Background(), "a/b/c", []byte("payload"), "text/plain"))
+	require.NoError(t, store.Put(context.Background(), "a/b/c", bytes.NewReader([]byte("payload")), "text/plain"))
 	_, err = os.Stat(filepath.Join(root, "a", "b", "c"))
 	require.NoError(t, err)
 }
@@ -209,9 +185,9 @@ func TestFileStoreRejectsTraversal(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	require.NoError(t, err)
 
-	require.Error(t, store.Put(context.Background(), "../escape", []byte("payload"), "text/plain"))
-	require.Error(t, store.Put(context.Background(), "/escape", []byte("payload"), "text/plain"))
-	require.Error(t, store.Put(context.Background(), "foo/../../escape", []byte("payload"), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "../escape", bytes.NewReader([]byte("payload")), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "/escape", bytes.NewReader([]byte("payload")), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "foo/../../escape", bytes.NewReader([]byte("payload")), "text/plain"))
 	_, err = store.Get(context.Background(), "../escape")
 	require.Error(t, err)
 }
@@ -222,7 +198,7 @@ func TestFileStoreRejectsNullByteKeys(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	require.NoError(t, err)
 
-	require.Error(t, store.Put(context.Background(), "bad\x00key", []byte("payload"), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "bad\x00key", bytes.NewReader([]byte("payload")), "text/plain"))
 	_, err = store.Get(context.Background(), "bad\x00key")
 	require.Error(t, err)
 	require.Error(t, store.Delete(context.Background(), "bad\x00key"))
@@ -232,8 +208,6 @@ func TestFileStoreRejectsNullByteKeys(t *testing.T) {
 
 func TestS3StoreEnsureBucketAlreadyExists(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	createCalled := false
 	mock := &mockS3Client{
 		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -245,11 +219,7 @@ func TestS3StoreEnsureBucketAlreadyExists(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
 	err := store.ensureBucket(context.Background())
-
-	// Assert
 	require.NoError(t, err)
 	assert.False(t, createCalled, "CreateBucket should not be called when HeadBucket succeeds")
 
@@ -257,8 +227,6 @@ func TestS3StoreEnsureBucketAlreadyExists(t *testing.T) {
 
 func TestS3StoreEnsureBucketCreatedWithoutConstraint(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	// isS3=false → no LocationConstraint regardless of region.
 	var capturedInput *s3.CreateBucketInput
 	mock := &mockS3Client{
@@ -271,11 +239,7 @@ func TestS3StoreEnsureBucketCreatedWithoutConstraint(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "eu-west-1", false /* isS3=false */)
-
-	// Act
 	err := store.ensureBucket(context.Background())
-
-	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, capturedInput)
 	assert.Nil(t, capturedInput.CreateBucketConfiguration, "no LocationConstraint expected when isS3=false")
@@ -284,8 +248,6 @@ func TestS3StoreEnsureBucketCreatedWithoutConstraint(t *testing.T) {
 
 func TestS3StoreEnsureBucketCreatedWithRegionConstraint(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	// isS3=true, region != "us-east-1" → LocationConstraint must be set.
 	var capturedInput *s3.CreateBucketInput
 	mock := &mockS3Client{
@@ -298,11 +260,7 @@ func TestS3StoreEnsureBucketCreatedWithRegionConstraint(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "eu-west-1", true /* isS3=true */)
-
-	// Act
 	err := store.ensureBucket(context.Background())
-
-	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, capturedInput)
 	require.NotNil(t, capturedInput.CreateBucketConfiguration)
@@ -312,8 +270,6 @@ func TestS3StoreEnsureBucketCreatedWithRegionConstraint(t *testing.T) {
 
 func TestS3StoreEnsureBucketNoConstraintForUsEast1(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	// isS3=true, region == "us-east-1" → LocationConstraint must NOT be set.
 	var capturedInput *s3.CreateBucketInput
 	mock := &mockS3Client{
@@ -326,11 +282,7 @@ func TestS3StoreEnsureBucketNoConstraintForUsEast1(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true /* isS3=true */)
-
-	// Act
 	err := store.ensureBucket(context.Background())
-
-	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, capturedInput)
 	assert.Nil(t, capturedInput.CreateBucketConfiguration, "us-east-1 must not include a LocationConstraint")
@@ -339,8 +291,6 @@ func TestS3StoreEnsureBucketNoConstraintForUsEast1(t *testing.T) {
 
 func TestS3StoreEnsureBucketCreateError(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	createErr := errors.New("create failed")
 	mock := &mockS3Client{
 		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -351,11 +301,7 @@ func TestS3StoreEnsureBucketCreateError(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
 	err := store.ensureBucket(context.Background())
-
-	// Assert
 	assert.ErrorIs(t, err, createErr)
 
 }
@@ -379,8 +325,6 @@ func TestS3BaseEndpointDisablesTLS(t *testing.T) {
 
 func TestS3StorePutSuccess(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	var capturedInput *s3.PutObjectInput
 	mock := &mockS3Client{
 		putObjectFn: func(_ context.Context, input *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -389,11 +333,7 @@ func TestS3StorePutSuccess(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
-	err := store.Put(context.Background(), "charms/foo/1.charm", []byte("charm data"), "application/octet-stream")
-
-	// Assert
+	err := store.Put(context.Background(), "charms/foo/1.charm", bytes.NewReader([]byte("charm data")), "application/octet-stream")
 	require.NoError(t, err)
 	require.NotNil(t, capturedInput)
 	assert.Equal(t, "my-bucket", *capturedInput.Bucket)
@@ -408,8 +348,6 @@ func TestS3StorePutSuccess(t *testing.T) {
 
 func TestS3StorePutError(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	putErr := errors.New("S3 write failed")
 	mock := &mockS3Client{
 		putObjectFn: func(_ context.Context, _ *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -417,19 +355,13 @@ func TestS3StorePutError(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
-	err := store.Put(context.Background(), "key", []byte("data"), "text/plain")
-
-	// Assert
+	err := store.Put(context.Background(), "key", bytes.NewReader([]byte("data")), "text/plain")
 	assert.ErrorIs(t, err, putErr)
 
 }
 
 func TestS3StoreGetSuccess(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	content := []byte("retrieved charm bytes")
 	mock := &mockS3Client{
 		getObjectFn: func(_ context.Context, input *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -441,11 +373,7 @@ func TestS3StoreGetSuccess(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
 	data, err := store.Get(context.Background(), "charms/foo/1.charm")
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, content, data)
 
@@ -453,8 +381,6 @@ func TestS3StoreGetSuccess(t *testing.T) {
 
 func TestS3StoreGetError(t *testing.T) {
 	t.Parallel()
-
-	// Arrange
 	getErr := errors.New("S3 read failed")
 	mock := &mockS3Client{
 		getObjectFn: func(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -462,11 +388,7 @@ func TestS3StoreGetError(t *testing.T) {
 		},
 	}
 	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
-
-	// Act
 	_, err := store.Get(context.Background(), "key")
-
-	// Assert
 	assert.ErrorIs(t, err, getErr)
 
 }

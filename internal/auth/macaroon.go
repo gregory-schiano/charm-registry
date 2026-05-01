@@ -18,6 +18,9 @@ import (
 // macaroon bundle is then sent by charmcraft to POST /v1/tokens/exchange in
 // the "Macaroons" header.  The handler extracts the identifier (the raw token)
 // via [ExtractTokenFromMacaroons] to complete the exchange.
+//
+// The signature is compatibility data only. Authentication does not verify it;
+// the exchange endpoint authenticates the raw token from the identifier field.
 func WrapInMacaroon(raw, location string) string {
 	// Derive a stable root key from the raw token so the HMAC is reproducible.
 	rootKey := sha256.Sum256([]byte(raw))

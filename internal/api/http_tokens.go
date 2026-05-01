@@ -45,12 +45,7 @@ func (a *API) handleDocs(w http.ResponseWriter, _ *http.Request) {
 </html>`)
 }
 
-func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	if !identity.Authenticated {
 		writeJSON(w, http.StatusOK, map[string]any{"macaroon": "oidc-login-required"})
 		return
@@ -82,12 +77,8 @@ func (a *API) handleGetTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"macaroons": out})
 }
 
-func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request, identity core.Identity) {
+	var err error
 	// charmcraft login calls POST /v1/tokens with no credentials: it expects
 	// the real store to start a Candid/SSO discharge flow and return a root
 	// macaroon.  When dev auth is enabled we short-circuit that by
@@ -126,12 +117,8 @@ func (a *API) handleIssueToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"macaroon": auth.WrapInMacaroon(raw, a.cfg.PublicAPIURL)})
 }
 
-func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleExchangeToken(w http.ResponseWriter, r *http.Request, identity core.Identity) {
+	var err error
 	identity, err = a.resolveExchangeIdentity(r, identity)
 	if err != nil {
 		writeError(w, r, err)
@@ -164,12 +151,7 @@ func (a *API) resolveExchangeIdentity(r *http.Request, identity core.Identity) (
 	return a.svc.ResolveIdentity(r.Context(), claims, storeToken)
 }
 
-func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req struct {
 		ClientDescription *string `json:"client-description"`
 	}
@@ -185,12 +167,7 @@ func (a *API) handleDashboardExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"macaroon": raw})
 }
 
-func (a *API) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleRevokeToken(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req struct {
 		SessionID string `json:"session-id"`
 	}
@@ -210,12 +187,7 @@ func (a *API) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"macaroons": tokens})
 }
 
-func (a *API) handleTokenWhoAmI(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleTokenWhoAmI(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.MacaroonInfo(identity)
 	if err != nil {
 		writeError(w, r, err)
@@ -224,12 +196,7 @@ func (a *API) handleTokenWhoAmI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
+func (a *API) handleWhoAmI(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.DeprecatedWhoAmI(identity)
 	if err != nil {
 		writeError(w, r, err)

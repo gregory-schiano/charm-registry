@@ -22,8 +22,9 @@ import (
 )
 
 type Store interface {
-	Put(ctx context.Context, key string, payload []byte, contentType string) error
+	Put(ctx context.Context, key string, payload io.Reader, contentType string) error
 	Get(ctx context.Context, key string) ([]byte, error)
+	Open(ctx context.Context, key string) (io.ReadCloser, int64, error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -38,10 +39,14 @@ func NewMemoryStore() *MemoryStore {
 }
 
 // Put is part of the [Store] interface.
-func (s *MemoryStore) Put(_ context.Context, key string, payload []byte, _ string) error {
+func (s *MemoryStore) Put(_ context.Context, key string, payload io.Reader, _ string) error {
+	data, err := io.ReadAll(payload)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[key] = append([]byte(nil), payload...)
+	s.data[key] = append([]byte(nil), data...)
 	return nil
 }
 
@@ -54,6 +59,15 @@ func (s *MemoryStore) Get(_ context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("blob %q not found", key)
 	}
 	return append([]byte(nil), payload...), nil
+}
+
+// Open is part of the [Store] interface.
+func (s *MemoryStore) Open(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	payload, err := s.Get(context.Background(), key)
+	if err != nil {
+		return nil, 0, err
+	}
+	return io.NopCloser(bytes.NewReader(payload)), int64(len(payload)), nil
 }
 
 // Delete is part of the [Store] interface.
@@ -78,7 +92,7 @@ func NewFileStore(root string) (*FileStore, error) {
 	return &FileStore{root: root}, nil
 }
 
-func (s *FileStore) Put(_ context.Context, key string, payload []byte, _ string) error {
+func (s *FileStore) Put(_ context.Context, key string, payload io.Reader, _ string) error {
 	path, err := s.path(key)
 	if err != nil {
 		return err
@@ -94,7 +108,7 @@ func (s *FileStore) Put(_ context.Context, key string, payload []byte, _ string)
 	defer func() {
 		_ = os.Remove(tmpName)
 	}()
-	if _, err := tmp.Write(payload); err != nil {
+	if _, err := io.Copy(tmp, payload); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -105,16 +119,33 @@ func (s *FileStore) Put(_ context.Context, key string, payload []byte, _ string)
 }
 
 func (s *FileStore) Get(_ context.Context, key string) ([]byte, error) {
-	path, err := s.path(key)
+	reader, _, err := s.Open(context.Background(), key)
 	if err != nil {
 		return nil, err
 	}
-	// #nosec G304 -- path is rooted and traversal-checked by FileStore.path.
-	payload, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("blob %q not found", key)
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func (s *FileStore) Open(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	path, err := s.path(key)
+	if err != nil {
+		return nil, 0, err
 	}
-	return payload, err
+	// #nosec G304 -- path is rooted and traversal-checked by FileStore.path.
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, fmt.Errorf("blob %q not found", key)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, 0, err
+	}
+	return file, info.Size(), nil
 }
 
 func (s *FileStore) Delete(_ context.Context, key string) error {
@@ -253,11 +284,11 @@ func isBucketAccessDenied(err error) bool {
 }
 
 // Put is part of the [Store] interface.
-func (s *S3Store) Put(ctx context.Context, key string, payload []byte, contentType string) error {
+func (s *S3Store) Put(ctx context.Context, key string, payload io.Reader, contentType string) error {
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &s.bucket,
 		Key:         &key,
-		Body:        bytes.NewReader(payload),
+		Body:        payload,
 		ContentType: &contentType,
 	})
 	return err
@@ -265,15 +296,28 @@ func (s *S3Store) Put(ctx context.Context, key string, payload []byte, contentTy
 
 // Get is part of the [Store] interface.
 func (s *S3Store) Get(ctx context.Context, key string) ([]byte, error) {
+	reader, _, err := s.Open(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+// Open is part of the [Store] interface.
+func (s *S3Store) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &s.bucket,
 		Key:    &key,
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	size := int64(-1)
+	if resp.ContentLength != nil {
+		size = *resp.ContentLength
+	}
+	return resp.Body, size, nil
 }
 
 // Delete is part of the [Store] interface.

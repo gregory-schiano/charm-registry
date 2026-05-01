@@ -1,10 +1,11 @@
-package service
+package registrysync
 
 import (
 	"context"
 	"time"
 
 	"github.com/gschiano/charm-registry/internal/core"
+	"github.com/gschiano/charm-registry/internal/service"
 )
 
 func (s *Service) syncOCIPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
@@ -29,22 +30,12 @@ func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (c
 	provisioned, err := s.syncOCIPackage(ctx, pkg)
 	if err != nil {
 		return core.Package{}, newError(
-			ErrorKindConflict,
+			service.ErrorKindConflict,
 			"oci-provisioning-unavailable",
 			"OCI package provisioning is unavailable",
 		)
 	}
 	return provisioned, nil
-}
-
-func (s *Service) requireOCIPackageReady(pkg core.Package, pull bool) error {
-	if !ociPackageProvisioned(pkg) {
-		return newError(ErrorKindConflict, "oci-not-provisioned", "OCI package is not provisioned")
-	}
-	if pull && !robotCredentialReady(pkg.OCIPullRobot) {
-		return newError(ErrorKindConflict, "oci-not-provisioned", "OCI package is not provisioned")
-	}
-	return nil
 }
 
 func ociPackageProvisioned(pkg core.Package) bool {

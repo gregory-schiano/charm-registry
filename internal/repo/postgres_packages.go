@@ -12,7 +12,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// CreatePackage is part of the [Repository] interface.
 func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 	linksJSON, err := rawJSON(pkg.Links)
 	if err != nil {
@@ -64,7 +63,6 @@ func (p *Postgres) CreatePackage(ctx context.Context, pkg core.Package) error {
 	return nil
 }
 
-// UpdatePackage is part of the [Repository] interface.
 func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
 	linksJSON, err := rawJSON(pkg.Links)
 	if err != nil {
@@ -111,7 +109,6 @@ func (p *Postgres) UpdatePackage(ctx context.Context, pkg core.Package) error {
 	return nil
 }
 
-// DeletePackage is part of the [Repository] interface.
 func (p *Postgres) DeletePackage(ctx context.Context, packageID string) error {
 	rowsAffected, err := p.queries().DeletePackage(ctx, packageID)
 	if err != nil {
@@ -123,7 +120,6 @@ func (p *Postgres) DeletePackage(ctx context.Context, packageID string) error {
 	return nil
 }
 
-// GetPackageByName is part of the [Repository] interface.
 func (p *Postgres) GetPackageByName(ctx context.Context, name string) (core.Package, error) {
 	row, err := p.queries().GetPackageByName(ctx, name)
 	if pgxNotFound(err) {
@@ -135,7 +131,6 @@ func (p *Postgres) GetPackageByName(ctx context.Context, name string) (core.Pack
 	return packageFromGetPackageByNameRow(row)
 }
 
-// GetPackageByID is part of the [Repository] interface.
 func (p *Postgres) GetPackageByID(ctx context.Context, packageID string) (core.Package, error) {
 	row, err := p.queries().GetPackageByID(ctx, packageID)
 	if pgxNotFound(err) {
@@ -147,7 +142,6 @@ func (p *Postgres) GetPackageByID(ctx context.Context, packageID string) (core.P
 	return packageFromGetPackageByIDRow(row)
 }
 
-// ListPackagesForAccount is part of the [Repository] interface.
 func (p *Postgres) ListPackagesForAccount(
 	ctx context.Context,
 	accountID string,
@@ -184,7 +178,6 @@ func (p *Postgres) ListPackagesForAccount(
 	return out, nil
 }
 
-// SearchPackages is part of the [Repository] interface.
 func (p *Postgres) SearchPackages(ctx context.Context, query string) ([]core.Package, error) {
 	pattern := "%"
 	if trimmed := strings.TrimSpace(query); trimmed != "" {
@@ -210,12 +203,10 @@ func escapeLikePattern(value string) string {
 	return replacer.Replace(value)
 }
 
-// CanViewPackage is part of the [Repository] interface.
 func (p *Postgres) CanViewPackage(ctx context.Context, packageID, accountID string) (bool, error) {
 	return p.canAccess(ctx, packageID, accountID, false)
 }
 
-// CanManagePackage is part of the [Repository] interface.
 func (p *Postgres) CanManagePackage(ctx context.Context, packageID, accountID string) (bool, error) {
 	return p.canAccess(ctx, packageID, accountID, true)
 }

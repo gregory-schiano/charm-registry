@@ -8,7 +8,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// CreateUpload is part of the [Repository] interface.
 func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 	errorsJSON, err := rawJSON(upload.Errors)
 	if err != nil {
@@ -34,7 +33,6 @@ func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 	})
 }
 
-// GetUpload is part of the [Repository] interface.
 func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload, error) {
 	upload, err := p.queries().GetUpload(ctx, uploadID)
 	if pgxNotFound(err) {
@@ -46,7 +44,6 @@ func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload,
 	return uploadFromSQLC(upload)
 }
 
-// ApproveUpload is part of the [Repository] interface.
 func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision *int, apiErrors []core.APIError) error {
 	status := "approved"
 	if len(apiErrors) > 0 {
@@ -75,7 +72,6 @@ func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision 
 	return nil
 }
 
-// CreateRevision is part of the [Repository] interface.
 func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) error {
 	basesJSON, err := rawJSON(revision.Bases)
 	if err != nil {
@@ -117,7 +113,6 @@ func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) e
 	})
 }
 
-// DeleteRevision is part of the [Repository] interface.
 func (p *Postgres) DeleteRevision(ctx context.Context, packageID string, revision int) error {
 	revisionNumber, err := toInt32(revision)
 	if err != nil {
@@ -136,7 +131,6 @@ func (p *Postgres) DeleteRevision(ctx context.Context, packageID string, revisio
 	return nil
 }
 
-// ListRevisions is part of the [Repository] interface.
 func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error) {
 	if revision != nil {
 		item, err := p.GetRevisionByNumber(ctx, packageID, *revision)
@@ -163,7 +157,6 @@ func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision
 	return out, nil
 }
 
-// ListRevisionsByNumbers is part of the [Repository] interface.
 func (p *Postgres) ListRevisionsByNumbers(
 	ctx context.Context,
 	packageID string,
@@ -194,7 +187,6 @@ func (p *Postgres) ListRevisionsByNumbers(
 	return out, nil
 }
 
-// GetRevisionByNumber is part of the [Repository] interface.
 func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
 	revisionNumber, err := toInt32(revision)
 	if err != nil {
@@ -213,7 +205,6 @@ func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, re
 	return revisionFromSQLC(item)
 }
 
-// GetLatestRevision is part of the [Repository] interface.
 func (p *Postgres) GetLatestRevision(ctx context.Context, packageID string) (core.Revision, error) {
 	item, err := p.queries().GetLatestRevision(ctx, packageID)
 	if pgxNotFound(err) {

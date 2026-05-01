@@ -13,7 +13,7 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Postgres is a PostgreSQL-backed [Repository].
+// Postgres is a PostgreSQL-backed [Backend].
 type Postgres struct {
 	pool *pgxpool.Pool
 	db   postgresDB
@@ -25,7 +25,7 @@ type postgresDB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// NewPostgres opens a PostgreSQL-backed [Repository].
+// NewPostgres opens a PostgreSQL-backed [Backend].
 //
 // The following errors may be returned:
 // - Errors from creating the PostgreSQL connection pool.
@@ -59,7 +59,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// Ping is part of the [Repository] interface.
+// Ping is part of the [HealthRepo] interface.
 func (p *Postgres) Ping(ctx context.Context) error {
 	return p.pool.Ping(ctx)
 }
@@ -70,8 +70,8 @@ func (p *Postgres) Close() error {
 	return nil
 }
 
-// WithinTransaction is part of the [Repository] interface.
-func (p *Postgres) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
+// WithinTransaction is part of the [Transactor] interface.
+func (p *Postgres) WithinTransaction(ctx context.Context, fn func(CompositeRepo) error) error {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err

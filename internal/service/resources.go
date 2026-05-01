@@ -1,12 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
+	"io"
 
 	"github.com/google/uuid"
 
@@ -24,7 +25,7 @@ func (s *Service) ListResources(
 ) ([]ResourceListItemResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
 		return nil, err
@@ -65,7 +66,7 @@ func (s *Service) PushResource(
 ) (string, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return "", translateRepoError(err, "package not found")
+		return "", translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return "", err
@@ -75,15 +76,15 @@ func (s *Service) PushResource(
 	}
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName)
 	if err != nil {
-		return "", translateRepoError(err, "resource not declared")
+		return "", translateRepoError(err, messageResourceNotDeclared)
 	}
 	upload, err := s.repo.GetUpload(ctx, req.UploadID)
 	if err != nil {
-		return "", translateRepoError(err, "upload not found")
+		return "", translateRepoError(err, messageUploadNotFound)
 	}
 	if req.PackageRevision != nil {
 		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, *req.PackageRevision); err != nil {
-			return "", translateRepoError(err, "package revision not found")
+			return "", translateRepoError(err, messagePackageRevisionNotFound)
 		}
 	}
 	payload, err := s.blobs.Get(ctx, upload.ObjectKey)
@@ -98,7 +99,7 @@ func (s *Service) PushResource(
 	if len(existing) > 0 {
 		revisionNumber = existing[0].Revision + 1
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	sha512sum := sha512.Sum512(payload)
 	sha3384sum := sha512.Sum384(payload)
 	resourceRevision := core.ResourceRevision{
@@ -151,14 +152,14 @@ func (s *Service) ListResourceRevisions(
 ) ([]core.ResourceRevision, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
 		return nil, err
 	}
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName)
 	if err != nil {
-		return nil, translateRepoError(err, "resource not found")
+		return nil, translateRepoError(err, messageResourceNotFound)
 	}
 	revisions, err := s.repo.ListResourceRevisions(ctx, resourceDef.ID)
 	if err != nil {
@@ -179,7 +180,7 @@ func (s *Service) UpdateResourceRevisions(
 ) (int, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return 0, translateRepoError(err, "package not found")
+		return 0, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return 0, err
@@ -189,7 +190,7 @@ func (s *Service) UpdateResourceRevisions(
 	}
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName)
 	if err != nil {
-		return 0, translateRepoError(err, "resource not found")
+		return 0, translateRepoError(err, messageResourceNotFound)
 	}
 	updated := 0
 	for _, update := range req.ResourceRevisionUpdates {
@@ -218,7 +219,7 @@ func (s *Service) OCIImageUploadCredentials(
 ) (ociImageUploadCredentialsResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return ociImageUploadCredentialsResponse{}, translateRepoError(err, "package not found")
+		return ociImageUploadCredentialsResponse{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return ociImageUploadCredentialsResponse{}, err
@@ -227,7 +228,7 @@ func (s *Service) OCIImageUploadCredentials(
 		return ociImageUploadCredentialsResponse{}, err
 	}
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
-		return ociImageUploadCredentialsResponse{}, translateRepoError(err, "resource not found")
+		return ociImageUploadCredentialsResponse{}, translateRepoError(err, messageResourceNotFound)
 	}
 	pkg, err = s.ensureOCIProvisioned(ctx, pkg)
 	if err != nil {
@@ -259,7 +260,7 @@ func (s *Service) OCIImageBlob(
 ) (string, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return "", translateRepoError(err, "package not found")
+		return "", translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return "", err
@@ -268,7 +269,7 @@ func (s *Service) OCIImageBlob(
 		return "", err
 	}
 	if _, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName); err != nil {
-		return "", translateRepoError(err, "resource not found")
+		return "", translateRepoError(err, messageResourceNotFound)
 	}
 	pkg, err = s.ensureOCIProvisioned(ctx, pkg)
 	if err != nil {
@@ -288,28 +289,50 @@ func (s *Service) DownloadResource(
 	packageID, resourceName string,
 	revisionNumber int,
 ) ([]byte, error) {
+	reader, _, err := s.DownloadResourceStream(ctx, identity, packageID, resourceName, revisionNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+// DownloadResourceStream opens a resource revision artifact for streaming.
+//
+// The following errors may be returned:
+// - Authorization, repository lookup, or blob errors.
+func (s *Service) DownloadResourceStream(
+	ctx context.Context,
+	identity core.Identity,
+	packageID, resourceName string,
+	revisionNumber int,
+) (io.ReadCloser, int64, error) {
 	pkg, err := s.repo.GetPackageByID(ctx, packageID)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, 0, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, false); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resourceName)
 	if err != nil {
-		return nil, translateRepoError(err, "resource not found")
+		return nil, 0, translateRepoError(err, messageResourceNotFound)
 	}
 	revision, err := s.repo.GetResourceRevision(ctx, resourceDef.ID, revisionNumber)
 	if err != nil {
-		return nil, translateRepoError(err, "resource revision not found")
+		return nil, 0, translateRepoError(err, messageResourceRevisionNotFound)
 	}
 	if revision.ObjectKey == "" {
 		if err := s.requireOCIPackageReady(pkg, true); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		return s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)
+		payload, err := s.renderOCIImageBlob(pkg, resourceName, revision.OCIImageDigest)
+		if err != nil {
+			return nil, 0, err
+		}
+		return io.NopCloser(bytes.NewReader(payload)), int64(len(payload)), nil
 	}
-	return s.blobs.Get(ctx, revision.ObjectKey)
+	return s.blobs.Open(ctx, revision.ObjectKey)
 }
 
 func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest string) ([]byte, error) {

@@ -320,15 +320,18 @@ func trackFromSQLC(item sqlcdb.ListTracksRow) core.Track {
 	}
 }
 
-func robotFromSQLC(id *int64, username, secret string) *core.RobotCredential {
+func robotFromSQLC(id *int64, username, secret string) (*core.RobotCredential, error) {
+	if id == nil && username == "" && secret == "" {
+		return nil, nil
+	}
 	if id == nil || *id == 0 || username == "" || secret == "" {
-		return nil
+		return nil, fmt.Errorf("incomplete robot credential row")
 	}
 	return &core.RobotCredential{
 		ID:              *id,
 		Username:        username,
 		EncryptedSecret: secret,
-	}
+	}, nil
 }
 
 func packageFromParts(
@@ -346,6 +349,14 @@ func packageFromParts(
 	createdAt, updatedAt time.Time,
 	pubID, pubUsername, pubDisplayName, pubEmail, pubValidation string,
 ) (core.Package, error) {
+	pushRobot, err := robotFromSQLC(ociPushRobotID, ociPushRobotName, ociPushRobotSecret)
+	if err != nil {
+		return core.Package{}, fmt.Errorf("load OCI push robot: %w", err)
+	}
+	pullRobot, err := robotFromSQLC(ociPullRobotID, ociPullRobotName, ociPullRobotSecret)
+	if err != nil {
+		return core.Package{}, fmt.Errorf("load OCI pull robot: %w", err)
+	}
 	pkg := core.Package{
 		ID:             id,
 		Name:           name,
@@ -354,8 +365,8 @@ func packageFromParts(
 		Status:         status,
 		OwnerAccountID: ownerAccountID,
 		OCIProject:     ociProject,
-		OCIPushRobot:   robotFromSQLC(ociPushRobotID, ociPushRobotName, ociPushRobotSecret),
-		OCIPullRobot:   robotFromSQLC(ociPullRobotID, ociPullRobotName, ociPullRobotSecret),
+		OCIPushRobot:   pushRobot,
+		OCIPullRobot:   pullRobot,
 		Authority:      authority,
 		Contact:        contact,
 		DefaultTrack:   defaultTrack,

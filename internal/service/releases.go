@@ -7,11 +7,9 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 )
@@ -28,7 +26,7 @@ func (s *Service) CreateRelease(
 ) ([]core.Release, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return nil, err
@@ -36,14 +34,14 @@ func (s *Service) CreateRelease(
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageReleases); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	var released []core.Release
 	for _, request := range requests {
 		if request.Channel == "" {
 			return nil, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
 		}
 		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, request.Revision); err != nil {
-			return nil, translateRepoError(err, "revision not found")
+			return nil, translateRepoError(err, messageRevisionNotFound)
 		}
 		if err := s.validateReleaseResources(ctx, pkg.ID, request.Revision, request.Resources); err != nil {
 			return nil, err
@@ -82,11 +80,11 @@ func (s *Service) validateReleaseResources(
 		}
 		def, err := s.repo.GetResourceDefinition(ctx, packageID, ref.Name)
 		if err != nil {
-			return translateRepoError(err, "resource not found")
+			return translateRepoError(err, messageResourceNotFound)
 		}
 		resourceRevision, err := s.repo.GetResourceRevision(ctx, def.ID, *ref.Revision)
 		if err != nil {
-			return translateRepoError(err, "resource revision not found")
+			return translateRepoError(err, messageResourceRevisionNotFound)
 		}
 		if resourceRevision.PackageRevision != nil && *resourceRevision.PackageRevision != packageRevision {
 			return newError(
@@ -110,7 +108,7 @@ func (s *Service) validateReleaseResources(
 func (s *Service) ListReleases(ctx context.Context, identity core.Identity, charmName string) (listReleasesResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return listReleasesResponse{}, translateRepoError(err, "package not found")
+		return listReleasesResponse{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
 		return listReleasesResponse{}, err
@@ -178,7 +176,7 @@ func (s *Service) CreateTracks(
 ) (int, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return 0, translateRepoError(err, "package not found")
+		return 0, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return 0, err
@@ -186,7 +184,7 @@ func (s *Service) CreateTracks(
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageMetadata); err != nil {
 		return 0, err
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	for index := range tracks {
 		if tracks[index].CreatedAt.IsZero() {
 			tracks[index].CreatedAt = now
@@ -276,7 +274,7 @@ func (s *Service) resolveRefreshAction(
 	}
 
 	revision.Resources = resources
-	charm := refreshEntityResponseFrom(pkg, revision, resources, s.cfg)
+	charm := s.refreshEntityResponseFrom(pkg, revision, resources)
 	item := refreshActionResponse{
 		Charm:            &charm,
 		EffectiveChannel: effectiveChannel,
@@ -295,11 +293,11 @@ func (s *Service) resolveRefreshAction(
 func (s *Service) resolvePackageForRefresh(ctx context.Context, action RefreshAction) (core.Package, error) {
 	if action.Name != nil && *action.Name != "" {
 		pkg, err := s.repo.GetPackageByName(ctx, *action.Name)
-		return pkg, translateRepoError(err, "package not found")
+		return pkg, translateRepoError(err, messagePackageNotFound)
 	}
 	if action.ID != nil && *action.ID != "" {
 		pkg, err := s.repo.GetPackageByID(ctx, *action.ID)
-		return pkg, translateRepoError(err, "package not found")
+		return pkg, translateRepoError(err, messagePackageNotFound)
 	}
 	return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", "refresh action must include id or name")
 }
@@ -341,7 +339,7 @@ func (s *Service) resolveReleaseAndRevision(
 	if action.Revision != nil && *action.Revision > 0 {
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, *action.Revision)
 		if err != nil {
-			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "revision not found")
+			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageRevisionNotFound)
 		}
 		release := core.Release{
 			Channel:        channel,
@@ -364,7 +362,7 @@ func (s *Service) resolveReleaseAndRevision(
 				"effective_base", base,
 				"error", err,
 			)
-			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
+			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
 		}
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
 		if err != nil {
@@ -375,7 +373,7 @@ func (s *Service) resolveReleaseAndRevision(
 
 	release, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
 	if err != nil {
-		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
+		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
 	}
 	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
 	if err != nil {
@@ -435,6 +433,25 @@ func (s *Service) resolveReleaseForBaseConstraint(
 	if err != nil {
 		return core.Release{}, err
 	}
+	bestVariant, variantOK, bestGeneric, genericOK, err := bestReleaseForBaseConstraint(ctx, releases, channel, base)
+	if err != nil {
+		return core.Release{}, err
+	}
+	if variantOK {
+		return bestVariant, nil
+	}
+	if genericOK {
+		return bestGeneric, nil
+	}
+	return core.Release{}, repo.ErrNotFound
+}
+
+func bestReleaseForBaseConstraint(
+	ctx context.Context,
+	releases []core.Release,
+	channel string,
+	base core.Base,
+) (core.Release, bool, core.Release, bool, error) {
 	var (
 		bestVariant core.Release
 		variantOK   bool
@@ -442,6 +459,9 @@ func (s *Service) resolveReleaseForBaseConstraint(
 		genericOK   bool
 	)
 	for _, release := range releases {
+		if err := checkContext(ctx); err != nil {
+			return core.Release{}, false, core.Release{}, false, err
+		}
 		if release.Channel != channel {
 			continue
 		}
@@ -458,13 +478,7 @@ func (s *Service) resolveReleaseForBaseConstraint(
 			variantOK = true
 		}
 	}
-	if variantOK {
-		return bestVariant, nil
-	}
-	if genericOK {
-		return bestGeneric, nil
-	}
-	return core.Release{}, repo.ErrNotFound
+	return bestVariant, variantOK, bestGeneric, genericOK, nil
 }
 
 func effectiveRefreshBase(base *core.Base) *core.Base {
@@ -590,21 +604,17 @@ func (s *Service) resolveReleaseResources(
 	return out, nil
 }
 
-func refreshEntityResponseFrom(
+func (s *Service) refreshEntityResponseFrom(
 	pkg core.Package,
 	revision core.Revision,
 	resources []core.ResourceRevision,
-	cfg config.Config,
 ) refreshEntityResponse {
 	return refreshEntityResponse{
 		CreatedAt: revision.CreatedAt,
 		Download: core.Download{
 			HashSHA256: revision.SHA256,
 			Size:       revision.Size,
-			URL: cfg.PublicAPIURL + "/api/v1/charms/download/" + pkg.ID + "_" + fmt.Sprintf(
-				"%d",
-				revision.Revision,
-			) + ".charm",
+			URL:        s.charmDownloadURL(pkg.ID, revision.Revision),
 		},
 		ID:           pkg.ID,
 		License:      "",

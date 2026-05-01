@@ -14,6 +14,7 @@ import (
 	"github.com/gschiano/charm-registry/internal/oci"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
+	registrysync "github.com/gschiano/charm-registry/internal/sync"
 )
 
 type App struct {
@@ -72,8 +73,9 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		closers = append(closers, closer)
 	}
 	svc := service.New(cfg, repository, storage, ociRegistry)
-	closers = append(closers, svc.StartCharmhubSyncManager(ctx))
-	handler := api.New(cfg, svc, authenticator)
+	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
+	closers = append(closers, syncSvc.StartManager(ctx))
+	handler := api.New(cfg, svc, syncSvc, authenticator)
 	return &App{Handler: handler, OCIHandler: ociHandler, closers: closers}, nil
 }
 
@@ -100,7 +102,7 @@ func newBlobStore(ctx context.Context, cfg config.Config) (blob.Store, error) {
 	}
 }
 
-func newRepository(ctx context.Context, cfg config.Config) (repo.Repository, error) {
+func newRepository(ctx context.Context, cfg config.Config) (repo.Backend, error) {
 	resolved := cfg.ResolvedDatabaseBackend()
 	switch resolved {
 	case config.DatabaseBackendPostgres:
@@ -115,7 +117,7 @@ func newRepository(ctx context.Context, cfg config.Config) (repo.Repository, err
 func newOCIRegistry(
 	ctx context.Context,
 	cfg config.Config,
-	repository repo.Repository,
+	repository repo.PackageRepo,
 ) (service.OCIRegistry, http.Handler, error) {
 	client, err := oci.New(ctx, cfg, repository)
 	if err != nil {

@@ -14,9 +14,16 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL             string
+	http                *http.Client
+	maxAPIResponseBytes int64
+	maxArtifactBytes    int64
 }
+
+const (
+	defaultMaxAPIResponseBytes = 4 << 20
+	defaultMaxArtifactBytes    = 64 << 20
+)
 
 type APIError struct {
 	StatusCode int
@@ -202,8 +209,20 @@ func (r *ReleaseRevision) UnmarshalJSON(data []byte) error {
 }
 
 func New(baseURL string) *Client {
+	return NewWithLimits(baseURL, defaultMaxAPIResponseBytes, defaultMaxArtifactBytes)
+}
+
+func NewWithLimits(baseURL string, maxAPIResponseBytes, maxArtifactBytes int64) *Client {
+	if maxAPIResponseBytes <= 0 {
+		maxAPIResponseBytes = defaultMaxAPIResponseBytes
+	}
+	if maxArtifactBytes <= 0 {
+		maxArtifactBytes = defaultMaxArtifactBytes
+	}
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL:             strings.TrimRight(baseURL, "/"),
+		maxAPIResponseBytes: maxAPIResponseBytes,
+		maxArtifactBytes:    maxArtifactBytes,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -228,7 +247,7 @@ func (c *Client) GetChannel(ctx context.Context, name, channel string) (PackageC
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, c.maxAPIResponseBytes, "Charmhub API response")
 	if err != nil {
 		return PackageChannel{}, err
 	}
@@ -260,7 +279,7 @@ func (c *Client) GetInfo(ctx context.Context, name string) (PackageChannel, erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, c.maxAPIResponseBytes, "Charmhub API response")
 	if err != nil {
 		return PackageChannel{}, err
 	}
@@ -321,7 +340,7 @@ func (c *Client) RefreshChannel(ctx context.Context, name, channel string, base 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, c.maxAPIResponseBytes, "Charmhub API response")
 	if err != nil {
 		return PackageChannel{}, err
 	}
@@ -400,12 +419,26 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, c.maxArtifactBytes, "Charmhub artifact")
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	return body, nil
+}
+
+func readAllLimited(reader io.Reader, maxBytes int64, label string) ([]byte, error) {
+	if maxBytes <= 0 {
+		return io.ReadAll(reader)
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
 	}
 	return body, nil
 }

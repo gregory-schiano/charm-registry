@@ -31,6 +31,7 @@ import (
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/s3-aws"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/gschiano/charm-registry/internal/config"
@@ -43,6 +44,7 @@ var invalidNamePattern = regexp.MustCompile(`[^a-z0-9-]+`)
 const (
 	keyDerivationIterations = 210_000
 	keyDerivationLength     = 32
+	defaultMaxManifestBytes = 16 << 20
 )
 
 var keyDerivationSalt = []byte("charm-registry/oci-secret/v1")
@@ -50,7 +52,7 @@ var keyDerivationSalt = []byte("charm-registry/oci-secret/v1")
 type Client struct {
 	handler          http.Handler
 	driver           storagedriver.StorageDriver
-	repository       repo.Repository
+	repository       repo.PackageRepo
 	publicRegistry   string
 	internalRegistry string
 	projectPrefix    string
@@ -58,6 +60,7 @@ type Client struct {
 	pushRobotPrefix  string
 	secretKey        []byte
 	transport        *http.Transport
+	maxManifestBytes int64
 }
 
 type ociStorageConfig struct {
@@ -65,7 +68,7 @@ type ociStorageConfig struct {
 	Params configuration.Parameters
 }
 
-func New(ctx context.Context, cfg config.Config, repository repo.Repository) (*Client, error) {
+func New(ctx context.Context, cfg config.Config, repository repo.PackageRepo) (*Client, error) {
 	storage := storageParameters(cfg)
 	driver, err := factory.Create(ctx, storage.Driver, storage.Params)
 	if err != nil {
@@ -105,6 +108,7 @@ func New(ctx context.Context, cfg config.Config, repository repo.Repository) (*C
 		pushRobotPrefix:  cfg.OCIPushRobotPrefix,
 		secretKey:        deriveKey(cfg.OCISecretKey),
 		transport:        transport,
+		maxManifestBytes: cfg.OCIMaxManifestBytes,
 	}
 	client.handler = client.authMiddleware(registry)
 	return client, nil
@@ -242,16 +246,26 @@ func (c *Client) MirrorImage(
 	if err != nil {
 		return "", fmt.Errorf("cannot parse source image reference: %w", err)
 	}
-	sourceImageObject, err := remote.Image(
-		sourceRef,
+	sourceOptions := []remote.Option{
 		remote.WithContext(ctx),
 		remote.WithAuth(authn.FromConfig(authn.AuthConfig{
 			Username: sourceUsername,
 			Password: sourcePassword,
 		})),
-	)
+	}
+	if err := c.checkManifestHead(sourceRef, sourceOptions...); err != nil {
+		return "", err
+	}
+	sourceDescriptor, err := remote.Get(sourceRef, sourceOptions...)
 	if err != nil {
 		return "", fmt.Errorf("cannot fetch source OCI image: %w", err)
+	}
+	if err := c.checkManifestDescriptor(sourceDescriptor.Descriptor, int64(len(sourceDescriptor.Manifest))); err != nil {
+		return "", err
+	}
+	sourceImageObject, err := sourceDescriptor.Image()
+	if err != nil {
+		return "", fmt.Errorf("cannot read source OCI image: %w", err)
 	}
 	digest, err := sourceImageObject.Digest()
 	if err != nil {
@@ -274,6 +288,28 @@ func (c *Client) MirrorImage(
 		return "", fmt.Errorf("cannot push mirrored OCI image: %w", err)
 	}
 	return digest.String(), nil
+}
+
+func (c *Client) checkManifestHead(ref name.Reference, options ...remote.Option) error {
+	descriptor, err := remote.Head(ref, options...)
+	if err != nil {
+		return fmt.Errorf("cannot inspect source OCI image manifest: %w", err)
+	}
+	return c.checkManifestDescriptor(*descriptor, descriptor.Size)
+}
+
+func (c *Client) checkManifestDescriptor(descriptor v1.Descriptor, bodySize int64) error {
+	maxBytes := c.maxManifestBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxManifestBytes
+	}
+	if descriptor.Size > maxBytes {
+		return fmt.Errorf("source OCI manifest is %d bytes, exceeds %d bytes", descriptor.Size, maxBytes)
+	}
+	if bodySize > maxBytes {
+		return fmt.Errorf("source OCI manifest body is %d bytes, exceeds %d bytes", bodySize, maxBytes)
+	}
+	return nil
 }
 
 func (c *Client) DeleteImage(ctx context.Context, pkg core.Package, resourceName, digest string) error {
@@ -421,9 +457,10 @@ func (c *Client) authorized(pkg core.Package, username, password string, push bo
 }
 
 func constantTimeEqual(left, right string) bool {
-	leftHash := sha256.Sum256([]byte(left))
-	rightHash := sha256.Sum256([]byte(right))
-	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
+	if len(left) != len(right) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
 func repositoryProject(rawPath string) (string, bool) {

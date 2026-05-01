@@ -10,7 +10,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// CreateCharmhubSyncRule is part of the [Repository] interface.
 func (p *Postgres) CreateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error {
 	basesJSON, err := rawJSON(rule.Bases)
 	if err != nil {
@@ -43,7 +42,6 @@ func (p *Postgres) CreateCharmhubSyncRule(ctx context.Context, rule core.Charmhu
 	return nil
 }
 
-// DeleteCharmhubSyncRule is part of the [Repository] interface.
 func (p *Postgres) DeleteCharmhubSyncRule(ctx context.Context, packageName, track string) error {
 	rowsAffected, err := p.queries().DeleteCharmhubSyncRule(ctx, sqlcdb.DeleteCharmhubSyncRuleParams{
 		PackageName: packageName,
@@ -58,7 +56,6 @@ func (p *Postgres) DeleteCharmhubSyncRule(ctx context.Context, packageName, trac
 	return nil
 }
 
-// ListCharmhubSyncRules is part of the [Repository] interface.
 func (p *Postgres) ListCharmhubSyncRules(ctx context.Context) ([]core.CharmhubSyncRule, error) {
 	rows, err := p.queries().ListCharmhubSyncRules(ctx)
 	if err != nil {
@@ -75,7 +72,6 @@ func (p *Postgres) ListCharmhubSyncRules(ctx context.Context) ([]core.CharmhubSy
 	return rules, nil
 }
 
-// ListCharmhubSyncRulesByPackageName is part of the [Repository] interface.
 func (p *Postgres) ListCharmhubSyncRulesByPackageName(
 	ctx context.Context,
 	packageName string,
@@ -95,7 +91,6 @@ func (p *Postgres) ListCharmhubSyncRulesByPackageName(
 	return rules, nil
 }
 
-// UpdateCharmhubSyncRule is part of the [Repository] interface.
 func (p *Postgres) UpdateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error {
 	rowsAffected, err := p.queries().UpdateCharmhubSyncRule(ctx, sqlcdb.UpdateCharmhubSyncRuleParams{
 		PackageName:        rule.PackageName,

@@ -8,7 +8,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// EnsureAccount is part of the [Repository] interface.
 func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (core.Account, error) {
 	stored, err := p.queries().EnsureAccount(ctx, sqlcdb.EnsureAccountParams{
 		ID:          account.ID,
@@ -26,7 +25,6 @@ func (p *Postgres) EnsureAccount(ctx context.Context, account core.Account) (cor
 	return accountFromSQLC(stored), nil
 }
 
-// GetAccountByID is part of the [Repository] interface.
 func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.Account, error) {
 	account, err := p.queries().GetAccountByID(ctx, accountID)
 	if pgxNotFound(err) {
@@ -38,7 +36,6 @@ func (p *Postgres) GetAccountByID(ctx context.Context, accountID string) (core.A
 	return accountFromSQLC(account), nil
 }
 
-// CreateStoreToken is part of the [Repository] interface.
 func (p *Postgres) CreateStoreToken(ctx context.Context, token core.StoreToken) error {
 	packagesJSON, err := rawJSON(token.Packages)
 	if err != nil {
@@ -67,7 +64,6 @@ func (p *Postgres) CreateStoreToken(ctx context.Context, token core.StoreToken) 
 	})
 }
 
-// ListStoreTokens is part of the [Repository] interface.
 func (p *Postgres) ListStoreTokens(
 	ctx context.Context,
 	accountID string,
@@ -96,7 +92,6 @@ func (p *Postgres) ListStoreTokens(
 	return out, nil
 }
 
-// RevokeStoreToken is part of the [Repository] interface.
 func (p *Postgres) RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error {
 	rowsAffected, err := p.queries().RevokeStoreToken(ctx, sqlcdb.RevokeStoreTokenParams{
 		AccountID: accountID,
@@ -112,7 +107,6 @@ func (p *Postgres) RevokeStoreToken(ctx context.Context, accountID, sessionID, r
 	return nil
 }
 
-// FindStoreTokenByHash is part of the [Repository] interface.
 func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error) {
 	row, err := p.queries().FindStoreTokenByHash(ctx, hash)
 	if pgxNotFound(err) {

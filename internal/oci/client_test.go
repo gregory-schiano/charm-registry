@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,18 +17,12 @@ import (
 )
 
 func TestSyncPackageGeneratesCredentialsAndImageReference(t *testing.T) {
-
-	// Arrange
 	client := testClient(repo.NewMemory())
 	pkg := core.Package{
 		ID:   "pkg-1",
 		Name: "Spring_Petclinic",
 	}
-
-	// Act
 	synced, err := client.SyncPackage(context.Background(), pkg)
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "charm-spring-petclinic", synced.OCIProject)
 	require.NotNil(t, synced.OCIPushRobot)
@@ -45,16 +40,10 @@ func TestSyncPackageGeneratesCredentialsAndImageReference(t *testing.T) {
 }
 
 func TestCredentialsDecryptGeneratedCredential(t *testing.T) {
-
-	// Arrange
 	client := testClient(repo.NewMemory())
 	pkg, err := client.SyncPackage(context.Background(), core.Package{ID: "pkg-1", Name: "demo"})
 	require.NoError(t, err)
-
-	// Act
 	username, password, err := client.Credentials(pkg, true)
-
-	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "pull-pkg-1", username)
 	assert.NotEmpty(t, password)
@@ -69,6 +58,17 @@ func TestDeriveKeyUsesPBKDF2(t *testing.T) {
 
 	assert.Len(t, key, 32)
 	assert.NotEqual(t, rawSHA[:], key)
+}
+
+func TestCheckManifestDescriptorRejectsOversizedManifest(t *testing.T) {
+	t.Parallel()
+
+	client := testClient(repo.NewMemory())
+	client.maxManifestBytes = 4
+
+	err := client.checkManifestDescriptor(v1.Descriptor{Size: 5}, 5)
+
+	require.ErrorContains(t, err, "source OCI manifest is 5 bytes, exceeds 4 bytes")
 }
 
 func TestStorageParametersSelectsFilesystemDriver(t *testing.T) {
@@ -110,8 +110,6 @@ func TestSyncPackageCredentialsAreStableForSamePackageID(t *testing.T) {
 }
 
 func TestAuthorizedAllowsExpectedCredentialScopes(t *testing.T) {
-
-	// Arrange
 	client := testClient(repo.NewMemory())
 	pkg, err := client.SyncPackage(context.Background(), core.Package{ID: "pkg-1", Name: "demo"})
 	require.NoError(t, err)
@@ -130,8 +128,6 @@ func TestAuthorizedAllowsExpectedCredentialScopes(t *testing.T) {
 }
 
 func TestAuthMiddlewareEnforcesPackageScopedBasicAuth(t *testing.T) {
-
-	// Arrange
 	memory := repo.NewMemory()
 	client := testClient(memory)
 	pkg, err := client.SyncPackage(context.Background(), core.Package{ID: "pkg-1", Name: "demo"})
@@ -215,15 +211,12 @@ func TestAuthMiddlewareEnforcesPackageScopedBasicAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Act
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			if tt.username != "" {
 				req.SetBasicAuth(tt.username, tt.password)
 			}
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, req)
-
-			// Assert
 			assert.Equal(t, tt.wantStatus, recorder.Code)
 			if tt.wantStatus == http.StatusUnauthorized {
 				assert.Equal(t, `Basic realm="charm-registry-oci"`, recorder.Header().Get("WWW-Authenticate"))
@@ -249,10 +242,7 @@ func TestRepositoryProjectExtractsProjectName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			// Act
 			got, ok := repositoryProject(tt.path)
-
-			// Assert
 			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.want, got)
 		})

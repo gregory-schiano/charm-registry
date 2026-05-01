@@ -7,7 +7,6 @@ import (
 	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// UpsertResourceDefinition is part of the [Repository] interface.
 func (p *Postgres) UpsertResourceDefinition(
 	ctx context.Context,
 	resource core.ResourceDefinition,
@@ -28,7 +27,6 @@ func (p *Postgres) UpsertResourceDefinition(
 	return resourceDefinitionFromSQLC(item), nil
 }
 
-// GetResourceDefinition is part of the [Repository] interface.
 func (p *Postgres) GetResourceDefinition(
 	ctx context.Context,
 	packageID, resourceName string,
@@ -46,7 +44,6 @@ func (p *Postgres) GetResourceDefinition(
 	return resourceDefinitionFromSQLC(item), nil
 }
 
-// ListResourceDefinitions is part of the [Repository] interface.
 func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string) ([]core.ResourceDefinition, error) {
 	rows, err := p.queries().ListResourceDefinitions(ctx, packageID)
 	if err != nil {
@@ -59,7 +56,6 @@ func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string
 	return out, nil
 }
 
-// DeleteResourceDefinition is part of the [Repository] interface.
 func (p *Postgres) DeleteResourceDefinition(ctx context.Context, resourceID string) error {
 	rowsAffected, err := p.queries().DeleteResourceDefinition(ctx, resourceID)
 	if err != nil {
@@ -71,7 +67,6 @@ func (p *Postgres) DeleteResourceDefinition(ctx context.Context, resourceID stri
 	return nil
 }
 
-// CreateResourceRevision is part of the [Repository] interface.
 func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
 	basesJSON, err := rawJSON(revision.Bases)
 	if err != nil {
@@ -112,7 +107,6 @@ func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.Res
 	})
 }
 
-// DeleteResourceRevision is part of the [Repository] interface.
 func (p *Postgres) DeleteResourceRevision(ctx context.Context, resourceID string, revision int) error {
 	revisionNumber, err := toInt32(revision)
 	if err != nil {
@@ -131,7 +125,6 @@ func (p *Postgres) DeleteResourceRevision(ctx context.Context, resourceID string
 	return nil
 }
 
-// UpdateResourceRevision is part of the [Repository] interface.
 func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
 	basesJSON, err := rawJSON(revision.Bases)
 	if err != nil {
@@ -163,7 +156,6 @@ func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.Res
 	return nil
 }
 
-// ListResourceRevisions is part of the [Repository] interface.
 func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error) {
 	rows, err := p.queries().ListResourceRevisions(ctx, resourceID)
 	if err != nil {
@@ -180,7 +172,6 @@ func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string)
 	return out, nil
 }
 
-// GetResourceRevision is part of the [Repository] interface.
 func (p *Postgres) GetResourceRevision(
 	ctx context.Context,
 	resourceID string,

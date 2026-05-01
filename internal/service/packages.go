@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -25,8 +24,8 @@ func (s *Service) RegisterPackage(
 	if err := s.ensurePackageNotSynchronized(ctx, name); err != nil {
 		return core.Package{}, err
 	}
-	now := time.Now().UTC()
-	pkg := core.Package{
+	now := s.now()
+	pkg, err := core.NewPackage(core.Package{
 		ID:             compactID(),
 		Name:           name,
 		Type:           core.FirstNonEmpty(packageType, "charm"),
@@ -48,10 +47,13 @@ func (s *Service) RegisterPackage(
 			Name:      "latest",
 			CreatedAt: now,
 		}},
+	})
+	if err != nil {
+		return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
 	}
-	if err := s.withRepositoryTransaction(ctx, func(repository repo.Repository) error {
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.PackageRepo) error {
 		if err := repository.CreatePackage(ctx, pkg); err != nil {
-			return translateRepoError(err, "package already exists")
+			return translateRepoError(err, messagePackageAlreadyExists)
 		}
 		if _, err := repository.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
 			return err
@@ -102,7 +104,7 @@ func (s *Service) GetPackage(
 ) (core.Package, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return core.Package{}, translateRepoError(err, "package not found")
+		return core.Package{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, requireViewPermission); err != nil {
 		return core.Package{}, err
@@ -122,7 +124,7 @@ func (s *Service) UpdatePackage(
 ) (core.Package, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return core.Package{}, translateRepoError(err, "package not found")
+		return core.Package{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return core.Package{}, err
@@ -154,7 +156,7 @@ func (s *Service) UpdatePackage(
 	if patch.Links != nil {
 		pkg.Links = patch.Links
 	}
-	pkg.UpdatedAt = time.Now().UTC()
+	pkg.UpdatedAt = s.now()
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
 		return core.Package{}, err
 	}
@@ -168,7 +170,7 @@ func (s *Service) UpdatePackage(
 func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity, name string) (string, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return "", translateRepoError(err, "package not found")
+		return "", translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
 		return "", err
@@ -250,7 +252,7 @@ func (s *Service) info(ctx context.Context, identity core.Identity, charmName, c
 		defaultRelease, err = s.repo.ResolveDefaultRelease(ctx, pkg.ID)
 	}
 	if err != nil {
-		return infoResponse{}, translateRepoError(err, "no released revisions found")
+		return infoResponse{}, translateRepoError(err, messageNoReleasedRevisionsFound)
 	}
 	defaultRevision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, defaultRelease.Revision)
 	if err != nil {
@@ -293,7 +295,7 @@ func (s *Service) info(ctx context.Context, identity core.Identity, charmName, c
 				Risk:       chInfo.risk,
 				Track:      chInfo.track,
 			},
-			Revision: revisionToInfo(rev, pkg.ID, s.cfg),
+			Revision: s.revisionToInfo(rev, pkg.ID),
 		})
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
@@ -310,7 +312,7 @@ func (s *Service) info(ctx context.Context, identity core.Identity, charmName, c
 				Track:      channelInfo.track,
 			},
 			Resources: resources,
-			Revision:  revisionToInfo(defaultRevision, pkg.ID, s.cfg),
+			Revision:  s.revisionToInfo(defaultRevision, pkg.ID),
 		},
 		ChannelMap: channelMap,
 		Result:     packageResult(pkg),
