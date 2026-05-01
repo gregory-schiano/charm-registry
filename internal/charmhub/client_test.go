@@ -133,6 +133,8 @@ func TestRefreshChannelResolvesBaseVariant(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		actions := body["actions"].([]any)
 		action := actions[0].(map[string]any)
+		require.Equal(t, "install", action["action"])
+		require.Equal(t, "postgresql-k8s", action["name"])
 		require.Equal(t, "14/stable", action["channel"])
 		require.Equal(t, map[string]any{
 			"architecture": "amd64",

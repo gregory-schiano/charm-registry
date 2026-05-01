@@ -139,10 +139,10 @@ func runSyncList(ctx context.Context, cfg cliConfig, stdout io.Writer) error {
 func runSyncAdd(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("sync add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var track string
+	track := "latest"
 	var bases stringListFlag
 	var architectures stringListFlag
-	fs.StringVar(&track, "track", "", "Charmhub track to synchronize")
+	fs.StringVar(&track, "track", track, "Charmhub track to synchronize")
 	fs.Var(&bases, "base", "Base to synchronize, for example ubuntu@22.04. May be repeated")
 	fs.Var(&architectures, "arch", "Architecture to synchronize, for example amd64. May be repeated")
 	name := ""
@@ -185,8 +185,8 @@ func formatFilter(values []string) string {
 func runSyncRemove(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("sync remove", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var track string
-	fs.StringVar(&track, "track", "", "Charmhub track to remove")
+	track := "latest"
+	fs.StringVar(&track, "track", track, "Charmhub track to remove")
 	name := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name = args[0]

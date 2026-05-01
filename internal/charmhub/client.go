@@ -292,7 +292,7 @@ func (c *Client) RefreshChannel(ctx context.Context, name, channel string, base 
 			"version",
 		},
 		"actions": []any{map[string]any{
-			"action":       "refresh",
+			"action":       "install",
 			"instance-key": "charmhub-sync",
 			"name":         name,
 			"channel":      channel,

@@ -43,7 +43,7 @@ services:
       - |
         until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 1; done
         mc mb --ignore-existing local/$${CHARM_REGISTRY_S3_BUCKET}
-        mc mb --ignore-existing local/$${HARBOR_S3_BUCKET}
+        mc mb --ignore-existing local/$${CHARM_REGISTRY_OCI_S3_BUCKET}
         cat >/tmp/charm-registry-policy.json <<EOF
         {
           "Version": "2012-10-17",
@@ -61,7 +61,7 @@ services:
           ]
         }
         EOF
-        cat >/tmp/harbor-policy.json <<EOF
+        cat >/tmp/oci-policy.json <<EOF
         {
           "Version": "2012-10-17",
           "Statement": [
@@ -72,7 +72,7 @@ services:
                 "s3:ListBucket",
                 "s3:ListBucketMultipartUploads"
               ],
-              "Resource": ["arn:aws:s3:::$${HARBOR_S3_BUCKET}"]
+              "Resource": ["arn:aws:s3:::$${CHARM_REGISTRY_OCI_S3_BUCKET}"]
             },
             {
               "Effect": "Allow",
@@ -83,28 +83,24 @@ services:
                 "s3:AbortMultipartUpload",
                 "s3:ListMultipartUploadParts"
               ],
-              "Resource": ["arn:aws:s3:::$${HARBOR_S3_BUCKET}/*"]
+              "Resource": ["arn:aws:s3:::$${CHARM_REGISTRY_OCI_S3_BUCKET}/*"]
             }
           ]
         }
         EOF
         mc admin user info local "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}" >/dev/null 2>&1 || \
           mc admin user add local "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}" "$${CHARM_REGISTRY_S3_SECRET_ACCESS_KEY}"
-        mc admin user info local "$${HARBOR_S3_ACCESS_KEY_ID}" >/dev/null 2>&1 || \
-          mc admin user add local "$${HARBOR_S3_ACCESS_KEY_ID}" "$${HARBOR_S3_SECRET_ACCESS_KEY}"
         mc admin policy create local charm-registry-policy /tmp/charm-registry-policy.json >/dev/null 2>&1 || true
-        mc admin policy create local harbor-policy /tmp/harbor-policy.json >/dev/null 2>&1 || true
+        mc admin policy create local oci-policy /tmp/oci-policy.json >/dev/null 2>&1 || true
         mc admin policy attach local charm-registry-policy --user "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}"
-        mc admin policy attach local harbor-policy --user "$${HARBOR_S3_ACCESS_KEY_ID}"
+        mc admin policy attach local oci-policy --user "$${CHARM_REGISTRY_S3_ACCESS_KEY_ID}"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       CHARM_REGISTRY_S3_BUCKET: ${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}
       CHARM_REGISTRY_S3_ACCESS_KEY_ID: ${CHARM_REGISTRY_S3_ACCESS_KEY_ID:-registry-app}
       CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: ${CHARM_REGISTRY_S3_SECRET_ACCESS_KEY:-registry-app-secret}
-      HARBOR_S3_BUCKET: ${HARBOR_S3_BUCKET:-harbor-registry}
-      HARBOR_S3_ACCESS_KEY_ID: ${HARBOR_S3_ACCESS_KEY_ID:-harbor-registry}
-      HARBOR_S3_SECRET_ACCESS_KEY: ${HARBOR_S3_SECRET_ACCESS_KEY:-harbor-registry-secret}
+      CHARM_REGISTRY_OCI_S3_BUCKET: ${CHARM_REGISTRY_OCI_S3_BUCKET:-charm-registry-oci}
     networks:
       - shared
 
@@ -118,9 +114,19 @@ services:
         condition: service_completed_successfully
     environment:
       CHARM_REGISTRY_LISTEN: ":8080"
+      CHARM_REGISTRY_OCI_LISTEN: ":5000"
       CHARM_REGISTRY_PUBLIC_API_URL: "${CHARM_REGISTRY_PUBLIC_API_URL:-http://localhost:8080}"
       CHARM_REGISTRY_PUBLIC_STORAGE_URL: "${CHARM_REGISTRY_PUBLIC_STORAGE_URL:-http://localhost:8080}"
-      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "${CHARM_REGISTRY_PUBLIC_REGISTRY_URL:-https://localhost:9443}"
+      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "${CHARM_REGISTRY_PUBLIC_REGISTRY_URL:-https://localhost:5000}"
+      CHARM_REGISTRY_OCI_INTERNAL_URL: "${CHARM_REGISTRY_OCI_INTERNAL_URL:-https://127.0.0.1:5000}"
+      CHARM_REGISTRY_OCI_S3_BUCKET: "${CHARM_REGISTRY_OCI_S3_BUCKET:-charm-registry-oci}"
+      CHARM_REGISTRY_OCI_S3_PREFIX: "${CHARM_REGISTRY_OCI_S3_PREFIX:-oci}"
+      CHARM_REGISTRY_OCI_SECRET_KEY: "${CHARM_REGISTRY_OCI_SECRET_KEY:-replace-this-oci-secret}"
+      CHARM_REGISTRY_OCI_PROJECT_PREFIX: "${CHARM_REGISTRY_OCI_PROJECT_PREFIX:-charm}"
+      CHARM_REGISTRY_OCI_PULL_ROBOT_PREFIX: "${CHARM_REGISTRY_OCI_PULL_ROBOT_PREFIX:-pull}"
+      CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX: "${CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX:-push}"
+      CHARM_REGISTRY_OCI_TLS_CERT_FILE: "${CHARM_REGISTRY_OCI_TLS_CERT_FILE:-/certs/oci.crt}"
+      CHARM_REGISTRY_OCI_TLS_KEY_FILE: "${CHARM_REGISTRY_OCI_TLS_KEY_FILE:-/certs/oci.key}"
       CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
       CHARM_REGISTRY_S3_BUCKET: "${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}"
       CHARM_REGISTRY_S3_REGION: "${CHARM_REGISTRY_S3_REGION:-us-east-1}"
@@ -138,16 +144,6 @@ services:
       CHARM_REGISTRY_ADMIN_EMAILS: "${CHARM_REGISTRY_ADMIN_EMAILS:-}"
       CHARM_REGISTRY_ADMIN_USERNAMES: "${CHARM_REGISTRY_ADMIN_USERNAMES:-}"
       CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "${CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH:-true}"
-      CHARM_REGISTRY_HARBOR_URL: "${CHARM_REGISTRY_HARBOR_URL:-https://localhost:9443}"
-      CHARM_REGISTRY_HARBOR_API_URL: "${CHARM_REGISTRY_HARBOR_API_URL:-https://harbor-proxy:8443/api/v2.0}"
-      CHARM_REGISTRY_HARBOR_ADMIN_USERNAME: "${CHARM_REGISTRY_HARBOR_ADMIN_USERNAME:-admin}"
-      CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD: "${CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD:-Harbor12345}"
-      CHARM_REGISTRY_HARBOR_PROJECT_PREFIX: "${CHARM_REGISTRY_HARBOR_PROJECT_PREFIX:-charm}"
-      CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX: "${CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX:-pull}"
-      CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX: "${CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX:-push}"
-      CHARM_REGISTRY_HARBOR_SECRET_KEY: "${CHARM_REGISTRY_HARBOR_SECRET_KEY:-replace-this-secret}"
-      CHARM_REGISTRY_HARBOR_CA_FILE: "${CHARM_REGISTRY_HARBOR_CA_FILE:-}"
-      CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY: "${CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY:-true}"
       CHARM_REGISTRY_CHARMHUB_URL: "${CHARM_REGISTRY_CHARMHUB_URL:-https://api.charmhub.io}"
       CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL: "${CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL:-15m}"
       CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT: "10s"
@@ -163,11 +159,14 @@ services:
       - ALL
     ports:
       - "8080:8080"
+      - "${CHARM_REGISTRY_OCI_HOST_PORT:-5000}:5000"
     read_only: true
     security_opt:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    volumes:
+      - ./certs:/certs:ro
     networks:
       - shared
 

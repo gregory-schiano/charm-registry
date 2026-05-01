@@ -67,7 +67,12 @@ func TestDeleteCharmhubSyncRuleAsAdmin(t *testing.T) {
 	listResp := doRequest(t, handler, http.MethodGet, "/v1/admin/charmhub-sync", nil, "Bearer dev:admin:admin")
 	assert.Equal(t, http.StatusOK, listResp.Code)
 	listBody := decodeJSON(t, listResp)
-	assert.Empty(t, listBody["rules"])
+	rules := listBody["rules"].([]any)
+	assert.Len(t, rules, 1)
+	first := rules[0].(map[string]any)
+	assert.Equal(t, "demo", first["name"])
+	assert.Equal(t, "latest", first["track"])
+	assert.Equal(t, "deleting", first["status"])
 }
 
 func TestRunCharmhubSyncAsAdmin(t *testing.T) {

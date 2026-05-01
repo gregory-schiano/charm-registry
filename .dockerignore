@@ -4,5 +4,4 @@
 postgres-data
 minio-data
 registry-data
-deploy/harbor/vendor
 certs

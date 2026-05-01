@@ -21,7 +21,7 @@ Report security issues privately to the maintainers with:
 - impact assessment
 - any suggested mitigation
 
-If you are deploying this service internally, treat Harbor admin credentials, Harbor robot secrets, OIDC secrets, database URLs, and object-store credentials as confidential and rotate them immediately after any suspected exposure.
+If you are deploying this service internally, treat OCI push/pull credentials, OIDC secrets, database URLs, and object-store credentials as confidential and rotate them immediately after any suspected exposure.
 
 ## Supported posture
 
@@ -33,7 +33,7 @@ The repository currently includes:
 - explicit HTTP server timeouts and header/body limits
 - non-root container execution and a hardened compose profile for the application container
 - authenticated uploads and protected OCI credential/blob endpoints
-- Harbor-backed OCI access with per-package robot credentials
+- embedded OCI access with per-package push/pull credentials
 
 ## Hardening expectations
 
@@ -44,8 +44,8 @@ Production deployments should additionally provide:
 - configured admin identities via `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
 - network-level access control for private registry traffic
 - secret management outside the repository
-- a non-empty `CHARM_REGISTRY_HARBOR_SECRET_KEY`
-- a dedicated Harbor admin account for control-plane API access
+- a non-empty `CHARM_REGISTRY_OCI_SECRET_KEY`
+- least-privilege S3/object-store permissions for charm blobs and embedded OCI registry storage
 - regular Go patch upgrades
 - routine vulnerability scanning of container images and dependencies
 

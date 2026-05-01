@@ -317,20 +317,29 @@ func (s *Service) renderOCIImageBlob(pkg core.Package, resourceName, digest stri
 	if err != nil {
 		return nil, err
 	}
+	if digest != "" {
+		imageName += "@" + digest
+	}
 	username, password, err := s.oci.Credentials(pkg, true)
 	if err != nil {
 		return nil, err
 	}
 	payload := struct {
-		ImageName string `json:"ImageName"`
-		Username  string `json:"Username"`
-		Password  string `json:"Password"`
-		Digest    string `json:"Digest"`
+		ImageName    string `json:"ImageName"`
+		RegistryPath string `json:"RegistryPath"`
+		Username     string `json:"Username"`
+		Password     string `json:"Password"`
+		JujuUsername string `json:"username"`
+		JujuPassword string `json:"password"`
+		Digest       string `json:"Digest"`
 	}{
-		ImageName: imageName,
-		Username:  username,
-		Password:  password,
-		Digest:    digest,
+		ImageName:    imageName,
+		RegistryPath: imageName,
+		Username:     username,
+		Password:     password,
+		JujuUsername: username,
+		JujuPassword: password,
+		Digest:       digest,
 	}
 	// #nosec G117 -- Charmcraft expects a Docker-style auth blob containing these credentials.
 	return json.Marshal(payload)

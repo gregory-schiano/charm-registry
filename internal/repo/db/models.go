@@ -49,32 +49,32 @@ type CharmhubSyncRule struct {
 }
 
 type Package struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type PackageAcl struct {

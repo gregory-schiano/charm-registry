@@ -1,8 +1,8 @@
 -- name: CreatePackage :exec
 INSERT INTO packages (
     id, name, type, private, status, owner_account_id,
-    harbor_project, harbor_push_robot_id, harbor_push_robot_name, harbor_push_robot_secret,
-    harbor_pull_robot_id, harbor_pull_robot_name, harbor_pull_robot_secret, harbor_synced_at,
+    oci_project, oci_push_robot_id, oci_push_robot_name, oci_push_robot_secret,
+    oci_pull_robot_id, oci_pull_robot_name, oci_pull_robot_secret, oci_synced_at,
     authority, contact, default_track,
     description, summary, title, website,
     links, media, track_guardrails,
@@ -21,14 +21,14 @@ INSERT INTO packages (
 UPDATE packages SET
     private          = $2,
     status           = $3,
-    harbor_project   = $4,
-    harbor_push_robot_id = $5,
-    harbor_push_robot_name = $6,
-    harbor_push_robot_secret = $7,
-    harbor_pull_robot_id = $8,
-    harbor_pull_robot_name = $9,
-    harbor_pull_robot_secret = $10,
-    harbor_synced_at  = $11,
+    oci_project   = $4,
+    oci_push_robot_id = $5,
+    oci_push_robot_name = $6,
+    oci_push_robot_secret = $7,
+    oci_pull_robot_id = $8,
+    oci_pull_robot_name = $9,
+    oci_pull_robot_secret = $10,
+    oci_synced_at  = $11,
     authority        = $12,
     contact          = $13,
     default_track    = $14,
@@ -48,8 +48,8 @@ DELETE FROM packages WHERE id = $1;
 -- name: GetPackageByName :one
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -64,8 +64,8 @@ WHERE p.name = $1;
 -- name: GetPackageByID :one
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -80,8 +80,8 @@ WHERE p.id = $1;
 -- name: ListPackagesForAccount :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -96,8 +96,8 @@ WHERE p.owner_account_id = $1;
 -- name: ListPackagesForAccountWithCollaborations :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -119,8 +119,8 @@ WHERE p.owner_account_id = $1
 -- name: SearchPackages :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,

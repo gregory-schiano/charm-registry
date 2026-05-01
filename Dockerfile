@@ -16,6 +16,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/charm-registry /usr/local/bin/charm-registry
 
-EXPOSE 8080
+EXPOSE 8080 5000
 
 ENTRYPOINT ["/usr/local/bin/charm-registry"]

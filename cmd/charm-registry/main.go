@@ -47,11 +47,42 @@ func main() {
 			return ctx
 		},
 	}
+	var ociServer *http.Server
+	if application.OCIHandler != nil {
+		ociServer = &http.Server{
+			Addr:              cfg.OCIListenAddress,
+			Handler:           application.OCIHandler,
+			ReadHeaderTimeout: cfg.ServerReadHeaderTimeout,
+			ReadTimeout:       cfg.ServerReadTimeout,
+			WriteTimeout:      cfg.ServerWriteTimeout,
+			IdleTimeout:       cfg.ServerIdleTimeout,
+			MaxHeaderBytes:    cfg.ServerMaxHeaderBytes,
+			BaseContext: func(_ net.Listener) context.Context {
+				return ctx
+			},
+		}
+		go func() {
+			slog.Info("embedded OCI registry listening", "listen_address", cfg.OCIListenAddress)
+			var serveErr error
+			if cfg.OCITLSCertFile != "" || cfg.OCITLSKeyFile != "" {
+				serveErr = ociServer.ListenAndServeTLS(cfg.OCITLSCertFile, cfg.OCITLSKeyFile)
+			} else {
+				serveErr = ociServer.ListenAndServe()
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				slog.Error("serve embedded OCI registry", "error", serveErr)
+				stop()
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ServerShutdownTimeout)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		if ociServer != nil {
+			_ = ociServer.Shutdown(shutdownCtx)
+		}
 	}()
 
 	slog.Info("private charm registry listening", "listen_address", cfg.ListenAddress)

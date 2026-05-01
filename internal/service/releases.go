@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
+	"github.com/gschiano/charm-registry/internal/repo"
 )
 
 // CreateRelease assigns revisions to channels for a package.
@@ -209,6 +211,19 @@ func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, re
 			// returns a top-level 500.
 			return refreshResponse{}, err
 		}
+		if item.Error != nil {
+			slog.InfoContext(ctx, "refresh action failed",
+				"action", action.Action,
+				"instance_key", action.InstanceKey,
+				"name", stringValue(action.Name),
+				"id", stringValue(action.ID),
+				"revision", intValue(action.Revision),
+				"channel", stringValue(action.Channel),
+				"base", action.Base,
+				"error_code", item.Error.Code,
+				"error_message", item.Error.Message,
+			)
+		}
 		results = append(results, item)
 	}
 	return refreshResponse{
@@ -318,8 +333,10 @@ func (s *Service) resolveReleaseAndRevision(
 	pkg core.Package,
 	action RefreshAction,
 ) (core.Release, core.Revision, string, string, error) {
-	channel := normalizeChannel(channelOrDefault(action.Channel))
+	requestedChannel := channelOrDefault(action.Channel)
+	channel := normalizeChannel(requestedChannel)
 	redirect := channel
+	base := effectiveRefreshBase(action.Base)
 
 	if action.Revision != nil && *action.Revision > 0 {
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, *action.Revision)
@@ -336,21 +353,24 @@ func (s *Service) resolveReleaseAndRevision(
 	}
 
 	if channel != "" {
-		var release core.Release
-		var err error
-		if action.Base != nil {
-			release, err = s.repo.ResolveReleaseForBase(ctx, pkg.ID, channel, *action.Base)
-		} else {
-			release, err = s.repo.ResolveRelease(ctx, pkg.ID, channel)
-		}
+		release, resolvedChannel, err := s.resolveReleaseForActionChannel(ctx, pkg, channel, requestedChannel, base)
 		if err != nil {
+			slog.InfoContext(ctx, "refresh release resolution failed",
+				"package", pkg.Name,
+				"requested_channel", requestedChannel,
+				"normalized_channel", channel,
+				"default_track", stringValue(pkg.DefaultTrack),
+				"base", action.Base,
+				"effective_base", base,
+				"error", err,
+			)
 			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
 		}
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
 		if err != nil {
 			return core.Release{}, core.Revision{}, "", "", err
 		}
-		return release, revision, channel, redirect, nil
+		return release, revision, resolvedChannel, redirect, nil
 	}
 
 	release, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
@@ -362,6 +382,137 @@ func (s *Service) resolveReleaseAndRevision(
 		return core.Release{}, core.Revision{}, "", "", err
 	}
 	return release, revision, release.Channel, release.Channel, nil
+}
+
+func (s *Service) resolveReleaseForActionChannel(
+	ctx context.Context,
+	pkg core.Package,
+	channel, requestedChannel string,
+	base *core.Base,
+) (core.Release, string, error) {
+	release, err := s.resolveReleaseForChannel(ctx, pkg.ID, channel, base)
+	if err == nil {
+		return release, channel, nil
+	}
+	if !isRiskOnlyChannel(requestedChannel) || pkg.DefaultTrack == nil || *pkg.DefaultTrack == "" {
+		return core.Release{}, "", err
+	}
+	defaultTrackChannel := *pkg.DefaultTrack + "/" + requestedChannel
+	if defaultTrackChannel == channel {
+		return core.Release{}, "", err
+	}
+	release, fallbackErr := s.resolveReleaseForChannel(ctx, pkg.ID, defaultTrackChannel, base)
+	if fallbackErr != nil {
+		return core.Release{}, "", err
+	}
+	return release, defaultTrackChannel, nil
+}
+
+func (s *Service) resolveReleaseForChannel(
+	ctx context.Context,
+	packageID, channel string,
+	base *core.Base,
+) (core.Release, error) {
+	if base != nil {
+		return s.resolveReleaseForBaseConstraint(ctx, packageID, channel, *base)
+	}
+	return s.repo.ResolveRelease(ctx, packageID, channel)
+}
+
+func (s *Service) resolveReleaseForBaseConstraint(
+	ctx context.Context,
+	packageID, channel string,
+	base core.Base,
+) (core.Release, error) {
+	if hasConcreteBase(base) {
+		release, err := s.repo.ResolveReleaseForBase(ctx, packageID, channel, base)
+		if err == nil {
+			return release, nil
+		}
+	}
+
+	releases, err := s.repo.ListReleases(ctx, packageID)
+	if err != nil {
+		return core.Release{}, err
+	}
+	var (
+		bestVariant core.Release
+		variantOK   bool
+		bestGeneric core.Release
+		genericOK   bool
+	)
+	for _, release := range releases {
+		if release.Channel != channel {
+			continue
+		}
+		if release.Base == nil {
+			if !genericOK || release.When.After(bestGeneric.When) {
+				bestGeneric = release
+				genericOK = true
+			}
+			continue
+		}
+		if releaseMatchesBaseConstraint(*release.Base, base) &&
+			(!variantOK || release.When.After(bestVariant.When)) {
+			bestVariant = release
+			variantOK = true
+		}
+	}
+	if variantOK {
+		return bestVariant, nil
+	}
+	if genericOK {
+		return bestGeneric, nil
+	}
+	return core.Release{}, repo.ErrNotFound
+}
+
+func effectiveRefreshBase(base *core.Base) *core.Base {
+	if base == nil {
+		return nil
+	}
+	name := strings.TrimSpace(base.Name)
+	channel := strings.TrimSpace(base.Channel)
+	architecture := strings.TrimSpace(base.Architecture)
+	if name == "" || channel == "" || strings.EqualFold(name, "NA") || strings.EqualFold(channel, "NA") {
+		if architecture == "" {
+			return nil
+		}
+		return &core.Base{Architecture: architecture}
+	}
+	return &core.Base{
+		Name:         name,
+		Channel:      channel,
+		Architecture: architecture,
+	}
+}
+
+func hasConcreteBase(base core.Base) bool {
+	return strings.TrimSpace(base.Name) != "" &&
+		strings.TrimSpace(base.Channel) != "" &&
+		!strings.EqualFold(base.Name, "NA") &&
+		!strings.EqualFold(base.Channel, "NA")
+}
+
+func releaseMatchesBaseConstraint(releaseBase, requested core.Base) bool {
+	if hasConcreteBase(requested) &&
+		(!strings.EqualFold(releaseBase.Name, requested.Name) ||
+			!strings.EqualFold(releaseBase.Channel, requested.Channel)) {
+		return false
+	}
+	architecture := strings.TrimSpace(requested.Architecture)
+	if architecture == "" {
+		return true
+	}
+	if strings.EqualFold(releaseBase.Architecture, architecture) {
+		return true
+	}
+	for _, item := range releaseBase.Architectures {
+		if strings.EqualFold(item, architecture) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) applyResourceOverrides(
@@ -481,6 +632,17 @@ func splitChannel(channel string) channelParts {
 		return channelParts{track: "latest", risk: parts[0]}
 	}
 	return channelParts{track: parts[0], risk: parts[1]}
+}
+
+func isRiskOnlyChannel(channel string) bool {
+	return channel != "" && !strings.Contains(channel, "/")
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 // normalizeChannel expands a bare risk name (e.g. "stable") to its fully

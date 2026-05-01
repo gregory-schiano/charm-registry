@@ -50,23 +50,23 @@ func (s *Service) requireOCIPackageReady(pkg core.Package, pull bool) error {
 	if !ociPackageProvisioned(pkg) {
 		return newError(ErrorKindConflict, "oci-not-provisioned", "OCI package is not provisioned")
 	}
-	if pull && !robotCredentialReady(pkg.HarborPullRobot) {
+	if pull && !robotCredentialReady(pkg.OCIPullRobot) {
 		return newError(ErrorKindConflict, "oci-not-provisioned", "OCI package is not provisioned")
 	}
 	return nil
 }
 
 func ociPackageProvisioned(pkg core.Package) bool {
-	return pkg.HarborProject != "" &&
-		robotCredentialReady(pkg.HarborPushRobot) &&
-		robotCredentialReady(pkg.HarborPullRobot)
+	return pkg.OCIProject != "" &&
+		robotCredentialReady(pkg.OCIPushRobot) &&
+		robotCredentialReady(pkg.OCIPullRobot)
 }
 
 func packagesEqualForOCI(left, right core.Package) bool {
-	return left.HarborProject == right.HarborProject &&
-		robotEqual(left.HarborPushRobot, right.HarborPushRobot) &&
-		robotEqual(left.HarborPullRobot, right.HarborPullRobot) &&
-		timePtrEqual(left.HarborSyncedAt, right.HarborSyncedAt)
+	return left.OCIProject == right.OCIProject &&
+		robotEqual(left.OCIPushRobot, right.OCIPushRobot) &&
+		robotEqual(left.OCIPullRobot, right.OCIPullRobot) &&
+		timePtrEqual(left.OCISyncedAt, right.OCISyncedAt)
 }
 
 func robotCredentialReady(robot *core.RobotCredential) bool {

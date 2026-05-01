@@ -11,14 +11,15 @@ import (
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
-	"github.com/gschiano/charm-registry/internal/harbor"
+	"github.com/gschiano/charm-registry/internal/oci"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
 type App struct {
-	Handler http.Handler
-	closers []io.Closer
+	Handler    http.Handler
+	OCIHandler http.Handler
+	closers    []io.Closer
 }
 
 // New wires the application dependencies and returns a ready HTTP app.
@@ -62,7 +63,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = closeAll()
 		return nil, fmt.Errorf("cannot configure authentication: %w", err)
 	}
-	ociRegistry, err := harbor.New(cfg)
+	ociRegistry, ociHandler, err := newOCIRegistry(ctx, cfg, repository)
 	if err != nil {
 		_ = closeAll()
 		return nil, fmt.Errorf("cannot create OCI registry client: %w", err)
@@ -73,7 +74,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	svc := service.New(cfg, repository, storage, ociRegistry)
 	closers = append(closers, svc.StartCharmhubSyncManager(ctx))
 	handler := api.New(cfg, svc, authenticator)
-	return &App{Handler: handler, closers: closers}, nil
+	return &App{Handler: handler, OCIHandler: ociHandler, closers: closers}, nil
 }
 
 // Close releases application resources such as DB pools and idle HTTP clients.
@@ -85,4 +86,17 @@ func (a *App) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func newOCIRegistry(
+	ctx context.Context,
+	cfg config.Config,
+	repository repo.Repository,
+) (service.OCIRegistry, http.Handler, error) {
+	client, err := oci.New(ctx, cfg, repository)
+	if err != nil {
+		return nil, nil, err
+	}
+	handler := client.Handler()
+	return client, handler, nil
 }

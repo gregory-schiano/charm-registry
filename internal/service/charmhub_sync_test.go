@@ -195,6 +195,21 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	assert.Equal(t, 7, release.Revision)
 	require.Len(t, release.Resources, 2)
 
+	refresh, err := svc.ResolveRefresh(context.Background(), admin, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "install",
+			InstanceKey: "demo/0",
+			Name:        stringPtr("demo"),
+			Channel:     stringPtr("latest/stable"),
+			Base:        &core.Base{Name: "NA", Channel: "NA", Architecture: "amd64"},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, refresh.Results, 1)
+	require.Nil(t, refresh.Results[0].Error)
+	require.NotNil(t, refresh.Results[0].Charm)
+	assert.Equal(t, 7, refresh.Results[0].Charm.Revision)
+
 	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
@@ -361,10 +376,18 @@ func TestRemovingLastCharmhubSyncRuleDeletesPackage(t *testing.T) {
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
 	require.NoError(t, svc.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
+	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusDeleting, rules[0].LastSyncStatus)
+
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
 	_, err = svc.repo.GetPackageByName(context.Background(), "demo")
 	require.ErrorIs(t, err, repo.ErrNotFound)
+	rules, err = svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, rules)
 	assert.Contains(t, oci.deletedPackages, "demo")
 }
 
@@ -386,10 +409,19 @@ func TestRemovingOneTrackPrunesOnlyUnreferencedArtifacts(t *testing.T) {
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
 	require.NoError(t, svc.RemoveCharmhubSyncRule(context.Background(), admin, "demo", "latest"))
+	rules, err := svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 2)
+	assert.Equal(t, charmhubSyncStatusDeleting, syncRuleByTrack(t, rules, "latest").LastSyncStatus)
+
 	require.NoError(t, svc.reconcileCharmhubPackage(context.Background(), "demo"))
 
 	pkg, err := svc.repo.GetPackageByName(context.Background(), "demo")
 	require.NoError(t, err)
+	rules, err = svc.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "2.0", rules[0].Track)
 
 	_, err = svc.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
 	require.ErrorIs(t, err, repo.ErrNotFound)
@@ -625,6 +657,18 @@ func cloneCharmhubChannel(
 	item.DefaultRelease.Channel.Name = channelName
 	item.DefaultRelease.Channel.Risk = risk
 	return item
+}
+
+func syncRuleByTrack(t *testing.T, rules []core.CharmhubSyncRule, track string) core.CharmhubSyncRule {
+	t.Helper()
+
+	for _, rule := range rules {
+		if rule.Track == track {
+			return rule
+		}
+	}
+	require.Failf(t, "missing sync rule", "track %q", track)
+	return core.CharmhubSyncRule{}
 }
 
 func buildSyncCharmArchive(t *testing.T, name string) []byte {

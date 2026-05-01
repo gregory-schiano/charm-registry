@@ -335,34 +335,34 @@ func packageFromParts(
 	id, name, packageType string,
 	private bool,
 	status, ownerAccountID string,
-	harborProject string,
-	harborPushRobotID *int64,
-	harborPushRobotName, harborPushRobotSecret string,
-	harborPullRobotID *int64,
-	harborPullRobotName, harborPullRobotSecret string,
-	harborSyncedAt pgtype.Timestamptz,
+	ociProject string,
+	ociPushRobotID *int64,
+	ociPushRobotName, ociPushRobotSecret string,
+	ociPullRobotID *int64,
+	ociPullRobotName, ociPullRobotSecret string,
+	ociSyncedAt pgtype.Timestamptz,
 	authority, contact, defaultTrack, description, summary, title, website *string,
 	linksJSON, mediaJSON, guardrailsJSON json.RawMessage,
 	createdAt, updatedAt time.Time,
 	pubID, pubUsername, pubDisplayName, pubEmail, pubValidation string,
 ) (core.Package, error) {
 	pkg := core.Package{
-		ID:              id,
-		Name:            name,
-		Type:            packageType,
-		Private:         private,
-		Status:          status,
-		OwnerAccountID:  ownerAccountID,
-		HarborProject:   harborProject,
-		HarborPushRobot: robotFromSQLC(harborPushRobotID, harborPushRobotName, harborPushRobotSecret),
-		HarborPullRobot: robotFromSQLC(harborPullRobotID, harborPullRobotName, harborPullRobotSecret),
-		Authority:       authority,
-		Contact:         contact,
-		DefaultTrack:    defaultTrack,
-		Description:     description,
-		Summary:         summary,
-		Title:           title,
-		Website:         website,
+		ID:             id,
+		Name:           name,
+		Type:           packageType,
+		Private:        private,
+		Status:         status,
+		OwnerAccountID: ownerAccountID,
+		OCIProject:     ociProject,
+		OCIPushRobot:   robotFromSQLC(ociPushRobotID, ociPushRobotName, ociPushRobotSecret),
+		OCIPullRobot:   robotFromSQLC(ociPullRobotID, ociPullRobotName, ociPullRobotSecret),
+		Authority:      authority,
+		Contact:        contact,
+		DefaultTrack:   defaultTrack,
+		Description:    description,
+		Summary:        summary,
+		Title:          title,
+		Website:        website,
 		Publisher: core.Publisher{
 			ID:          pubID,
 			Username:    pubUsername,
@@ -373,8 +373,8 @@ func packageFromParts(
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}
-	if harborSyncedAt.Valid {
-		pkg.HarborSyncedAt = &harborSyncedAt.Time
+	if ociSyncedAt.Valid {
+		pkg.OCISyncedAt = &ociSyncedAt.Time
 	}
 	if err := unmarshalJSON(linksJSON, &pkg.Links); err != nil {
 		return core.Package{}, fmt.Errorf("unmarshal package links: %w", err)
@@ -391,10 +391,10 @@ func packageFromParts(
 func packageFromGetPackageByNameRow(row sqlcdb.GetPackageByNameRow) (core.Package, error) {
 	return packageFromParts(
 		row.ID, row.Name, row.Type, row.Private, row.Status, row.OwnerAccountID,
-		row.HarborProject,
-		row.HarborPushRobotID, row.HarborPushRobotName, row.HarborPushRobotSecret,
-		row.HarborPullRobotID, row.HarborPullRobotName, row.HarborPullRobotSecret,
-		row.HarborSyncedAt,
+		row.OciProject,
+		row.OciPushRobotID, row.OciPushRobotName, row.OciPushRobotSecret,
+		row.OciPullRobotID, row.OciPullRobotName, row.OciPullRobotSecret,
+		row.OciSyncedAt,
 		row.Authority, row.Contact, row.DefaultTrack, row.Description, row.Summary, row.Title, row.Website,
 		row.Links, row.Media, row.TrackGuardrails,
 		row.CreatedAt, row.UpdatedAt,
@@ -405,10 +405,10 @@ func packageFromGetPackageByNameRow(row sqlcdb.GetPackageByNameRow) (core.Packag
 func packageFromGetPackageByIDRow(row sqlcdb.GetPackageByIDRow) (core.Package, error) {
 	return packageFromParts(
 		row.ID, row.Name, row.Type, row.Private, row.Status, row.OwnerAccountID,
-		row.HarborProject,
-		row.HarborPushRobotID, row.HarborPushRobotName, row.HarborPushRobotSecret,
-		row.HarborPullRobotID, row.HarborPullRobotName, row.HarborPullRobotSecret,
-		row.HarborSyncedAt,
+		row.OciProject,
+		row.OciPushRobotID, row.OciPushRobotName, row.OciPushRobotSecret,
+		row.OciPullRobotID, row.OciPullRobotName, row.OciPullRobotSecret,
+		row.OciSyncedAt,
 		row.Authority, row.Contact, row.DefaultTrack, row.Description, row.Summary, row.Title, row.Website,
 		row.Links, row.Media, row.TrackGuardrails,
 		row.CreatedAt, row.UpdatedAt,
@@ -419,10 +419,10 @@ func packageFromGetPackageByIDRow(row sqlcdb.GetPackageByIDRow) (core.Package, e
 func packageFromListPackagesForAccountRow(row sqlcdb.ListPackagesForAccountRow) (core.Package, error) {
 	return packageFromParts(
 		row.ID, row.Name, row.Type, row.Private, row.Status, row.OwnerAccountID,
-		row.HarborProject,
-		row.HarborPushRobotID, row.HarborPushRobotName, row.HarborPushRobotSecret,
-		row.HarborPullRobotID, row.HarborPullRobotName, row.HarborPullRobotSecret,
-		row.HarborSyncedAt,
+		row.OciProject,
+		row.OciPushRobotID, row.OciPushRobotName, row.OciPushRobotSecret,
+		row.OciPullRobotID, row.OciPullRobotName, row.OciPullRobotSecret,
+		row.OciSyncedAt,
 		row.Authority, row.Contact, row.DefaultTrack, row.Description, row.Summary, row.Title, row.Website,
 		row.Links, row.Media, row.TrackGuardrails,
 		row.CreatedAt, row.UpdatedAt,
@@ -435,10 +435,10 @@ func packageFromListPackagesForAccountWithCollaborationsRow(
 ) (core.Package, error) {
 	return packageFromParts(
 		row.ID, row.Name, row.Type, row.Private, row.Status, row.OwnerAccountID,
-		row.HarborProject,
-		row.HarborPushRobotID, row.HarborPushRobotName, row.HarborPushRobotSecret,
-		row.HarborPullRobotID, row.HarborPullRobotName, row.HarborPullRobotSecret,
-		row.HarborSyncedAt,
+		row.OciProject,
+		row.OciPushRobotID, row.OciPushRobotName, row.OciPushRobotSecret,
+		row.OciPullRobotID, row.OciPullRobotName, row.OciPullRobotSecret,
+		row.OciSyncedAt,
 		row.Authority, row.Contact, row.DefaultTrack, row.Description, row.Summary, row.Title, row.Website,
 		row.Links, row.Media, row.TrackGuardrails,
 		row.CreatedAt, row.UpdatedAt,
@@ -449,10 +449,10 @@ func packageFromListPackagesForAccountWithCollaborationsRow(
 func packageFromSearchPackagesRow(row sqlcdb.SearchPackagesRow) (core.Package, error) {
 	return packageFromParts(
 		row.ID, row.Name, row.Type, row.Private, row.Status, row.OwnerAccountID,
-		row.HarborProject,
-		row.HarborPushRobotID, row.HarborPushRobotName, row.HarborPushRobotSecret,
-		row.HarborPullRobotID, row.HarborPullRobotName, row.HarborPullRobotSecret,
-		row.HarborSyncedAt,
+		row.OciProject,
+		row.OciPushRobotID, row.OciPushRobotName, row.OciPushRobotSecret,
+		row.OciPullRobotID, row.OciPullRobotName, row.OciPullRobotSecret,
+		row.OciSyncedAt,
 		row.Authority, row.Contact, row.DefaultTrack, row.Description, row.Summary, row.Title, row.Website,
 		row.Links, row.Media, row.TrackGuardrails,
 		row.CreatedAt, row.UpdatedAt,

@@ -1,6 +1,6 @@
 # Private Charm Registry
 
-This repository contains a Go-based private charm registry that supports stock `juju` and stock `charmcraft` for the supported charm and resource workflows, without patching either client. The service is API-first, stores metadata in Postgres, stores artifacts in S3-compatible object storage, and now delegates OCI image storage and access control to Harbor.
+This repository contains a Go-based private charm registry that supports stock `juju` and stock `charmcraft` for the supported charm and resource workflows, without patching either client. The service is API-first, stores metadata in Postgres, stores charm/resource artifacts in S3-compatible object storage, and embeds an OCI Distribution registry for image push/pull and sync workflows.
 
 ## What is implemented
 
@@ -16,7 +16,7 @@ This repository contains a Go-based private charm registry that supports stock `
   - `POST /unscanned-upload/`
 - OIDC-backed identity resolution plus opaque store-token issuance
 - Private-by-default packages with owner-only management and admin override
-- S3-backed charm/resource blobs and Harbor-backed OCI credential/blob helpers
+- S3-backed charm/resource blobs and embedded OCI registry credential/blob helpers
 - Registry-managed Charmhub track synchronization with a background worker
 - Admin CLI `charm-registryctl` for managing synchronized tracks
 
@@ -30,6 +30,7 @@ This repository contains a Go-based private charm registry that supports stock `
 - `internal/auth`: OIDC and store-token authentication
 - `internal/charm`: charm archive parsing
 - `internal/charmhub`: upstream Charmhub client used by the sync worker
+- `internal/oci`: embedded OCI Distribution registry backend
 
 ## Local development
 
@@ -43,18 +44,14 @@ The compose stack includes:
 
 - Postgres
 - MinIO for S3-compatible storage
-- Harbor as the OCI registry and authz layer
 - The charm registry service
+- An embedded OCI registry listener in the charm registry process
 
-The API is exposed at [http://localhost:8080](http://localhost:8080), MinIO at [http://localhost:9001](http://localhost:9001), and Harbor at [https://localhost:9443](https://localhost:9443).
+The API is exposed at [http://localhost:8080](http://localhost:8080), MinIO at [http://localhost:9001](http://localhost:9001), and the embedded OCI registry at [https://localhost:5000](https://localhost:5000).
 
-If Juju or another client runs outside the Docker host, set `CHARM_REGISTRY_PUBLIC_API_URL` and `CHARM_REGISTRY_PUBLIC_STORAGE_URL` to a host/IP that is reachable from that client. Leaving them at `localhost` will cause the registry to hand out download URLs that only work on the registry host itself.
+If Juju or another client runs outside the Docker host, set `CHARM_REGISTRY_PUBLIC_API_URL`, `CHARM_REGISTRY_PUBLIC_STORAGE_URL`, and `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` to a host/IP that is reachable from that client. Leaving them at `localhost` will cause the registry to hand out download or OCI image URLs that only work on the registry host itself. If the public registry URL uses a non-default port, set `CHARM_REGISTRY_OCI_HOST_PORT` to the same port before running `make up`.
 
-On first run, `make up` generates a local CA and a TLS certificate for Harbor and writes them to `./certs/`. The Harbor leaf certificate SANs are derived from `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` and `CHARM_REGISTRY_HARBOR_URL`, so if you point those at a reachable host/IP before bootstrapping, the generated cert will cover that address. If those values change later, rerun `make harbor-prepare` or `make up` to reissue the Harbor leaf certificate. Install the CA once so that skopeo and other container tools trust Harbor:
-
-```bash
-make install-cert   # requires sudo; supports Ubuntu/Debian and Fedora/RHEL
-```
+The local embedded OCI registry defaults to HTTPS because `charmcraft` assumes OCI registries use TLS. `make up` generates `certs/oci.crt` and `certs/oci.key` for the host in `CHARM_REGISTRY_PUBLIC_REGISTRY_URL`; run `make install-cert` on any machine that runs `charmcraft`, `skopeo`, or another client that needs to trust the local registry certificate. If Juju/containerd pulls from a Canonical `k8s` snap node, run `make install-k8s-cert` on that node too.
 
 For local-only auth you can opt into insecure development bearer tokens:
 
@@ -62,15 +59,13 @@ For local-only auth you can opt into insecure development bearer tokens:
 Authorization: Bearer dev:alice:alice
 ```
 
-The local Harbor registry does not allow anonymous pulls. For direct testing, log in with a Harbor robot credential returned by the Charm Registry OCI endpoints, or use the Harbor admin account for operator-only checks:
+The embedded OCI registry does not allow anonymous image pulls or pushes outside the `/v2/` ping. For direct testing, log in with the package-scoped credentials returned by the Charm Registry OCI endpoints. Push credentials can push and pull; pull credentials can only pull.
 
 ```bash
-docker login localhost:9443 \
-  --username "${CHARM_REGISTRY_HARBOR_ADMIN_USERNAME:-admin}" \
-  --password "${CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD:-Harbor12345}"
+docker login localhost:5000 --username '<package-push-username>' --password '<package-push-secret>'
 ```
 
-Production deployments should leave `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=false`, configure OIDC with `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`, and point the application at a Harbor control-plane account plus a dedicated Harbor secret-encryption key.
+Production deployments should leave `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=false`, configure OIDC with `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`, use TLS for both listeners, and set a dedicated `CHARM_REGISTRY_OCI_SECRET_KEY` for credential encryption.
 
 ## Useful commands
 
@@ -190,9 +185,12 @@ Important auth settings:
 - `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true` enables development-only bearer tokens and anonymous token minting for local workflows.
 - `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID` enable the production authentication path.
 - `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, and `CHARM_REGISTRY_ADMIN_USERNAMES` bootstrap admin identities with access to every charm.
-- `CHARM_REGISTRY_HARBOR_URL`, `CHARM_REGISTRY_HARBOR_API_URL`, `CHARM_REGISTRY_HARBOR_ADMIN_USERNAME`, and `CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD` configure the Harbor control plane used for project and robot provisioning. In the local compose stack, `CHARM_REGISTRY_HARBOR_API_URL` should target the internal shared-network alias `https://harbor-proxy:8443/api/v2.0`, not the public `localhost` URL.
-- `HARBOR_HTTP_PORT` and `HARBOR_HTTPS_PORT` control the local Harbor listener ports used by `make harbor-prepare` and `make harbor-up`.
-- `CHARM_REGISTRY_HARBOR_SECRET_KEY` encrypts Harbor robot secrets at rest in the Charm Registry database.
+- `CHARM_REGISTRY_OCI_LISTEN` controls the embedded OCI listener. The default is `:5000`.
+- `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` is the OCI registry URL handed to Juju, charmcraft, and synced resource payloads. The local default is `https://localhost:5000`.
+- `CHARM_REGISTRY_OCI_INTERNAL_URL` is the URL the registry service uses when it pushes mirrored upstream OCI images into its own embedded listener.
+- `CHARM_REGISTRY_OCI_S3_BUCKET` and `CHARM_REGISTRY_OCI_S3_PREFIX` configure the embedded OCI Distribution S3 storage area. The embedded backend currently uses the main `CHARM_REGISTRY_S3_*` credentials for this bucket, so production deployments should grant that identity only the required blob and OCI bucket permissions until separate OCI S3 credentials are introduced.
+- `CHARM_REGISTRY_OCI_SECRET_KEY` encrypts package-scoped OCI push/pull credentials at rest.
+- `CHARM_REGISTRY_OCI_TLS_CERT_FILE` and `CHARM_REGISTRY_OCI_TLS_KEY_FILE` enable TLS on the embedded OCI listener when set together. The compose stack mounts `certs/oci.crt` and `certs/oci.key` at `/certs`.
 - `CHARM_REGISTRY_CHARMHUB_URL` overrides the upstream Charmhub API base URL used by the sync worker. The default is `https://api.charmhub.io`.
 - `CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL` controls how often the background sync worker scans all configured rules. The default is `15m`.
 - `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` controls the per-entry decompressed size limit when parsing charm archives. The default is `10485760` (10 MiB).
@@ -201,7 +199,7 @@ Important auth settings:
 
 - The registry does not include a browse UI, bundle-specific extras, analytics, or collaborator management UX.
 - Embedded charm libraries are intentionally stubbed and returned as unsupported store-side content.
-- Harbor project and robot provisioning is automated, but Harbor itself is still an external system with its own lifecycle and operational footprint.
+- The embedded OCI backend deletes manifests and repository metadata on best effort, but unreferenced S3 blobs still need a future garbage-collection story.
 - Group ACL data model exists, but the effective access model is intentionally minimal: owner-managed charms plus configured admins.
 - Stock `juju` can target an alternate Charmhub URL, but private package auth support is still the main compatibility risk to validate end-to-end in your environment. If Juju does not forward auth for consumer requests, private deployments may need network-level access controls in front of the registry.
 

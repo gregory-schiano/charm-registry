@@ -101,6 +101,70 @@ func TestPackagePublishedSupportsInfoAndRefresh(t *testing.T) {
 	assert.Equal(t, 1, charmEntity.Revision)
 	assert.Len(t, charmEntity.Resources, 1)
 
+	// Act: Juju deploy may request the risk-only channel. Resolve it through
+	// the package default track instead of looking for a literal "stable"
+	// release.
+	refresh, err = svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "install",
+			InstanceKey: "app/0",
+			Name:        stringPtr("demo-charm"),
+			Channel:     stringPtr("stable"),
+		}},
+	})
+	require.NoError(t, err)
+
+	// Assert
+	results = refresh.Results
+	require.Len(t, results, 1)
+	require.Nil(t, results[0].Error)
+	assert.Equal(t, "latest/stable", results[0].EffectiveChannel)
+	require.NotNil(t, results[0].Charm)
+	assert.Equal(t, 1, results[0].Charm.Revision)
+
+	// Act: Juju can send NA/NA as a non-specific base marker. It should not
+	// force base-specific release lookup for a normal manually published charm.
+	refresh, err = svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "install",
+			InstanceKey: "app/0",
+			Name:        stringPtr("demo-charm"),
+			Channel:     stringPtr("stable"),
+			Base:        &core.Base{Name: "NA", Channel: "NA", Architecture: "amd64"},
+		}},
+	})
+	require.NoError(t, err)
+
+	// Assert
+	results = refresh.Results
+	require.Len(t, results, 1)
+	require.Nil(t, results[0].Error)
+	assert.Equal(t, "latest/stable", results[0].EffectiveChannel)
+	require.NotNil(t, results[0].Charm)
+	assert.Equal(t, 1, results[0].Charm.Revision)
+
+	// Act: after install, Juju may list/download resources with the concrete
+	// revision base. Manually published releases are channel-scoped, so this
+	// should fall back to the channel release when no per-base release exists.
+	refresh, err = svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "download",
+			InstanceKey: "app/0",
+			Name:        stringPtr("demo-charm"),
+			Channel:     stringPtr("latest/stable"),
+			Base:        &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		}},
+	})
+	require.NoError(t, err)
+
+	// Assert
+	results = refresh.Results
+	require.Len(t, results, 1)
+	require.Nil(t, results[0].Error)
+	assert.Equal(t, "latest/stable", results[0].EffectiveChannel)
+	require.NotNil(t, results[0].Charm)
+	assert.Equal(t, 1, results[0].Charm.Revision)
+
 	// Act: OCI image operations
 	creds, err := svc.OCIImageUploadCredentials(ctx, owner, pkg.Name, "workload-image")
 	require.NoError(t, err)
@@ -143,7 +207,7 @@ func TestRegisterPackageDoesNotRequireOCIProvisioning(t *testing.T) {
 	// Act
 	ctx := context.Background()
 	svc, repository := newTestServiceWithOCI(failingOCIRegistry{
-		syncErr: fmt.Errorf("harbor unavailable"),
+		syncErr: fmt.Errorf("oci unavailable"),
 	})
 	owner := newIdentity("owner-oci", "owner-oci")
 
@@ -154,8 +218,61 @@ func TestRegisterPackageDoesNotRequireOCIProvisioning(t *testing.T) {
 	stored, err := repository.GetPackageByName(ctx, "broken-charm")
 	require.NoError(t, err)
 	assert.Equal(t, pkg.ID, stored.ID)
-	assert.Empty(t, stored.HarborProject)
+	assert.Empty(t, stored.OCIProject)
 
+}
+
+func TestRefreshSelectsReleaseVariantByArchitecture(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "multiarch-charm", "charm", true)
+	require.NoError(t, err)
+
+	uploadAMD64, err := svc.CreateUpload(ctx, "multiarch-charm.charm", buildCharmArchive(t, "multiarch-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "multiarch-charm", PushRevisionRequest{UploadID: uploadAMD64.ID})
+	require.NoError(t, err)
+
+	uploadARM64, err := svc.CreateUpload(ctx, "multiarch-charm.charm", buildCharmArchive(t, "multiarch-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "multiarch-charm", PushRevisionRequest{UploadID: uploadARM64.ID})
+	require.NoError(t, err)
+
+	_, err = svc.CreateRelease(ctx, owner, "multiarch-charm", []core.Release{
+		{
+			Channel:  "16/edge",
+			Revision: 1,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		},
+		{
+			Channel:  "16/edge",
+			Revision: 2,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"},
+		},
+	})
+	require.NoError(t, err)
+
+	// Act: Juju can send architecture with a non-specific NA/NA base marker.
+	result, err := svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "install",
+			InstanceKey: "app/0",
+			Name:        stringPtr("multiarch-charm"),
+			Channel:     stringPtr("16/edge"),
+			Base:        &core.Base{Name: "NA", Channel: "NA", Architecture: "amd64"},
+		}},
+	})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Nil(t, result.Results[0].Error)
+	require.NotNil(t, result.Results[0].Charm)
+	assert.Equal(t, 1, result.Results[0].Charm.Revision)
 }
 
 func TestOCIImageUploadCredentialsPropagatesCredentialFailure(t *testing.T) {
@@ -1524,7 +1641,10 @@ func TestDownloadResourceOCIImage(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, string(payload), `"Digest":"sha256:test"`)
+	assert.Contains(t, string(payload), `"ImageName":"oci.example.test/charm-my-charm/workload-image@sha256:test"`)
+	assert.Contains(t, string(payload), `"RegistryPath":"oci.example.test/charm-my-charm/workload-image@sha256:test"`)
 	assert.Contains(t, string(payload), `"Username":"robot$pull-`)
+	assert.Contains(t, string(payload), `"username":"robot$pull-`)
 }
 
 func TestDownloadResourceOCIImageUsesStoredCredentialsWithoutResync(t *testing.T) {
@@ -1555,7 +1675,7 @@ func TestDownloadResourceOCIImageUsesStoredCredentialsWithoutResync(t *testing.T
 	// Act
 	svc.oci = failingOCIRegistry{
 		OCIRegistry: testutil.OCIRegistry{},
-		syncErr:     errors.New("harbor unavailable"),
+		syncErr:     errors.New("oci unavailable"),
 	}
 
 	// Assert
@@ -1565,7 +1685,10 @@ func TestDownloadResourceOCIImageUsesStoredCredentialsWithoutResync(t *testing.T
 
 	require.NoError(t, err)
 	assert.Contains(t, string(payload), `"Digest":"sha256:test"`)
+	assert.Contains(t, string(payload), `"ImageName":"oci.example.test/charm-my-charm/workload-image@sha256:test"`)
+	assert.Contains(t, string(payload), `"RegistryPath":"oci.example.test/charm-my-charm/workload-image@sha256:test"`)
 	assert.Contains(t, string(payload), `"Username":"robot$pull-`)
+	assert.Contains(t, string(payload), `"username":"robot$pull-`)
 
 }
 
@@ -2244,6 +2367,9 @@ func TestOCIImageBlobPayload(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Contains(t, blob, `"Digest":"sha256:abc123"`)
+	assert.Contains(t, blob, `"ImageName":"oci.example.test/charm-my-charm/workload-image@sha256:abc123"`)
+	assert.Contains(t, blob, `"RegistryPath":"oci.example.test/charm-my-charm/workload-image@sha256:abc123"`)
+	assert.Contains(t, blob, `"username":"robot$pull-`)
 	assert.Contains(t, blob, "oci.example.test")
 
 }
@@ -2279,7 +2405,7 @@ func TestOCIImageUploadCredentialsProvisioningFailureReturnsServiceError(t *test
 	// Arrange
 	ctx := context.Background()
 	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
-		syncErr: fmt.Errorf("harbor unavailable"),
+		syncErr: fmt.Errorf("oci unavailable"),
 	})
 	owner := newIdentity("acc-1", "alice")
 	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
@@ -2319,7 +2445,7 @@ func TestOCIImageUploadCredentialsUsesStoredCredentialsWithoutResync(t *testing.
 
 	svc.oci = failingOCIRegistry{
 		OCIRegistry: testutil.OCIRegistry{},
-		syncErr:     errors.New("harbor unavailable"),
+		syncErr:     errors.New("oci unavailable"),
 	}
 
 	// Act
@@ -3176,14 +3302,10 @@ func testConfig() config.Config {
 		PublicStorageURL:      "https://storage.example.test",
 		PublicRegistryURL:     "https://oci.example.test",
 		EnableInsecureDevAuth: true,
-		HarborURL:             "https://harbor.example.test",
-		HarborAPIURL:          "https://harbor.example.test/api/v2.0",
-		HarborAdminUsername:   "admin",
-		HarborAdminPassword:   "admin-secret",
-		HarborProjectPrefix:   "charm",
-		HarborPullRobotPrefix: "pull",
-		HarborPushRobotPrefix: "push",
-		HarborSecretKey:       "test-harbor-secret",
+		OCIProjectPrefix:      "charm",
+		OCIPullRobotPrefix:    "pull",
+		OCIPushRobotPrefix:    "push",
+		OCISecretKey:          "test-oci-secret",
 	}
 }
 

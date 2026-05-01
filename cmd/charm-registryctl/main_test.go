@@ -69,6 +69,33 @@ func TestRunSyncAdd(t *testing.T) {
 	assert.Contains(t, stdout.String(), "scheduled sync for demo track 2.0")
 }
 
+func TestRunSyncAddDefaultsToLatestTrack(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, "demo", body["name"])
+		require.Equal(t, "latest", body["track"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"demo","track":"latest","status":"pending","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "add", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled sync for demo track latest")
+}
+
 func TestRunSyncRemove(t *testing.T) {
 	t.Parallel()
 
@@ -90,6 +117,29 @@ func TestRunSyncRemove(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "scheduled removal for demo track 2.0")
+}
+
+func TestRunSyncRemoveDefaultsToLatestTrack(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync/demo/latest", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "remove", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled removal for demo track latest")
 }
 
 func TestRunSyncRun(t *testing.T) {

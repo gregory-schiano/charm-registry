@@ -30,16 +30,21 @@ type Config struct {
 	AdminEmails             []string
 	AdminUsernames          []string
 	EnableInsecureDevAuth   bool
-	HarborURL               string
-	HarborAPIURL            string
-	HarborAdminUsername     string
-	HarborAdminPassword     string
-	HarborProjectPrefix     string
-	HarborPullRobotPrefix   string
-	HarborPushRobotPrefix   string
-	HarborSecretKey         string
-	HarborCAFile            string
-	HarborInsecureTLS       bool
+	OCIListenAddress        string
+	OCIInternalURL          string
+	OCIStorageBucket        string
+	OCIStoragePrefix        string
+	OCIStorageRegion        string
+	OCIStorageEndpoint      string
+	OCIStorageAccessKeyID   string
+	OCIStorageSecretKey     string
+	OCIStorageUsePathStyle  bool
+	OCISecretKey            string
+	OCIProjectPrefix        string
+	OCIPullRobotPrefix      string
+	OCIPushRobotPrefix      string
+	OCITLSCertFile          string
+	OCITLSKeyFile           string
 	CharmhubURL             string
 	CharmhubSyncInterval    time.Duration
 	ServerReadHeaderTimeout time.Duration
@@ -56,8 +61,8 @@ type Config struct {
 type parsedConfig struct {
 	s3UsePathStyle          bool
 	s3DisableTLS            bool
+	ociStorageUsePathStyle  bool
 	enableInsecureDevAuth   bool
-	harborInsecureTLS       bool
 	charmhubSyncInterval    time.Duration
 	serverReadHeaderTimeout time.Duration
 	serverReadTimeout       time.Duration
@@ -81,44 +86,49 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddress: env("CHARM_REGISTRY_LISTEN", ":8080"),
-		PublicAPIURL:  strings.TrimRight(env("CHARM_REGISTRY_PUBLIC_API_URL", "http://localhost:8080"), "/"),
+		ListenAddress: listenAddress(),
+		PublicAPIURL:  strings.TrimRight(envFallback("CHARM_REGISTRY_PUBLIC_API_URL", "APP_PUBLIC_API_URL", "http://localhost:8080"), "/"),
 		PublicStorageURL: strings.TrimRight(
-			env("CHARM_REGISTRY_PUBLIC_STORAGE_URL", "http://localhost:8080"),
+			envFallback("CHARM_REGISTRY_PUBLIC_STORAGE_URL", "APP_PUBLIC_STORAGE_URL", "http://localhost:8080"),
 			"/",
 		),
 		PublicRegistryURL: strings.TrimRight(
-			env("CHARM_REGISTRY_PUBLIC_REGISTRY_URL", "http://localhost:5000"),
+			envFallback("CHARM_REGISTRY_PUBLIC_REGISTRY_URL", "APP_PUBLIC_REGISTRY_URL", "https://localhost:5000"),
 			"/",
 		),
-		DatabaseURL:             os.Getenv("CHARM_REGISTRY_DATABASE_URL"),
-		S3Bucket:                env("CHARM_REGISTRY_S3_BUCKET", "charm-registry"),
-		S3Region:                env("CHARM_REGISTRY_S3_REGION", "us-east-1"),
-		S3Endpoint:              strings.TrimRight(os.Getenv("CHARM_REGISTRY_S3_ENDPOINT"), "/"),
-		S3AccessKeyID:           os.Getenv("CHARM_REGISTRY_S3_ACCESS_KEY_ID"),
-		S3SecretAccessKey:       os.Getenv("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY"),
+		DatabaseURL:             envFallback("CHARM_REGISTRY_DATABASE_URL", "POSTGRESQL_DB_CONNECT_STRING", ""),
+		S3Bucket:                envFallback("CHARM_REGISTRY_S3_BUCKET", "S3_BUCKET", "charm-registry"),
+		S3Region:                envFallback("CHARM_REGISTRY_S3_REGION", "S3_REGION", "us-east-1"),
+		S3Endpoint:              strings.TrimRight(envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", ""), "/"),
+		S3AccessKeyID:           envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", ""),
+		S3SecretAccessKey:       envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", ""),
 		S3UsePathStyle:          parsed.s3UsePathStyle,
 		S3DisableTLS:            parsed.s3DisableTLS,
-		OIDCIssuerURL:           strings.TrimRight(os.Getenv("CHARM_REGISTRY_OIDC_ISSUER_URL"), "/"),
-		OIDCClientID:            os.Getenv("CHARM_REGISTRY_OIDC_CLIENT_ID"),
+		OIDCIssuerURL:           strings.TrimRight(envFallback("CHARM_REGISTRY_OIDC_ISSUER_URL", oauthEnv("API_BASE_URL"), ""), "/"),
+		OIDCClientID:            envFallback("CHARM_REGISTRY_OIDC_CLIENT_ID", oauthEnv("CLIENT_ID"), ""),
 		OIDCUsernameClaim:       env("CHARM_REGISTRY_OIDC_USERNAME_CLAIM", "preferred_username"),
 		OIDCDisplayNameClaim:    env("CHARM_REGISTRY_OIDC_DISPLAY_NAME_CLAIM", "name"),
 		OIDCEmailClaim:          env("CHARM_REGISTRY_OIDC_EMAIL_CLAIM", "email"),
-		AdminSubjects:           envCSV("CHARM_REGISTRY_ADMIN_SUBJECTS"),
-		AdminEmails:             envCSV("CHARM_REGISTRY_ADMIN_EMAILS"),
-		AdminUsernames:          envCSV("CHARM_REGISTRY_ADMIN_USERNAMES"),
+		AdminSubjects:           envCSVFallback("CHARM_REGISTRY_ADMIN_SUBJECTS", "APP_ADMIN_SUBJECTS"),
+		AdminEmails:             envCSVFallback("CHARM_REGISTRY_ADMIN_EMAILS", "APP_ADMIN_EMAILS"),
+		AdminUsernames:          envCSVFallback("CHARM_REGISTRY_ADMIN_USERNAMES", "APP_ADMIN_USERNAMES"),
 		EnableInsecureDevAuth:   parsed.enableInsecureDevAuth,
-		HarborURL:               strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_URL"), "/"),
-		HarborAPIURL:            strings.TrimRight(os.Getenv("CHARM_REGISTRY_HARBOR_API_URL"), "/"),
-		HarborAdminUsername:     os.Getenv("CHARM_REGISTRY_HARBOR_ADMIN_USERNAME"),
-		HarborAdminPassword:     os.Getenv("CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD"),
-		HarborProjectPrefix:     strings.Trim(env("CHARM_REGISTRY_HARBOR_PROJECT_PREFIX", "charm"), "-"),
-		HarborPullRobotPrefix:   strings.Trim(env("CHARM_REGISTRY_HARBOR_PULL_ROBOT_PREFIX", "pull"), "-"),
-		HarborPushRobotPrefix:   strings.Trim(env("CHARM_REGISTRY_HARBOR_PUSH_ROBOT_PREFIX", "push"), "-"),
-		HarborSecretKey:         os.Getenv("CHARM_REGISTRY_HARBOR_SECRET_KEY"),
-		HarborCAFile:            os.Getenv("CHARM_REGISTRY_HARBOR_CA_FILE"),
-		HarborInsecureTLS:       parsed.harborInsecureTLS,
-		CharmhubURL:             strings.TrimRight(env("CHARM_REGISTRY_CHARMHUB_URL", "https://api.charmhub.io"), "/"),
+		OCIListenAddress:        envFallback("CHARM_REGISTRY_OCI_LISTEN", "APP_OCI_LISTEN", ":5000"),
+		OCIInternalURL:          strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_INTERNAL_URL", "APP_OCI_INTERNAL_URL", "https://127.0.0.1:5000"), "/"),
+		OCIStorageBucket:        envFallback("CHARM_REGISTRY_OCI_S3_BUCKET", "APP_OCI_S3_BUCKET", "charm-registry-oci"),
+		OCIStoragePrefix:        strings.Trim(envFallback("CHARM_REGISTRY_OCI_S3_PREFIX", "APP_OCI_S3_PREFIX", "oci"), "/"),
+		OCIStorageRegion:        envFallback("CHARM_REGISTRY_OCI_S3_REGION", "APP_OCI_S3_REGION", envFallback("CHARM_REGISTRY_S3_REGION", "S3_REGION", "us-east-1")),
+		OCIStorageEndpoint:      strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_S3_ENDPOINT", "APP_OCI_S3_ENDPOINT", envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", "")), "/"),
+		OCIStorageAccessKeyID:   envFallback("CHARM_REGISTRY_OCI_S3_ACCESS_KEY", "APP_OCI_S3_ACCESS_KEY", envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", "")),
+		OCIStorageSecretKey:     envFallback("CHARM_REGISTRY_OCI_S3_SECRET_KEY", "APP_OCI_S3_SECRET_KEY", envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", "")),
+		OCIStorageUsePathStyle:  parsed.ociStorageUsePathStyle,
+		OCISecretKey:            envFallback("CHARM_REGISTRY_OCI_SECRET_KEY", "APP_SECRET_KEY", ""),
+		OCIProjectPrefix:        strings.Trim(envFallback("CHARM_REGISTRY_OCI_PROJECT_PREFIX", "APP_OCI_PROJECT_PREFIX", "charm"), "-"),
+		OCIPullRobotPrefix:      strings.Trim(envFallback("CHARM_REGISTRY_OCI_PULL_ROBOT_PREFIX", "APP_OCI_PULL_ROBOT_PREFIX", "pull"), "-"),
+		OCIPushRobotPrefix:      strings.Trim(envFallback("CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX", "APP_OCI_PUSH_ROBOT_PREFIX", "push"), "-"),
+		OCITLSCertFile:          os.Getenv("CHARM_REGISTRY_OCI_TLS_CERT_FILE"),
+		OCITLSKeyFile:           os.Getenv("CHARM_REGISTRY_OCI_TLS_KEY_FILE"),
+		CharmhubURL:             strings.TrimRight(envFallback("CHARM_REGISTRY_CHARMHUB_URL", "APP_CHARMHUB_URL", "https://api.charmhub.io"), "/"),
 		CharmhubSyncInterval:    parsed.charmhubSyncInterval,
 		ServerReadHeaderTimeout: parsed.serverReadHeaderTimeout,
 		ServerReadTimeout:       parsed.serverReadTimeout,
@@ -135,7 +145,15 @@ func Load() (Config, error) {
 }
 
 func loadParsedConfig() (parsedConfig, error) {
-	s3UsePathStyle, err := envBool("CHARM_REGISTRY_S3_USE_PATH_STYLE", true)
+	s3UsePathStyle, err := envBoolFallback("CHARM_REGISTRY_S3_USE_PATH_STYLE", "APP_S3_USE_PATH_STYLE", true)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	ociStorageUsePathStyle, err := envBoolFallback(
+		"CHARM_REGISTRY_OCI_S3_USE_PATH_STYLE",
+		"APP_OCI_S3_USE_PATH_STYLE",
+		s3UsePathStyle,
+	)
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -143,15 +161,11 @@ func loadParsedConfig() (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	enableInsecureDevAuth, err := envBool("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", false)
+	enableInsecureDevAuth, err := envBoolFallback("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "APP_ENABLE_INSECURE_DEV_AUTH", false)
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	harborInsecureTLS, err := envBool("CHARM_REGISTRY_HARBOR_INSECURE_SKIP_VERIFY", false)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	charmhubSyncInterval, err := envDuration("CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL", 15*time.Minute)
+	charmhubSyncInterval, err := envDurationFallback("CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL", "APP_CHARMHUB_SYNC_INTERVAL", 15*time.Minute)
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -195,8 +209,8 @@ func loadParsedConfig() (parsedConfig, error) {
 	return parsedConfig{
 		s3UsePathStyle:          s3UsePathStyle,
 		s3DisableTLS:            s3DisableTLS,
+		ociStorageUsePathStyle:  ociStorageUsePathStyle,
 		enableInsecureDevAuth:   enableInsecureDevAuth,
-		harborInsecureTLS:       harborInsecureTLS,
 		charmhubSyncInterval:    charmhubSyncInterval,
 		serverReadHeaderTimeout: serverReadHeaderTimeout,
 		serverReadTimeout:       serverReadTimeout,
@@ -214,35 +228,46 @@ func validateConfig(cfg Config) (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_DATABASE_URL is required")
 	}
-	if (cfg.OIDCIssuerURL == "") != (cfg.OIDCClientID == "") {
-		return Config{}, fmt.Errorf(
-			"cannot load config: CHARM_REGISTRY_OIDC_ISSUER_URL and CHARM_REGISTRY_OIDC_CLIENT_ID must be set together",
-		)
+	if err := validateAuthConfig(cfg); err != nil {
+		return Config{}, err
 	}
-	if !cfg.EnableInsecureDevAuth && cfg.OIDCIssuerURL == "" && cfg.OIDCClientID == "" {
-		return Config{}, fmt.Errorf(
-			"cannot load config: configure OIDC or explicitly enable CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH for development",
-		)
-	}
-	if cfg.HarborURL == "" {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_HARBOR_URL is required")
-	}
-	if cfg.HarborAPIURL == "" {
-		cfg.HarborAPIURL = cfg.HarborURL
-	}
-	if cfg.HarborAdminUsername == "" || cfg.HarborAdminPassword == "" {
-		return Config{}, fmt.Errorf(
-			"cannot load config: CHARM_REGISTRY_HARBOR_ADMIN_USERNAME and CHARM_REGISTRY_HARBOR_ADMIN_PASSWORD are required",
-		)
-	}
-	if cfg.HarborSecretKey == "" {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_HARBOR_SECRET_KEY is required")
+	if err := validateOCIConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	if cfg.MaxArchiveFileBytes <= 0 {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
 	}
 
 	return cfg, nil
+}
+
+func validateAuthConfig(cfg Config) error {
+	if (cfg.OIDCIssuerURL == "") != (cfg.OIDCClientID == "") {
+		return fmt.Errorf(
+			"cannot load config: CHARM_REGISTRY_OIDC_ISSUER_URL and CHARM_REGISTRY_OIDC_CLIENT_ID must be set together",
+		)
+	}
+	if !cfg.EnableInsecureDevAuth && cfg.OIDCIssuerURL == "" && cfg.OIDCClientID == "" {
+		return fmt.Errorf(
+			"cannot load config: configure OIDC or explicitly enable CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH for development",
+		)
+	}
+	return nil
+}
+
+func validateOCIConfig(cfg Config) error {
+	if cfg.OCISecretKey == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_SECRET_KEY is required")
+	}
+	if cfg.OCIStorageBucket == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_S3_BUCKET is required")
+	}
+	if (cfg.OCITLSCertFile == "") != (cfg.OCITLSKeyFile == "") {
+		return fmt.Errorf(
+			"cannot load config: CHARM_REGISTRY_OCI_TLS_CERT_FILE and CHARM_REGISTRY_OCI_TLS_KEY_FILE must be set together",
+		)
+	}
+	return nil
 }
 
 func (c Config) HasOIDC() bool {
@@ -262,11 +287,51 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+func envFallback(primary, secondary, fallback string) string {
+	if value, ok := os.LookupEnv(primary); ok && value != "" {
+		return value
+	}
+	if secondary != "" {
+		if value, ok := os.LookupEnv(secondary); ok && value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func listenAddress() string {
+	if value := envFallback("CHARM_REGISTRY_LISTEN", "", ""); value != "" {
+		return value
+	}
+	if port := envFallback("APP_PORT", "", ""); port != "" {
+		return ":" + strings.TrimPrefix(port, ":")
+	}
+	return ":8080"
+}
+
 func envBool(key string, fallback bool) (bool, error) {
 	raw, ok := os.LookupEnv(key)
 	if !ok || raw == "" {
 		return fallback, nil
 	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("cannot parse %s as bool: %w", key, err)
+	}
+	return value, nil
+}
+
+func envBoolFallback(primary, secondary string, fallback bool) (bool, error) {
+	if raw, ok := os.LookupEnv(primary); ok && raw != "" {
+		return parseBoolEnv(primary, raw)
+	}
+	if raw, ok := os.LookupEnv(secondary); ok && raw != "" {
+		return parseBoolEnv(secondary, raw)
+	}
+	return fallback, nil
+}
+
+func parseBoolEnv(key, raw string) (bool, error) {
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("cannot parse %s as bool: %w", key, err)
@@ -310,9 +375,33 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 	return value, nil
 }
 
-func envCSV(key string) []string {
-	raw, ok := os.LookupEnv(key)
-	if !ok || raw == "" {
+func envDurationFallback(primary, secondary string, fallback time.Duration) (time.Duration, error) {
+	if raw, ok := os.LookupEnv(primary); ok && raw != "" {
+		return parseDurationEnv(primary, raw)
+	}
+	if raw, ok := os.LookupEnv(secondary); ok && raw != "" {
+		return parseDurationEnv(secondary, raw)
+	}
+	return fallback, nil
+}
+
+func parseDurationEnv(key, raw string) (time.Duration, error) {
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("cannot parse %s as duration: %w", key, err)
+	}
+	return value, nil
+}
+
+func envCSVFallback(primary, secondary string) []string {
+	if raw, ok := os.LookupEnv(primary); ok && raw != "" {
+		return csvValues(raw)
+	}
+	return csvValues(os.Getenv(secondary))
+}
+
+func csvValues(raw string) []string {
+	if raw == "" {
 		return nil
 	}
 	parts := strings.Split(raw, ",")
@@ -327,6 +416,19 @@ func envCSV(key string) []string {
 		return nil
 	}
 	return values
+}
+
+func oauthEnv(suffix string) string {
+	for _, entry := range os.Environ() {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || value == "" {
+			continue
+		}
+		if strings.HasPrefix(key, "APP_") && strings.HasSuffix(key, "_"+suffix) {
+			return key
+		}
+	}
+	return ""
 }
 
 func stringInSlice(candidate string, values []string) bool {

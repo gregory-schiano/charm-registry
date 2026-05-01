@@ -24,14 +24,16 @@ import (
 )
 
 const (
-	charmhubAuthority          = "charmhub"
-	charmhubSyncAccountID      = "internal-charmhub-sync"
-	charmhubSyncAccountSubject = "internal|charmhub-sync"
-	charmhubSyncAccountName    = "charmhub-sync"
-	charmhubSyncStatusPending  = "pending"
-	charmhubSyncStatusRunning  = "running"
-	charmhubSyncStatusOK       = "ok"
-	charmhubSyncStatusError    = "error"
+	charmhubAuthority             = "charmhub"
+	charmhubSyncAccountID         = "internal-charmhub-sync"
+	charmhubSyncAccountSubject    = "internal|charmhub-sync"
+	charmhubSyncAccountName       = "charmhub-sync"
+	charmhubSyncStatusPending     = "pending"
+	charmhubSyncStatusRunning     = "running"
+	charmhubSyncStatusOK          = "ok"
+	charmhubSyncStatusError       = "error"
+	charmhubSyncStatusDeleting    = "deleting"
+	charmhubSyncStatusDeleteError = "delete-error"
 )
 
 var charmhubSyncRisks = []string{"stable", "candidate", "beta", "edge"}
@@ -222,15 +224,31 @@ func (s *Service) RemoveCharmhubSyncRule(ctx context.Context, identity core.Iden
 	if err := s.requireAdmin(identity); err != nil {
 		return err
 	}
+	packageName = strings.TrimSpace(packageName)
 	track, err := normalizeSyncTrack(track)
 	if err != nil {
 		return err
 	}
-	if err := s.repo.DeleteCharmhubSyncRule(ctx, strings.TrimSpace(packageName), track); err != nil {
-		return translateRepoError(err, "sync rule not found")
+	rules, err := s.repo.ListCharmhubSyncRulesByPackageName(ctx, packageName)
+	if err != nil {
+		return err
 	}
-	s.enqueueCharmhubSync(packageName)
-	return nil
+	for _, rule := range rules {
+		if rule.Track != track {
+			continue
+		}
+		rule.LastSyncStatus = charmhubSyncStatusDeleting
+		rule.LastSyncStartedAt = nil
+		rule.LastSyncFinishedAt = nil
+		rule.LastSyncError = nil
+		rule.UpdatedAt = time.Now().UTC()
+		if err := s.repo.UpdateCharmhubSyncRule(ctx, rule); err != nil {
+			return translateRepoError(err, "sync rule not found")
+		}
+		s.enqueueCharmhubSync(packageName)
+		return nil
+	}
+	return newError(ErrorKindNotFound, "not-found", "sync rule not found")
 }
 
 func (s *Service) TriggerCharmhubSync(ctx context.Context, identity core.Identity, packageName string) error {
@@ -363,6 +381,7 @@ func (s *Service) reconcileCharmhubPackage(ctx context.Context, packageName stri
 	slices.SortFunc(rules, func(left, right core.CharmhubSyncRule) int {
 		return strings.Compare(left.Track, right.Track)
 	})
+	activeRules, deletingRules := partitionCharmhubSyncRules(rules)
 
 	pkg, err := s.repo.GetPackageByName(ctx, packageName)
 	if errors.Is(err, repo.ErrNotFound) {
@@ -377,15 +396,19 @@ func (s *Service) reconcileCharmhubPackage(ctx context.Context, packageName stri
 		)
 	}
 
+	if len(activeRules) == 0 {
+		return s.reconcileDeletingCharmhubPackage(ctx, packageName, deletingRules)
+	}
+
 	var errs []error
-	for _, rule := range rules {
+	for _, rule := range activeRules {
 		rule = s.ruleWithStatus(rule, charmhubSyncStatusRunning, nil)
 		if updateErr := s.repo.UpdateCharmhubSyncRule(ctx, rule); updateErr != nil {
 			errs = append(errs, updateErr)
 			continue
 		}
 
-		updatedPkg, syncErr := s.syncCharmhubTrack(ctx, pkg, rules, rule)
+		updatedPkg, syncErr := s.syncCharmhubTrack(ctx, pkg, activeRules, rule)
 		if syncErr != nil {
 			errs = append(errs, syncErr)
 			rule = s.ruleWithStatus(rule, charmhubSyncStatusError, syncErr)
@@ -401,9 +424,92 @@ func (s *Service) reconcileCharmhubPackage(ctx context.Context, packageName stri
 		}
 	}
 
-	if pkg.ID != "" {
-		if pruneErr := s.pruneSyncedPackage(ctx, pkg, rules); pruneErr != nil {
-			errs = append(errs, pruneErr)
+	if pruneErr := s.pruneDeletedCharmhubSyncRules(ctx, pkg, activeRules, deletingRules); pruneErr != nil {
+		errs = append(errs, pruneErr)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) reconcileDeletingCharmhubPackage(
+	ctx context.Context,
+	packageName string,
+	deletingRules []core.CharmhubSyncRule,
+) error {
+	if err := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleting, nil); err != nil {
+		return err
+	}
+	if err := s.cleanupSyncedPackage(ctx, packageName); err != nil {
+		markErr := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleteError, err)
+		return errors.Join(err, markErr)
+	}
+	return s.deleteCharmhubSyncRules(ctx, deletingRules)
+}
+
+func (s *Service) pruneDeletedCharmhubSyncRules(
+	ctx context.Context,
+	pkg core.Package,
+	activeRules []core.CharmhubSyncRule,
+	deletingRules []core.CharmhubSyncRule,
+) error {
+	if pkg.ID == "" || len(deletingRules) == 0 {
+		return nil
+	}
+	var errs []error
+	if err := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleting, nil); err != nil {
+		errs = append(errs, err)
+	}
+	if pruneErr := s.pruneSyncedPackage(ctx, pkg, activeRules); pruneErr != nil {
+		errs = append(errs, pruneErr)
+		if markErr := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleteError, pruneErr); markErr != nil {
+			errs = append(errs, markErr)
+		}
+		return errors.Join(errs...)
+	}
+	if deleteErr := s.deleteCharmhubSyncRules(ctx, deletingRules); deleteErr != nil {
+		errs = append(errs, deleteErr)
+	}
+	return errors.Join(errs...)
+}
+
+func partitionCharmhubSyncRules(rules []core.CharmhubSyncRule) ([]core.CharmhubSyncRule, []core.CharmhubSyncRule) {
+	active := make([]core.CharmhubSyncRule, 0, len(rules))
+	deleting := make([]core.CharmhubSyncRule, 0, len(rules))
+	for _, rule := range rules {
+		if isDeletingCharmhubSyncRule(rule) {
+			deleting = append(deleting, rule)
+			continue
+		}
+		active = append(active, rule)
+	}
+	return active, deleting
+}
+
+func isDeletingCharmhubSyncRule(rule core.CharmhubSyncRule) bool {
+	return rule.LastSyncStatus == charmhubSyncStatusDeleting || rule.LastSyncStatus == charmhubSyncStatusDeleteError
+}
+
+func (s *Service) markCharmhubSyncRules(
+	ctx context.Context,
+	rules []core.CharmhubSyncRule,
+	status string,
+	syncErr error,
+) error {
+	var errs []error
+	for _, rule := range rules {
+		rule = s.ruleWithStatus(rule, status, syncErr)
+		if err := s.repo.UpdateCharmhubSyncRule(ctx, rule); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) deleteCharmhubSyncRules(ctx context.Context, rules []core.CharmhubSyncRule) error {
+	var errs []error
+	for _, rule := range rules {
+		if err := s.repo.DeleteCharmhubSyncRule(ctx, rule.PackageName, rule.Track); err != nil &&
+			!errors.Is(err, repo.ErrNotFound) {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -453,7 +559,7 @@ func (s *Service) syncCharmhubTrack(
 		if base == nil {
 			continue
 		}
-		channel := item.Channel.Name
+		channel := charmhubSyncChannelName(item.Channel)
 		info, err := s.charmhub.RefreshChannel(ctx, rule.PackageName, channel, *base)
 		if err != nil {
 			return pkg, err
@@ -622,6 +728,16 @@ func syncRuleMatchesBase(rule core.CharmhubSyncRule, base core.Base) bool {
 
 func syncRuleMatchesArchitecture(rule core.CharmhubSyncRule, architecture string) bool {
 	return len(rule.Architectures) == 0 || slices.Contains(rule.Architectures, architecture)
+}
+
+func charmhubSyncChannelName(channel charmhubclient.ReleaseChannel) string {
+	if strings.Contains(channel.Name, "/") {
+		return channel.Name
+	}
+	if channel.Track != "" && channel.Risk != "" {
+		return channel.Track + "/" + channel.Risk
+	}
+	return channel.Name
 }
 
 func releaseVariantID(channel string, base *core.Base) string {

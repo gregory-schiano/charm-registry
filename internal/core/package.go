@@ -52,15 +52,15 @@ type Package struct {
 	Tracks          []Track             `json:"tracks,omitempty"`
 	Publisher       Publisher           `json:"publisher"`
 	Store           string              `json:"store"`
-	HarborProject   string              `json:"-"`
-	HarborPushRobot *RobotCredential    `json:"-"`
-	HarborPullRobot *RobotCredential    `json:"-"`
-	HarborSyncedAt  *time.Time          `json:"-"`
+	OCIProject      string              `json:"-"`
+	OCIPushRobot    *RobotCredential    `json:"-"`
+	OCIPullRobot    *RobotCredential    `json:"-"`
+	OCISyncedAt     *time.Time          `json:"-"`
 	CreatedAt       time.Time           `json:"created-at"`
 	UpdatedAt       time.Time           `json:"updated-at"`
 }
 
-// RobotCredential stores Harbor robot credentials associated with a package.
+// RobotCredential stores package-scoped OCI registry credentials.
 type RobotCredential struct {
 	ID              int64  `json:"-"`
 	Username        string `json:"-"`

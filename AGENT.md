@@ -10,7 +10,7 @@ At a high level:
 
 - Charm and resource metadata lives in Postgres.
 - File artifacts live in S3-compatible object storage.
-- OCI image resources are stored in Harbor.
+- OCI image resources are stored in the embedded OCI Distribution registry by default.
 - The service exposes both publisher-style endpoints (`/v1/...`) and Juju/Charmhub-compatible consumer endpoints (`/v2/...` and `/api/v1/...`).
 - The registry can also mirror selected public Charmhub tracks into the local registry with a background sync worker.
 
@@ -44,8 +44,8 @@ This is a compatibility-driven project. Small response-shape changes can break r
   - Do not hand-edit these files.
 - `internal/blob`
   - S3-compatible blob storage for charm and file-resource payloads.
-- `internal/harbor`
-  - Harbor control-plane and OCI mirror interactions.
+- `internal/oci`
+  - Embedded OCI Distribution registry backend and package-scoped push/pull auth.
 - `internal/charm`
   - Charm archive parsing and safety checks.
 - `internal/charmhub`
@@ -79,10 +79,8 @@ This is a compatibility-driven project. Small response-shape changes can break r
   - Adding a new config env var in `internal/config/config.go` is not enough.
   - If the dev stack should see it, update `compose.yaml` too.
 - `go test ./...` is not the preferred repo-wide test command here.
-  - The repo includes vendored Harbor content under `deploy/` that can make broad package discovery noisy or unreliable.
   - Use the `Makefile` targets or `./cmd/... ./internal/...` package scope instead.
-- Harbor is a real external dependency in the local stack.
-  - Some flows depend on valid TLS/certs and correct `CHARM_REGISTRY_HARBOR_*` URLs.
+- Embedded OCI is the default local registry path.
 
 ## Code Style And Conventions
 
@@ -211,7 +209,7 @@ From `.github/workflows/ci.yml`:
 - Don’t silently fall back on invalid config values.
 - Don’t hide service or repo failures behind empty responses or zero values.
 - Don’t reintroduce N+1 query patterns in service workflows when batch loading is available.
-- Don’t make read/download paths depend on hidden Harbor repair/provisioning side effects.
+- Don’t make read/download paths depend on hidden OCI repair/provisioning side effects.
 - Don’t refactor public response shapes casually.
 - Don’t remove “unused” code in this repo without checking whether it is part of compatibility, test scaffolding, or generated workflow.
 - Don’t bypass the service layer for business workflows that need auth, transactions, or invariants.

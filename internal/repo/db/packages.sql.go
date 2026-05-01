@@ -69,8 +69,8 @@ func (q *Queries) CanViewPackage(ctx context.Context, arg CanViewPackageParams) 
 const createPackage = `-- name: CreatePackage :exec
 INSERT INTO packages (
     id, name, type, private, status, owner_account_id,
-    harbor_project, harbor_push_robot_id, harbor_push_robot_name, harbor_push_robot_secret,
-    harbor_pull_robot_id, harbor_pull_robot_name, harbor_pull_robot_secret, harbor_synced_at,
+    oci_project, oci_push_robot_id, oci_push_robot_name, oci_push_robot_secret,
+    oci_pull_robot_id, oci_pull_robot_name, oci_pull_robot_secret, oci_synced_at,
     authority, contact, default_track,
     description, summary, title, website,
     links, media, track_guardrails,
@@ -87,32 +87,32 @@ INSERT INTO packages (
 `
 
 type CreatePackageParams struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) error {
@@ -123,14 +123,14 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) er
 		arg.Private,
 		arg.Status,
 		arg.OwnerAccountID,
-		arg.HarborProject,
-		arg.HarborPushRobotID,
-		arg.HarborPushRobotName,
-		arg.HarborPushRobotSecret,
-		arg.HarborPullRobotID,
-		arg.HarborPullRobotName,
-		arg.HarborPullRobotSecret,
-		arg.HarborSyncedAt,
+		arg.OciProject,
+		arg.OciPushRobotID,
+		arg.OciPushRobotName,
+		arg.OciPushRobotSecret,
+		arg.OciPullRobotID,
+		arg.OciPullRobotName,
+		arg.OciPullRobotSecret,
+		arg.OciSyncedAt,
 		arg.Authority,
 		arg.Contact,
 		arg.DefaultTrack,
@@ -162,8 +162,8 @@ func (q *Queries) DeletePackage(ctx context.Context, id string) (int64, error) {
 const getPackageByID = `-- name: GetPackageByID :one
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -177,37 +177,37 @@ WHERE p.id = $1
 `
 
 type GetPackageByIDRow struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	PubID                 string
-	PubUsername           string
-	PubDisplayName        string
-	PubEmail              string
-	PubValidation         string
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	PubID              string
+	PubUsername        string
+	PubDisplayName     string
+	PubEmail           string
+	PubValidation      string
 }
 
 func (q *Queries) GetPackageByID(ctx context.Context, id string) (GetPackageByIDRow, error) {
@@ -220,14 +220,14 @@ func (q *Queries) GetPackageByID(ctx context.Context, id string) (GetPackageByID
 		&i.Private,
 		&i.Status,
 		&i.OwnerAccountID,
-		&i.HarborProject,
-		&i.HarborPushRobotID,
-		&i.HarborPushRobotName,
-		&i.HarborPushRobotSecret,
-		&i.HarborPullRobotID,
-		&i.HarborPullRobotName,
-		&i.HarborPullRobotSecret,
-		&i.HarborSyncedAt,
+		&i.OciProject,
+		&i.OciPushRobotID,
+		&i.OciPushRobotName,
+		&i.OciPushRobotSecret,
+		&i.OciPullRobotID,
+		&i.OciPullRobotName,
+		&i.OciPullRobotSecret,
+		&i.OciSyncedAt,
 		&i.Authority,
 		&i.Contact,
 		&i.DefaultTrack,
@@ -252,8 +252,8 @@ func (q *Queries) GetPackageByID(ctx context.Context, id string) (GetPackageByID
 const getPackageByName = `-- name: GetPackageByName :one
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -267,37 +267,37 @@ WHERE p.name = $1
 `
 
 type GetPackageByNameRow struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	PubID                 string
-	PubUsername           string
-	PubDisplayName        string
-	PubEmail              string
-	PubValidation         string
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	PubID              string
+	PubUsername        string
+	PubDisplayName     string
+	PubEmail           string
+	PubValidation      string
 }
 
 func (q *Queries) GetPackageByName(ctx context.Context, name string) (GetPackageByNameRow, error) {
@@ -310,14 +310,14 @@ func (q *Queries) GetPackageByName(ctx context.Context, name string) (GetPackage
 		&i.Private,
 		&i.Status,
 		&i.OwnerAccountID,
-		&i.HarborProject,
-		&i.HarborPushRobotID,
-		&i.HarborPushRobotName,
-		&i.HarborPushRobotSecret,
-		&i.HarborPullRobotID,
-		&i.HarborPullRobotName,
-		&i.HarborPullRobotSecret,
-		&i.HarborSyncedAt,
+		&i.OciProject,
+		&i.OciPushRobotID,
+		&i.OciPushRobotName,
+		&i.OciPushRobotSecret,
+		&i.OciPullRobotID,
+		&i.OciPullRobotName,
+		&i.OciPullRobotSecret,
+		&i.OciSyncedAt,
 		&i.Authority,
 		&i.Contact,
 		&i.DefaultTrack,
@@ -358,8 +358,8 @@ func (q *Queries) GetPackageOwner(ctx context.Context, id string) (GetPackageOwn
 const listPackagesForAccount = `-- name: ListPackagesForAccount :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -373,37 +373,37 @@ WHERE p.owner_account_id = $1
 `
 
 type ListPackagesForAccountRow struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	PubID                 string
-	PubUsername           string
-	PubDisplayName        string
-	PubEmail              string
-	PubValidation         string
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	PubID              string
+	PubUsername        string
+	PubDisplayName     string
+	PubEmail           string
+	PubValidation      string
 }
 
 func (q *Queries) ListPackagesForAccount(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountRow, error) {
@@ -422,14 +422,14 @@ func (q *Queries) ListPackagesForAccount(ctx context.Context, ownerAccountID str
 			&i.Private,
 			&i.Status,
 			&i.OwnerAccountID,
-			&i.HarborProject,
-			&i.HarborPushRobotID,
-			&i.HarborPushRobotName,
-			&i.HarborPushRobotSecret,
-			&i.HarborPullRobotID,
-			&i.HarborPullRobotName,
-			&i.HarborPullRobotSecret,
-			&i.HarborSyncedAt,
+			&i.OciProject,
+			&i.OciPushRobotID,
+			&i.OciPushRobotName,
+			&i.OciPushRobotSecret,
+			&i.OciPullRobotID,
+			&i.OciPullRobotName,
+			&i.OciPullRobotSecret,
+			&i.OciSyncedAt,
 			&i.Authority,
 			&i.Contact,
 			&i.DefaultTrack,
@@ -461,8 +461,8 @@ func (q *Queries) ListPackagesForAccount(ctx context.Context, ownerAccountID str
 const listPackagesForAccountWithCollaborations = `-- name: ListPackagesForAccountWithCollaborations :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -483,37 +483,37 @@ WHERE p.owner_account_id = $1
 `
 
 type ListPackagesForAccountWithCollaborationsRow struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	PubID                 string
-	PubUsername           string
-	PubDisplayName        string
-	PubEmail              string
-	PubValidation         string
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	PubID              string
+	PubUsername        string
+	PubDisplayName     string
+	PubEmail           string
+	PubValidation      string
 }
 
 func (q *Queries) ListPackagesForAccountWithCollaborations(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountWithCollaborationsRow, error) {
@@ -532,14 +532,14 @@ func (q *Queries) ListPackagesForAccountWithCollaborations(ctx context.Context, 
 			&i.Private,
 			&i.Status,
 			&i.OwnerAccountID,
-			&i.HarborProject,
-			&i.HarborPushRobotID,
-			&i.HarborPushRobotName,
-			&i.HarborPushRobotSecret,
-			&i.HarborPullRobotID,
-			&i.HarborPullRobotName,
-			&i.HarborPullRobotSecret,
-			&i.HarborSyncedAt,
+			&i.OciProject,
+			&i.OciPushRobotID,
+			&i.OciPushRobotName,
+			&i.OciPushRobotSecret,
+			&i.OciPullRobotID,
+			&i.OciPullRobotName,
+			&i.OciPullRobotSecret,
+			&i.OciSyncedAt,
 			&i.Authority,
 			&i.Contact,
 			&i.DefaultTrack,
@@ -571,8 +571,8 @@ func (q *Queries) ListPackagesForAccountWithCollaborations(ctx context.Context, 
 const searchPackages = `-- name: SearchPackages :many
 SELECT
     p.id, p.name, p.type, p.private, p.status, p.owner_account_id,
-    p.harbor_project, p.harbor_push_robot_id, p.harbor_push_robot_name, p.harbor_push_robot_secret,
-    p.harbor_pull_robot_id, p.harbor_pull_robot_name, p.harbor_pull_robot_secret, p.harbor_synced_at,
+    p.oci_project, p.oci_push_robot_id, p.oci_push_robot_name, p.oci_push_robot_secret,
+    p.oci_pull_robot_id, p.oci_pull_robot_name, p.oci_pull_robot_secret, p.oci_synced_at,
     p.authority, p.contact, p.default_track, p.description, p.summary, p.title,
     p.website, p.links, p.media, p.track_guardrails, p.created_at, p.updated_at,
     a.id          AS pub_id,
@@ -587,37 +587,37 @@ ORDER BY p.name ASC
 `
 
 type SearchPackagesRow struct {
-	ID                    string
-	Name                  string
-	Type                  string
-	Private               bool
-	Status                string
-	OwnerAccountID        string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	PubID                 string
-	PubUsername           string
-	PubDisplayName        string
-	PubEmail              string
-	PubValidation         string
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	PubID              string
+	PubUsername        string
+	PubDisplayName     string
+	PubEmail           string
+	PubValidation      string
 }
 
 func (q *Queries) SearchPackages(ctx context.Context, dollar_1 string) ([]SearchPackagesRow, error) {
@@ -636,14 +636,14 @@ func (q *Queries) SearchPackages(ctx context.Context, dollar_1 string) ([]Search
 			&i.Private,
 			&i.Status,
 			&i.OwnerAccountID,
-			&i.HarborProject,
-			&i.HarborPushRobotID,
-			&i.HarborPushRobotName,
-			&i.HarborPushRobotSecret,
-			&i.HarborPullRobotID,
-			&i.HarborPullRobotName,
-			&i.HarborPullRobotSecret,
-			&i.HarborSyncedAt,
+			&i.OciProject,
+			&i.OciPushRobotID,
+			&i.OciPushRobotName,
+			&i.OciPushRobotSecret,
+			&i.OciPullRobotID,
+			&i.OciPullRobotName,
+			&i.OciPullRobotSecret,
+			&i.OciSyncedAt,
 			&i.Authority,
 			&i.Contact,
 			&i.DefaultTrack,
@@ -676,14 +676,14 @@ const updatePackage = `-- name: UpdatePackage :execrows
 UPDATE packages SET
     private          = $2,
     status           = $3,
-    harbor_project   = $4,
-    harbor_push_robot_id = $5,
-    harbor_push_robot_name = $6,
-    harbor_push_robot_secret = $7,
-    harbor_pull_robot_id = $8,
-    harbor_pull_robot_name = $9,
-    harbor_pull_robot_secret = $10,
-    harbor_synced_at  = $11,
+    oci_project   = $4,
+    oci_push_robot_id = $5,
+    oci_push_robot_name = $6,
+    oci_push_robot_secret = $7,
+    oci_pull_robot_id = $8,
+    oci_pull_robot_name = $9,
+    oci_pull_robot_secret = $10,
+    oci_synced_at  = $11,
     authority        = $12,
     contact          = $13,
     default_track    = $14,
@@ -699,28 +699,28 @@ WHERE id = $1
 `
 
 type UpdatePackageParams struct {
-	ID                    string
-	Private               bool
-	Status                string
-	HarborProject         string
-	HarborPushRobotID     *int64
-	HarborPushRobotName   string
-	HarborPushRobotSecret string
-	HarborPullRobotID     *int64
-	HarborPullRobotName   string
-	HarborPullRobotSecret string
-	HarborSyncedAt        pgtype.Timestamptz
-	Authority             *string
-	Contact               *string
-	DefaultTrack          *string
-	Description           *string
-	Summary               *string
-	Title                 *string
-	Website               *string
-	Links                 json.RawMessage
-	Media                 json.RawMessage
-	TrackGuardrails       json.RawMessage
-	UpdatedAt             time.Time
+	ID                 string
+	Private            bool
+	Status             string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	UpdatedAt          time.Time
 }
 
 func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (int64, error) {
@@ -728,14 +728,14 @@ func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (i
 		arg.ID,
 		arg.Private,
 		arg.Status,
-		arg.HarborProject,
-		arg.HarborPushRobotID,
-		arg.HarborPushRobotName,
-		arg.HarborPushRobotSecret,
-		arg.HarborPullRobotID,
-		arg.HarborPullRobotName,
-		arg.HarborPullRobotSecret,
-		arg.HarborSyncedAt,
+		arg.OciProject,
+		arg.OciPushRobotID,
+		arg.OciPushRobotName,
+		arg.OciPushRobotSecret,
+		arg.OciPullRobotID,
+		arg.OciPullRobotName,
+		arg.OciPullRobotSecret,
+		arg.OciSyncedAt,
 		arg.Authority,
 		arg.Contact,
 		arg.DefaultTrack,
