@@ -8,6 +8,7 @@ import (
 
 type Repository interface {
 	Ping(ctx context.Context) error
+	Migrate(ctx context.Context) error
 	WithinTransaction(ctx context.Context, fn func(Repository) error) error
 
 	EnsureAccount(ctx context.Context, account core.Account) (core.Account, error)

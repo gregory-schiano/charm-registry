@@ -52,6 +52,11 @@ func (m *Memory) Ping(_ context.Context) error {
 	return nil
 }
 
+// Migrate is part of the [Repository] interface.
+func (m *Memory) Migrate(_ context.Context) error {
+	return nil
+}
+
 // WithinTransaction is part of the [Repository] interface.
 func (m *Memory) WithinTransaction(ctx context.Context, fn func(Repository) error) error {
 	return fn(m)

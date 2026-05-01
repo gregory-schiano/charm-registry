@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -60,6 +62,94 @@ func (s *MemoryStore) Delete(_ context.Context, key string) error {
 	defer s.mu.Unlock()
 	delete(s.data, key)
 	return nil
+}
+
+type FileStore struct {
+	root string
+}
+
+func NewFileStore(root string) (*FileStore, error) {
+	if root == "" {
+		return nil, fmt.Errorf("filesystem blob store root is required")
+	}
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return nil, err
+	}
+	return &FileStore{root: root}, nil
+}
+
+func (s *FileStore) Put(_ context.Context, key string, payload []byte, _ string) error {
+	path, err := s.path(key)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".blob-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+	if _, err := tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func (s *FileStore) Get(_ context.Context, key string) ([]byte, error) {
+	path, err := s.path(key)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G304 -- path is rooted and traversal-checked by FileStore.path.
+	payload, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("blob %q not found", key)
+	}
+	return payload, err
+}
+
+func (s *FileStore) Delete(_ context.Context, key string) error {
+	path, err := s.path(key)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (s *FileStore) path(key string) (string, error) {
+	if strings.ContainsRune(key, 0) {
+		return "", fmt.Errorf("invalid blob key %q", key)
+	}
+	clean := filepath.Clean(filepath.FromSlash(key))
+	isUnsafe := clean == "." ||
+		clean == "" ||
+		filepath.IsAbs(clean) ||
+		clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	if isUnsafe {
+		return "", fmt.Errorf("invalid blob key %q", key)
+	}
+	path := filepath.Join(s.root, clean)
+	rel, err := filepath.Rel(s.root, path)
+	escapesRoot := rel == "." ||
+		rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	if err != nil || escapesRoot {
+		return "", fmt.Errorf("invalid blob key %q", key)
+	}
+	return path, nil
 }
 
 // s3API is the subset of [s3.Client] methods used by [S3Store].

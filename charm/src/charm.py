@@ -43,6 +43,7 @@ class CharmRegistryApp(App):
     def _generate_integration_environments(self, prefix: str = "") -> dict[str, str]:
         """Generate workload environment, including OCI S3 relation data."""
         env = super()._generate_integration_environments(prefix=prefix)
+        env.setdefault(prefix + "CHARM_REGISTRY_DATA_DIR", "data")
         if self._oci_s3:
             relation_data = self._oci_s3.to_relation_data()
             if relation_data:

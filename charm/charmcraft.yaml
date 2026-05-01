@@ -35,7 +35,7 @@ requires:
 #     limit: 1
   postgresql:
     interface: postgresql_client
-    optional: false
+    optional: true
     limit: 1
 #   mongodb:
 #     interface: mongodb_client
@@ -47,11 +47,11 @@ requires:
 #     limit: 1
   s3:
     interface: s3
-    optional: false
+    optional: true
     limit: 1
   oci-s3:
     interface: s3
-    optional: false
+    optional: true
     limit: 1
 #   saml:
 #     interface: saml

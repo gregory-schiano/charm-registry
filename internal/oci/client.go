@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -26,6 +27,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/handlers"
 	storagedriver "github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/factory"
+	_ "github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/s3-aws"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -37,6 +39,13 @@ import (
 )
 
 var invalidNamePattern = regexp.MustCompile(`[^a-z0-9-]+`)
+
+const (
+	keyDerivationIterations = 210_000
+	keyDerivationLength     = 32
+)
+
+var keyDerivationSalt = []byte("charm-registry/oci-secret/v1")
 
 type Client struct {
 	handler          http.Handler
@@ -51,9 +60,14 @@ type Client struct {
 	transport        *http.Transport
 }
 
+type ociStorageConfig struct {
+	Driver string
+	Params configuration.Parameters
+}
+
 func New(ctx context.Context, cfg config.Config, repository repo.Repository) (*Client, error) {
 	storage := storageParameters(cfg)
-	driver, err := factory.Create(ctx, "s3", storage)
+	driver, err := factory.Create(ctx, storage.Driver, storage.Params)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create OCI storage driver: %w", err)
 	}
@@ -67,7 +81,7 @@ func New(ctx context.Context, cfg config.Config, repository repo.Repository) (*C
 			Level: "info",
 		},
 		Storage: configuration.Storage{
-			"s3": storage,
+			storage.Driver: storage.Params,
 			"delete": configuration.Parameters{
 				"enabled": true,
 			},
@@ -122,19 +136,30 @@ func internalTransport(cfg config.Config) (*http.Transport, error) {
 	return transport, nil
 }
 
-func storageParameters(cfg config.Config) configuration.Parameters {
-	return configuration.Parameters{
-		"accesskey":      cfg.OCIStorageAccessKeyID,
-		"secretkey":      cfg.OCIStorageSecretKey,
-		"region":         cfg.OCIStorageRegion,
-		"regionendpoint": cfg.OCIStorageEndpoint,
-		"bucket":         cfg.OCIStorageBucket,
-		"secure":         !cfg.S3DisableTLS,
-		"skipverify":     cfg.S3DisableTLS,
-		"v4auth":         true,
-		"forcepathstyle": cfg.OCIStorageUsePathStyle,
-		"rootdirectory":  cfg.OCIStoragePrefix,
-		"chunksize":      10 << 20,
+func storageParameters(cfg config.Config) ociStorageConfig {
+	if cfg.ResolvedOCIStorageBackend() == config.StorageBackendFilesystem {
+		return ociStorageConfig{
+			Driver: "filesystem",
+			Params: configuration.Parameters{
+				"rootdirectory": cfg.OCIStorageDir,
+			},
+		}
+	}
+	return ociStorageConfig{
+		Driver: "s3",
+		Params: configuration.Parameters{
+			"accesskey":      cfg.OCIStorageAccessKeyID,
+			"secretkey":      cfg.OCIStorageSecretKey,
+			"region":         cfg.OCIStorageRegion,
+			"regionendpoint": cfg.OCIStorageEndpoint,
+			"bucket":         cfg.OCIStorageBucket,
+			"secure":         !cfg.S3DisableTLS,
+			"skipverify":     cfg.S3DisableTLS,
+			"v4auth":         true,
+			"forcepathstyle": cfg.OCIStorageUsePathStyle,
+			"rootdirectory":  cfg.OCIStoragePrefix,
+			"chunksize":      10 << 20,
+		},
 	}
 }
 
@@ -472,8 +497,11 @@ func registryHost(raw string) string {
 }
 
 func deriveKey(value string) []byte {
-	sum := sha256.Sum256([]byte(value))
-	return sum[:]
+	key, err := pbkdf2.Key(sha256.New, value, keyDerivationSalt, keyDerivationIterations, keyDerivationLength)
+	if err != nil {
+		panic(fmt.Sprintf("cannot derive OCI secret key: %v", err))
+	}
+	return key
 }
 
 func (c *Client) encrypt(secret string) (string, error) {

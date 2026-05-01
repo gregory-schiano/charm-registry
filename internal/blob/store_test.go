@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -146,6 +148,84 @@ func TestMemoryStoreDelete(t *testing.T) {
 	require.NoError(t, store.Delete(ctx, "key"))
 	_, err := store.Get(ctx, "key")
 	require.Error(t, err)
+}
+
+func TestNewFileStoreRequiresRoot(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewFileStore("")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "filesystem blob store root is required")
+}
+
+func TestFileStorePutGetOverwriteAndDelete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", []byte("v1"), "text/plain"))
+	payload, err := store.Get(ctx, "uploads/one/blob.txt")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v1"), payload)
+
+	require.NoError(t, store.Put(ctx, "uploads/one/blob.txt", []byte("v2"), "text/plain"))
+	payload, err = store.Get(ctx, "uploads/one/blob.txt")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("v2"), payload)
+
+	require.NoError(t, store.Delete(ctx, "uploads/one/blob.txt"))
+	_, err = store.Get(ctx, "uploads/one/blob.txt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestFileStoreDeleteNonExistent(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.NoError(t, store.Delete(context.Background(), "does-not-exist"))
+}
+
+func TestFileStoreCreatesParentDirectories(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewFileStore(root)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Put(context.Background(), "a/b/c", []byte("payload"), "text/plain"))
+	_, err = os.Stat(filepath.Join(root, "a", "b", "c"))
+	require.NoError(t, err)
+}
+
+func TestFileStoreRejectsTraversal(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.Error(t, store.Put(context.Background(), "../escape", []byte("payload"), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "/escape", []byte("payload"), "text/plain"))
+	require.Error(t, store.Put(context.Background(), "foo/../../escape", []byte("payload"), "text/plain"))
+	_, err = store.Get(context.Background(), "../escape")
+	require.Error(t, err)
+}
+
+func TestFileStoreRejectsNullByteKeys(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	require.Error(t, store.Put(context.Background(), "bad\x00key", []byte("payload"), "text/plain"))
+	_, err = store.Get(context.Background(), "bad\x00key")
+	require.Error(t, err)
+	require.Error(t, store.Delete(context.Background(), "bad\x00key"))
 }
 
 // ---- S3Store tests --------------------------------------------------------

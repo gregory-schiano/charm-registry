@@ -1,6 +1,6 @@
 # Private Charm Registry
 
-This repository contains a Go-based private charm registry that supports stock `juju` and stock `charmcraft` for the supported charm and resource workflows, without patching either client. The service is API-first, stores metadata in Postgres, stores charm/resource artifacts in S3-compatible object storage, and embeds an OCI Distribution registry for image push/pull and sync workflows.
+This repository contains a Go-based private charm registry that supports stock `juju` and stock `charmcraft` for the supported charm and resource workflows, without patching either client. The service is API-first, stores metadata in Postgres or SQLite, stores charm/resource artifacts in S3-compatible or filesystem storage, and embeds an OCI Distribution registry for image push/pull and sync workflows.
 
 ## What is implemented
 
@@ -16,7 +16,7 @@ This repository contains a Go-based private charm registry that supports stock `
   - `POST /unscanned-upload/`
 - OIDC-backed identity resolution plus opaque store-token issuance
 - Private-by-default packages with owner-only management and admin override
-- S3-backed charm/resource blobs and embedded OCI registry credential/blob helpers
+- S3-backed or filesystem-backed charm/resource blobs and embedded OCI registry credential/blob helpers
 - Registry-managed Charmhub track synchronization with a background worker
 - Admin CLI `charm-registryctl` for managing synchronized tracks
 
@@ -25,8 +25,8 @@ This repository contains a Go-based private charm registry that supports stock `
 - `cmd/charm-registry`: process entrypoint
 - `internal/api`: HTTP router, response shaping, OpenAPI stub
 - `internal/service`: registry business logic for charmcraft and juju compatibility
-- `internal/repo`: Postgres and in-memory repositories
-- `internal/blob`: S3-compatible blob store
+- `internal/repo`: Postgres, SQLite, and in-memory repositories
+- `internal/blob`: S3-compatible and filesystem blob stores
 - `internal/auth`: OIDC and store-token authentication
 - `internal/charm`: charm archive parsing
 - `internal/charmhub`: upstream Charmhub client used by the sync worker
@@ -66,6 +66,15 @@ docker login localhost:5000 --username '<package-push-username>' --password '<pa
 ```
 
 Production deployments should leave `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=false`, configure OIDC with `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`, use TLS for both listeners, and set a dedicated `CHARM_REGISTRY_OCI_SECRET_KEY` for credential encryption.
+
+For standalone local operation without Postgres or S3, omit `CHARM_REGISTRY_DATABASE_URL` and S3 endpoint/credential variables, or set the backends explicitly:
+
+```bash
+export CHARM_REGISTRY_DATABASE_BACKEND=sqlite
+export CHARM_REGISTRY_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_OCI_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_DATA_DIR=/var/lib/charm-registry
+```
 
 ## Useful commands
 
@@ -180,15 +189,19 @@ What the commands do:
 
 See [.env.example](/src/Canonical/charm-registry/.env.example) for the supported environment variables.
 
-Important auth settings:
+Important settings:
 
+- `CHARM_REGISTRY_DATABASE_BACKEND` selects `auto`, `postgres`, or `sqlite`. In `auto`, the registry uses Postgres when `CHARM_REGISTRY_DATABASE_URL` or `POSTGRESQL_DB_CONNECT_STRING` is set, otherwise SQLite.
+- `CHARM_REGISTRY_STORAGE_BACKEND` selects `auto`, `s3`, or `filesystem` for charm/resource artifacts. In `auto`, S3 endpoint or credentials select S3, otherwise filesystem storage.
+- `CHARM_REGISTRY_OCI_STORAGE_BACKEND` selects `auto`, `s3`, or `filesystem` for embedded OCI registry blobs.
+- `CHARM_REGISTRY_DATA_DIR`, `CHARM_REGISTRY_SQLITE_PATH`, `CHARM_REGISTRY_BLOB_DIR`, and `CHARM_REGISTRY_OCI_STORAGE_DIR` control local fallback paths.
 - `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true` enables development-only bearer tokens and anonymous token minting for local workflows.
 - `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID` enable the production authentication path.
 - `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, and `CHARM_REGISTRY_ADMIN_USERNAMES` bootstrap admin identities with access to every charm.
 - `CHARM_REGISTRY_OCI_LISTEN` controls the embedded OCI listener. The default is `:5000`.
 - `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` is the OCI registry URL handed to Juju, charmcraft, and synced resource payloads. The local default is `https://localhost:5000`.
 - `CHARM_REGISTRY_OCI_INTERNAL_URL` is the URL the registry service uses when it pushes mirrored upstream OCI images into its own embedded listener.
-- `CHARM_REGISTRY_OCI_S3_BUCKET` and `CHARM_REGISTRY_OCI_S3_PREFIX` configure the embedded OCI Distribution S3 storage area. The embedded backend currently uses the main `CHARM_REGISTRY_S3_*` credentials for this bucket, so production deployments should grant that identity only the required blob and OCI bucket permissions until separate OCI S3 credentials are introduced.
+- `CHARM_REGISTRY_OCI_S3_BUCKET` and `CHARM_REGISTRY_OCI_S3_PREFIX` configure the embedded OCI Distribution S3 storage area when OCI storage resolves to S3.
 - `CHARM_REGISTRY_OCI_SECRET_KEY` encrypts package-scoped OCI push/pull credentials at rest.
 - `CHARM_REGISTRY_OCI_TLS_CERT_FILE` and `CHARM_REGISTRY_OCI_TLS_KEY_FILE` enable TLS on the embedded OCI listener when set together. The compose stack mounts `certs/oci.crt` and `certs/oci.key` at `/certs`.
 - `CHARM_REGISTRY_CHARMHUB_URL` overrides the upstream Charmhub API base URL used by the sync worker. The default is `https://api.charmhub.io`.

@@ -8,10 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRequiresDatabaseURL(t *testing.T) {
+func TestLoadRequiresDatabaseURLForPostgresBackend(t *testing.T) {
 
 	// Arrange
+	t.Setenv("CHARM_REGISTRY_DATABASE_BACKEND", "postgres")
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 
 	// Act
 	_, err := Load()
@@ -19,8 +22,97 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot load config:")
-	assert.Contains(t, err.Error(), "CHARM_REGISTRY_DATABASE_URL is required")
+	assert.Contains(t, err.Error(), "CHARM_REGISTRY_DATABASE_URL is required when CHARM_REGISTRY_DATABASE_BACKEND=postgres")
 
+}
+
+func TestLoadAutoDatabaseBackendResolvesToSQLiteWithoutDatabaseURL(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, DatabaseBackendAuto, cfg.DatabaseBackend)
+	assert.Equal(t, DatabaseBackendSQLite, cfg.ResolvedDatabaseBackend())
+	assert.Equal(t, "data/registry.sqlite", cfg.SQLitePath)
+}
+
+func TestLoadRejectsInvalidBackendValues(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+	}{
+		{name: "database", env: "CHARM_REGISTRY_DATABASE_BACKEND"},
+		{name: "storage", env: "CHARM_REGISTRY_STORAGE_BACKEND"},
+		{name: "OCI storage", env: "CHARM_REGISTRY_OCI_STORAGE_BACKEND"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.env, "invalid")
+			t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+			t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+
+			_, err := Load()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.env)
+		})
+	}
+}
+
+func TestValidateBackendConfigChecksResolvedAutoBackends(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "sqlite path required when auto resolves to sqlite",
+			cfg: Config{
+				DatabaseBackend:    DatabaseBackendAuto,
+				StorageBackend:     StorageBackendS3,
+				OCIStorageBackend:  StorageBackendS3,
+				S3Endpoint:         "https://s3.example.com",
+				OCIStorageBucket:   "oci",
+				OCIStorageEndpoint: "https://oci-s3.example.com",
+			},
+			wantErr: "CHARM_REGISTRY_SQLITE_PATH is required when database backend resolves to sqlite",
+		},
+		{
+			name: "blob dir required when auto resolves to filesystem",
+			cfg: Config{
+				DatabaseBackend:    DatabaseBackendPostgres,
+				DatabaseURL:        "postgres://localhost/test",
+				StorageBackend:     StorageBackendAuto,
+				OCIStorageBackend:  StorageBackendS3,
+				OCIStorageEndpoint: "https://oci-s3.example.com",
+			},
+			wantErr: "CHARM_REGISTRY_BLOB_DIR is required when storage backend resolves to filesystem",
+		},
+		{
+			name: "OCI storage dir required when auto resolves to filesystem",
+			cfg: Config{
+				DatabaseBackend:   DatabaseBackendPostgres,
+				DatabaseURL:       "postgres://localhost/test",
+				StorageBackend:    StorageBackendS3,
+				S3Endpoint:        "https://s3.example.com",
+				OCIStorageBackend: StorageBackendAuto,
+			},
+			wantErr: "CHARM_REGISTRY_OCI_STORAGE_DIR is required when OCI storage backend resolves to filesystem",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBackendConfig(tt.cfg)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -39,6 +131,13 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:8080", cfg.PublicAPIURL)
 	assert.Equal(t, "http://localhost:8080", cfg.PublicStorageURL)
 	assert.Equal(t, "https://localhost:5000", cfg.PublicRegistryURL)
+	assert.Equal(t, DatabaseBackendAuto, cfg.DatabaseBackend)
+	assert.Equal(t, DatabaseBackendPostgres, cfg.ResolvedDatabaseBackend())
+	assert.Equal(t, StorageBackendAuto, cfg.StorageBackend)
+	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedStorageBackend())
+	assert.Equal(t, "data", cfg.DataDir)
+	assert.Equal(t, "data/registry.sqlite", cfg.SQLitePath)
+	assert.Equal(t, "data/blobs", cfg.BlobDir)
 	assert.Equal(t, "charm-registry", cfg.S3Bucket)
 	assert.Equal(t, "us-east-1", cfg.S3Region)
 	assert.True(t, cfg.S3UsePathStyle)
@@ -49,6 +148,9 @@ func TestLoadDefaults(t *testing.T) {
 	assert.True(t, cfg.EnableInsecureDevAuth)
 	assert.Equal(t, ":5000", cfg.OCIListenAddress)
 	assert.Equal(t, "https://127.0.0.1:5000", cfg.OCIInternalURL)
+	assert.Equal(t, StorageBackendAuto, cfg.OCIStorageBackend)
+	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedOCIStorageBackend())
+	assert.Equal(t, "data/oci-registry", cfg.OCIStorageDir)
 	assert.Equal(t, "charm-registry-oci", cfg.OCIStorageBucket)
 	assert.Equal(t, "oci", cfg.OCIStoragePrefix)
 	assert.Equal(t, "us-east-1", cfg.OCIStorageRegion)
@@ -73,6 +175,14 @@ func TestLoadCustomValues(t *testing.T) {
 	// Arrange
 	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
 	t.Setenv("CHARM_REGISTRY_LISTEN", ":9090")
+	// Explicit sqlite selection should override the postgres URL that auto-detection would otherwise use.
+	t.Setenv("CHARM_REGISTRY_DATABASE_BACKEND", "sqlite")
+	t.Setenv("CHARM_REGISTRY_DATA_DIR", "/var/lib/charm-registry")
+	t.Setenv("CHARM_REGISTRY_SQLITE_PATH", "/srv/registry.sqlite")
+	t.Setenv("CHARM_REGISTRY_STORAGE_BACKEND", "s3")
+	t.Setenv("CHARM_REGISTRY_BLOB_DIR", "/srv/blobs")
+	t.Setenv("CHARM_REGISTRY_OCI_STORAGE_BACKEND", "filesystem")
+	t.Setenv("CHARM_REGISTRY_OCI_STORAGE_DIR", "/srv/oci")
 	t.Setenv("CHARM_REGISTRY_S3_BUCKET", "custom-bucket")
 	t.Setenv("CHARM_REGISTRY_S3_REGION", "eu-west-1")
 	t.Setenv("CHARM_REGISTRY_S3_USE_PATH_STYLE", "false")
@@ -90,6 +200,13 @@ func TestLoadCustomValues(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, ":9090", cfg.ListenAddress)
+	assert.Equal(t, DatabaseBackendSQLite, cfg.ResolvedDatabaseBackend())
+	assert.Equal(t, "/var/lib/charm-registry", cfg.DataDir)
+	assert.Equal(t, "/srv/registry.sqlite", cfg.SQLitePath)
+	assert.Equal(t, StorageBackendS3, cfg.ResolvedStorageBackend())
+	assert.Equal(t, "/srv/blobs", cfg.BlobDir)
+	assert.Equal(t, StorageBackendFilesystem, cfg.ResolvedOCIStorageBackend())
+	assert.Equal(t, "/srv/oci", cfg.OCIStorageDir)
 	assert.Equal(t, "custom-bucket", cfg.S3Bucket)
 	assert.Equal(t, "eu-west-1", cfg.S3Region)
 	assert.False(t, cfg.S3UsePathStyle)

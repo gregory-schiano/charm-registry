@@ -3,9 +3,20 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	DatabaseBackendAuto     = "auto"
+	DatabaseBackendPostgres = "postgres"
+	DatabaseBackendSQLite   = "sqlite"
+
+	StorageBackendAuto       = "auto"
+	StorageBackendS3         = "s3"
+	StorageBackendFilesystem = "filesystem"
 )
 
 type Config struct {
@@ -13,7 +24,12 @@ type Config struct {
 	PublicAPIURL            string
 	PublicStorageURL        string
 	PublicRegistryURL       string
+	DatabaseBackend         string
 	DatabaseURL             string
+	DataDir                 string
+	SQLitePath              string
+	StorageBackend          string
+	BlobDir                 string
 	S3Bucket                string
 	S3Region                string
 	S3Endpoint              string
@@ -32,6 +48,8 @@ type Config struct {
 	EnableInsecureDevAuth   bool
 	OCIListenAddress        string
 	OCIInternalURL          string
+	OCIStorageBackend       string
+	OCIStorageDir           string
 	OCIStorageBucket        string
 	OCIStoragePrefix        string
 	OCIStorageRegion        string
@@ -76,14 +94,19 @@ type parsedConfig struct {
 }
 
 // Load reads the registry configuration from environment variables.
-//
-// The following errors may be returned:
-// - `CHARM_REGISTRY_DATABASE_URL` is not set.
 func Load() (Config, error) {
 	parsed, err := loadParsedConfig()
 	if err != nil {
 		return Config{}, err
 	}
+	dataDir := env("CHARM_REGISTRY_DATA_DIR", "data")
+	databaseURL := envFallback("CHARM_REGISTRY_DATABASE_URL", "POSTGRESQL_DB_CONNECT_STRING", "")
+	s3Endpoint := strings.TrimRight(envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", ""), "/")
+	s3AccessKey := envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", "")
+	s3SecretKey := envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", "")
+	ociStorageEndpoint := strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_S3_ENDPOINT", "APP_OCI_S3_ENDPOINT", envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", "")), "/")
+	ociStorageAccessKey := envFallback("CHARM_REGISTRY_OCI_S3_ACCESS_KEY", "APP_OCI_S3_ACCESS_KEY", envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", ""))
+	ociStorageSecretKey := envFallback("CHARM_REGISTRY_OCI_S3_SECRET_KEY", "APP_OCI_S3_SECRET_KEY", envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", ""))
 
 	cfg := Config{
 		ListenAddress: listenAddress(),
@@ -96,12 +119,17 @@ func Load() (Config, error) {
 			envFallback("CHARM_REGISTRY_PUBLIC_REGISTRY_URL", "APP_PUBLIC_REGISTRY_URL", "https://localhost:5000"),
 			"/",
 		),
-		DatabaseURL:             envFallback("CHARM_REGISTRY_DATABASE_URL", "POSTGRESQL_DB_CONNECT_STRING", ""),
+		DatabaseBackend:         env("CHARM_REGISTRY_DATABASE_BACKEND", DatabaseBackendAuto),
+		DatabaseURL:             databaseURL,
+		DataDir:                 dataDir,
+		SQLitePath:              env("CHARM_REGISTRY_SQLITE_PATH", filepath.Join(dataDir, "registry.sqlite")),
+		StorageBackend:          env("CHARM_REGISTRY_STORAGE_BACKEND", StorageBackendAuto),
+		BlobDir:                 env("CHARM_REGISTRY_BLOB_DIR", filepath.Join(dataDir, "blobs")),
 		S3Bucket:                envFallback("CHARM_REGISTRY_S3_BUCKET", "S3_BUCKET", "charm-registry"),
 		S3Region:                envFallback("CHARM_REGISTRY_S3_REGION", "S3_REGION", "us-east-1"),
-		S3Endpoint:              strings.TrimRight(envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", ""), "/"),
-		S3AccessKeyID:           envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", ""),
-		S3SecretAccessKey:       envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", ""),
+		S3Endpoint:              s3Endpoint,
+		S3AccessKeyID:           s3AccessKey,
+		S3SecretAccessKey:       s3SecretKey,
 		S3UsePathStyle:          parsed.s3UsePathStyle,
 		S3DisableTLS:            parsed.s3DisableTLS,
 		OIDCIssuerURL:           strings.TrimRight(envFallback("CHARM_REGISTRY_OIDC_ISSUER_URL", oauthEnv("API_BASE_URL"), ""), "/"),
@@ -115,12 +143,14 @@ func Load() (Config, error) {
 		EnableInsecureDevAuth:   parsed.enableInsecureDevAuth,
 		OCIListenAddress:        envFallback("CHARM_REGISTRY_OCI_LISTEN", "APP_OCI_LISTEN", ":5000"),
 		OCIInternalURL:          strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_INTERNAL_URL", "APP_OCI_INTERNAL_URL", "https://127.0.0.1:5000"), "/"),
+		OCIStorageBackend:       env("CHARM_REGISTRY_OCI_STORAGE_BACKEND", StorageBackendAuto),
+		OCIStorageDir:           env("CHARM_REGISTRY_OCI_STORAGE_DIR", filepath.Join(dataDir, "oci-registry")),
 		OCIStorageBucket:        envFallback("CHARM_REGISTRY_OCI_S3_BUCKET", "APP_OCI_S3_BUCKET", "charm-registry-oci"),
 		OCIStoragePrefix:        strings.Trim(envFallback("CHARM_REGISTRY_OCI_S3_PREFIX", "APP_OCI_S3_PREFIX", "oci"), "/"),
 		OCIStorageRegion:        envFallback("CHARM_REGISTRY_OCI_S3_REGION", "APP_OCI_S3_REGION", envFallback("CHARM_REGISTRY_S3_REGION", "S3_REGION", "us-east-1")),
-		OCIStorageEndpoint:      strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_S3_ENDPOINT", "APP_OCI_S3_ENDPOINT", envFallback("CHARM_REGISTRY_S3_ENDPOINT", "S3_ENDPOINT", "")), "/"),
-		OCIStorageAccessKeyID:   envFallback("CHARM_REGISTRY_OCI_S3_ACCESS_KEY", "APP_OCI_S3_ACCESS_KEY", envFallback("CHARM_REGISTRY_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY", "")),
-		OCIStorageSecretKey:     envFallback("CHARM_REGISTRY_OCI_S3_SECRET_KEY", "APP_OCI_S3_SECRET_KEY", envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", "")),
+		OCIStorageEndpoint:      ociStorageEndpoint,
+		OCIStorageAccessKeyID:   ociStorageAccessKey,
+		OCIStorageSecretKey:     ociStorageSecretKey,
 		OCIStorageUsePathStyle:  parsed.ociStorageUsePathStyle,
 		OCISecretKey:            envFallback("CHARM_REGISTRY_OCI_SECRET_KEY", "APP_SECRET_KEY", ""),
 		OCIProjectPrefix:        strings.Trim(envFallback("CHARM_REGISTRY_OCI_PROJECT_PREFIX", "APP_OCI_PROJECT_PREFIX", "charm"), "-"),
@@ -225,8 +255,8 @@ func loadParsedConfig() (parsedConfig, error) {
 }
 
 func validateConfig(cfg Config) (Config, error) {
-	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_DATABASE_URL is required")
+	if err := validateBackendConfig(cfg); err != nil {
+		return Config{}, err
 	}
 	if err := validateAuthConfig(cfg); err != nil {
 		return Config{}, err
@@ -239,6 +269,40 @@ func validateConfig(cfg Config) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func validateBackendConfig(cfg Config) error {
+	switch cfg.DatabaseBackend {
+	case DatabaseBackendAuto, DatabaseBackendPostgres, DatabaseBackendSQLite:
+	default:
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_DATABASE_BACKEND must be auto, postgres, or sqlite")
+	}
+	switch cfg.StorageBackend {
+	case StorageBackendAuto, StorageBackendS3, StorageBackendFilesystem:
+	default:
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_STORAGE_BACKEND must be auto, s3, or filesystem")
+	}
+	switch cfg.OCIStorageBackend {
+	case StorageBackendAuto, StorageBackendS3, StorageBackendFilesystem:
+	default:
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_STORAGE_BACKEND must be auto, s3, or filesystem")
+	}
+	resolvedDatabaseBackend := cfg.ResolvedDatabaseBackend()
+	resolvedStorageBackend := cfg.ResolvedStorageBackend()
+	resolvedOCIStorageBackend := cfg.ResolvedOCIStorageBackend()
+	if resolvedDatabaseBackend == DatabaseBackendPostgres && cfg.DatabaseURL == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_DATABASE_URL is required when CHARM_REGISTRY_DATABASE_BACKEND=postgres")
+	}
+	if resolvedDatabaseBackend == DatabaseBackendSQLite && cfg.SQLitePath == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_SQLITE_PATH is required when database backend resolves to sqlite")
+	}
+	if resolvedStorageBackend == StorageBackendFilesystem && cfg.BlobDir == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_BLOB_DIR is required when storage backend resolves to filesystem")
+	}
+	if resolvedOCIStorageBackend == StorageBackendFilesystem && cfg.OCIStorageDir == "" {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_STORAGE_DIR is required when OCI storage backend resolves to filesystem")
+	}
+	return nil
 }
 
 func validateAuthConfig(cfg Config) error {
@@ -259,7 +323,7 @@ func validateOCIConfig(cfg Config) error {
 	if cfg.OCISecretKey == "" {
 		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_SECRET_KEY is required")
 	}
-	if cfg.OCIStorageBucket == "" {
+	if cfg.ResolvedOCIStorageBackend() == StorageBackendS3 && cfg.OCIStorageBucket == "" {
 		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_S3_BUCKET is required")
 	}
 	if (cfg.OCITLSCertFile == "") != (cfg.OCITLSKeyFile == "") {
@@ -268,6 +332,36 @@ func validateOCIConfig(cfg Config) error {
 		)
 	}
 	return nil
+}
+
+func (c Config) ResolvedDatabaseBackend() string {
+	if c.DatabaseBackend != DatabaseBackendAuto {
+		return c.DatabaseBackend
+	}
+	if c.DatabaseURL != "" {
+		return DatabaseBackendPostgres
+	}
+	return DatabaseBackendSQLite
+}
+
+func (c Config) ResolvedStorageBackend() string {
+	if c.StorageBackend != StorageBackendAuto {
+		return c.StorageBackend
+	}
+	if c.S3Endpoint != "" || c.S3AccessKeyID != "" || c.S3SecretAccessKey != "" {
+		return StorageBackendS3
+	}
+	return StorageBackendFilesystem
+}
+
+func (c Config) ResolvedOCIStorageBackend() string {
+	if c.OCIStorageBackend != StorageBackendAuto {
+		return c.OCIStorageBackend
+	}
+	if c.OCIStorageEndpoint != "" || c.OCIStorageAccessKeyID != "" || c.OCIStorageSecretKey != "" {
+		return StorageBackendS3
+	}
+	return StorageBackendFilesystem
 }
 
 func (c Config) HasOIDC() bool {

@@ -26,7 +26,7 @@ type App struct {
 //
 // The following errors may be returned:
 // - Errors from creating the blob store.
-// - Errors from opening or migrating PostgreSQL.
+// - Errors from opening or migrating the configured repository.
 // - Errors from configuring authentication.
 func New(ctx context.Context, cfg config.Config) (*App, error) {
 	var closers []io.Closer
@@ -39,14 +39,14 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		}
 		return errors.Join(errs...)
 	}
-	storage, err := blob.NewS3Store(ctx, cfg)
+	storage, err := newBlobStore(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create blob store: %w", err)
 	}
 	if closer, ok := any(storage).(io.Closer); ok {
 		closers = append(closers, closer)
 	}
-	repository, err := repo.NewPostgres(ctx, cfg.DatabaseURL)
+	repository, err := newRepository(ctx, cfg)
 	if err != nil {
 		_ = closeAll()
 		return nil, fmt.Errorf("cannot open repository: %w", err)
@@ -86,6 +86,30 @@ func (a *App) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func newBlobStore(ctx context.Context, cfg config.Config) (blob.Store, error) {
+	resolved := cfg.ResolvedStorageBackend()
+	switch resolved {
+	case config.StorageBackendS3:
+		return blob.NewS3Store(ctx, cfg)
+	case config.StorageBackendFilesystem:
+		return blob.NewFileStore(cfg.BlobDir)
+	default:
+		return nil, fmt.Errorf("unsupported storage backend %q", resolved)
+	}
+}
+
+func newRepository(ctx context.Context, cfg config.Config) (repo.Repository, error) {
+	resolved := cfg.ResolvedDatabaseBackend()
+	switch resolved {
+	case config.DatabaseBackendPostgres:
+		return repo.NewPostgres(ctx, cfg.DatabaseURL)
+	case config.DatabaseBackendSQLite:
+		return repo.NewSQLite(ctx, cfg.SQLitePath)
+	default:
+		return nil, fmt.Errorf("unsupported database backend %q", resolved)
+	}
 }
 
 func newOCIRegistry(

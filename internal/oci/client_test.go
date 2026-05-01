@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 )
@@ -57,6 +59,28 @@ func TestCredentialsDecryptGeneratedCredential(t *testing.T) {
 	assert.Equal(t, "pull-pkg-1", username)
 	assert.NotEmpty(t, password)
 
+}
+
+func TestDeriveKeyUsesPBKDF2(t *testing.T) {
+	t.Parallel()
+
+	key := deriveKey("test-secret")
+	rawSHA := sha256.Sum256([]byte("test-secret"))
+
+	assert.Len(t, key, 32)
+	assert.NotEqual(t, rawSHA[:], key)
+}
+
+func TestStorageParametersSelectsFilesystemDriver(t *testing.T) {
+	t.Parallel()
+
+	storage := storageParameters(config.Config{
+		OCIStorageBackend: config.StorageBackendFilesystem,
+		OCIStorageDir:     "/var/lib/charm-registry/oci",
+	})
+
+	assert.Equal(t, "filesystem", storage.Driver)
+	assert.Equal(t, "/var/lib/charm-registry/oci", storage.Params["rootdirectory"])
 }
 
 func TestSyncPackageCredentialsAreStableForSamePackageID(t *testing.T) {
