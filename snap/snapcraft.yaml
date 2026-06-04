@@ -1,0 +1,45 @@
+name: charm-registry
+base: core24
+version: "0.1"
+summary: Private charm registry
+description: |
+  A private charm registry compatible with stock Juju and Charmcraft workflows.
+  It stores charm metadata and artifacts, exposes publisher and consumer APIs,
+  and includes an embedded OCI registry for image resources.
+
+grade: devel
+confinement: strict
+
+apps:
+  charm-registry:
+    command: bin/charm-registry-wrapper
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    stop-timeout: 35s
+    plugs:
+      - network
+      - network-bind
+  charm-registryctl:
+    command: bin/charm-registryctl
+    plugs:
+      - network
+
+parts:
+  charm-registry:
+    plugin: go
+    source: .
+    build-packages:
+      - git
+    build-snaps:
+      - go/latest/stable
+    build-environment:
+      - CGO_ENABLED: "0"
+      - GOFLAGS: "-trimpath -buildvcs=true"
+  wrapper:
+    plugin: dump
+    source: snap/local
+    stage-packages:
+      - openssl
+    organize:
+      charm-registry-wrapper: bin/charm-registry-wrapper
