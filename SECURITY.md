@@ -2,53 +2,86 @@
 
 ## Scope
 
-This repository is a private local charm registry service written in Go. Security fixes should favor:
+This is a private charm registry service written in Go. It stores charm metadata in Postgres or SQLite, charm/resource artifacts in S3 or on the filesystem, and runs an embedded OCI Distribution registry for image resources. Security fixes should favor:
 
-- secure-by-default runtime configuration
-- least-privilege deployment settings
-- short-lived credentials and token revocation
-- dependency and toolchain hygiene
+- Secure-by-default runtime configuration
+- Least-privilege deployment settings
+- Short-lived credentials and token revocation
+- Dependency and toolchain hygiene
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a suspected vulnerability.
+Do not open a public issue for a suspected vulnerability. Report security issues privately to the maintainers with:
 
-Report security issues privately to the maintainers with:
+- A description of the issue
+- Affected endpoints or packages
+- Reproduction steps or proof of concept
+- Impact assessment
+- Any suggested mitigation
 
-- a description of the issue
-- affected endpoints or packages
-- reproduction steps or proof of concept
-- impact assessment
-- any suggested mitigation
+If you are deploying this service internally, treat the following as confidential and rotate them immediately after any suspected exposure:
 
-If you are deploying this service internally, treat OCI push/pull credentials, OIDC secrets, database URLs, and object-store credentials as confidential and rotate them immediately after any suspected exposure.
+- OCI push/pull credentials
+- `CHARM_REGISTRY_OCI_SECRET_KEY` (used to encrypt OCI credentials at rest)
+- OIDC client secrets
+- Database connection URLs (may contain passwords)
+- Object-store access keys and secret keys
 
 ## Supported posture
 
-The repository currently includes:
+### Application-level
+
+- OIDC-backed authentication with store-token issuance and revocation
+- Per-package OCI push/pull credentials encrypted with `CHARM_REGISTRY_OCI_SECRET_KEY`
+- Macaroon token support for charmcraft compatibility
+- Token TTL enforcement and revocation
+- Rate limiting on token issuance (5 per minute per identity)
+- Explicit HTTP server timeouts, header limits, and body-size limits
+- Security response headers (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`)
+- Authenticated uploads and protected OCI credential/blob endpoints
+- Private-by-default packages with owner-only management and admin override
+
+### Code-level
 
 - `golangci-lint` with a curated rule set inspired by Juju's Go linting configuration
 - `govulncheck` for dependency and standard-library vulnerability scanning
 - `gosec` for Go-focused static security analysis
-- explicit HTTP server timeouts and header/body limits
-- non-root container execution and a hardened compose profile for the application container
-- authenticated uploads and protected OCI credential/blob endpoints
-- embedded OCI access with per-package push/pull credentials
+- `go.mod` `tool` block pinning all lint and security tooling versions
+
+### Container-level
+
+- Non-root container execution (`gcr.io/distroless/static-debian12:nonroot`)
+- Hardened compose profile: `cap_drop: ALL`, `security_opt: no-new-privileges`, `read_only: true`
+- No shell in the production container image
 
 ## Hardening expectations
 
 Production deployments should additionally provide:
 
-- TLS termination
-- OIDC configuration for end-user authentication
-- configured admin identities via `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
-- network-level access control for private registry traffic
-- secret management outside the repository
-- a non-empty `CHARM_REGISTRY_OCI_SECRET_KEY`
-- least-privilege S3/object-store permissions for charm blobs and embedded OCI registry storage
-- regular Go patch upgrades
-- routine vulnerability scanning of container images and dependencies
+- **TLS termination** for the main API server (reverse proxy or snap TLS)
+- **OIDC configuration** for end-user authentication (`CHARM_REGISTRY_OIDC_ISSUER_URL`, `CHARM_REGISTRY_OIDC_CLIENT_ID`)
+- **Admin identity configuration** via `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
+- **Network-level access control** for private registry traffic (the registry does not implement IP-based ACLs)
+- **Secret management** outside the repository (no credentials in `.env` or compose files)
+- **A strong, unique `CHARM_REGISTRY_OCI_SECRET_KEY`** — this key encrypts all OCI push/pull credentials at rest. Changing it invalidates all existing credentials.
+- **Least-privilege S3/object-store permissions** for both charm blobs and embedded OCI registry storage
+- **Database TLS** (`sslmode` should not be `disable` in production)
+- **Regular Go patch upgrades** and routine vulnerability scanning of container images and dependencies
+
+## Snap security model
+
+When deployed as a snap:
+
+- `confinement: strict` — the snap runs in a restricted sandbox with only declared interfaces
+- `plugs: network, network-bind` — the snap can open listening sockets and make outbound network connections, but cannot access the filesystem or other snaps beyond `$SNAP_COMMON`
+- Data lives under `$SNAP_COMMON/data/` (writable, persistent across upgrades)
+- TLS certificates live under `$SNAP_COMMON/certs/` with `0600` permissions on private keys
+- The wrapper drops the `install-mode: disable` flag so the service does not auto-start on install; enable it explicitly with `snap start charm-registry`
 
 ## Unsafe development mode
 
-`CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true` is intended for local development only. When enabled, the registry accepts insecure development bearer tokens and may allow token minting flows that are not suitable for production. Never enable this mode on an internet-reachable deployment.
+`CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true` is intended for local development only. When enabled, the registry accepts insecure development bearer tokens and may allow token minting flows that are not suitable for production.
+
+**Never enable this mode on an internet-reachable deployment.**
+
+The application validates at startup that either OIDC is configured or insecure dev auth is explicitly enabled. If neither is set, the service refuses to start.
