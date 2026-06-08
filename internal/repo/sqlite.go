@@ -41,6 +41,10 @@ func NewSQLite(ctx context.Context, databasePath string) (*SQLite, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite only supports a single writer at a time; limiting MaxOpenConns to 1
+	// ensures serialised writes and avoids "database is locked" errors under concurrent
+	// load. Reads are also serialised, which is acceptable for the low-concurrency
+	// SQLite path used in development and testing.
 	db.SetMaxOpenConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		return nil, errors.Join(err, db.Close())
