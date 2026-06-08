@@ -127,7 +127,7 @@ services:
       CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX: "${CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX:-push}"
       CHARM_REGISTRY_OCI_TLS_CERT_FILE: "${CHARM_REGISTRY_OCI_TLS_CERT_FILE:-/certs/oci.crt}"
       CHARM_REGISTRY_OCI_TLS_KEY_FILE: "${CHARM_REGISTRY_OCI_TLS_KEY_FILE:-/certs/oci.key}"
-      CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
+      CHARM_REGISTRY_DATABASE_URL: "${CHARM_REGISTRY_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable}"
       CHARM_REGISTRY_S3_BUCKET: "${CHARM_REGISTRY_S3_BUCKET:-charm-registry-blobs}"
       CHARM_REGISTRY_S3_REGION: "${CHARM_REGISTRY_S3_REGION:-us-east-1}"
       CHARM_REGISTRY_S3_ENDPOINT: "http://minio:9000"
