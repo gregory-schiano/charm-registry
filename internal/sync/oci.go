@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
@@ -15,7 +14,7 @@ func (s *Service) syncOCIPackage(ctx context.Context, pkg core.Package) (core.Pa
 	if err != nil {
 		return core.Package{}, err
 	}
-	if packagesEqualForOCI(pkg, synced) {
+	if core.PackagesEqualForOCI(pkg, synced) {
 		return synced, nil
 	}
 	synced.UpdatedAt = pkg.UpdatedAt
@@ -26,7 +25,7 @@ func (s *Service) syncOCIPackage(ctx context.Context, pkg core.Package) (core.Pa
 }
 
 func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (core.Package, error) {
-	if ociPackageProvisioned(pkg) {
+	if core.OCIPackageProvisioned(pkg) {
 		return pkg, nil
 	}
 	provisioned, err := s.syncOCIPackage(ctx, pkg)
@@ -43,37 +42,4 @@ func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (c
 		)
 	}
 	return provisioned, nil
-}
-
-func ociPackageProvisioned(pkg core.Package) bool {
-	return pkg.OCIProject != "" &&
-		robotCredentialReady(pkg.OCIPushRobot) &&
-		robotCredentialReady(pkg.OCIPullRobot)
-}
-
-func packagesEqualForOCI(left, right core.Package) bool {
-	return left.OCIProject == right.OCIProject &&
-		robotEqual(left.OCIPushRobot, right.OCIPushRobot) &&
-		robotEqual(left.OCIPullRobot, right.OCIPullRobot) &&
-		timePtrEqual(left.OCISyncedAt, right.OCISyncedAt)
-}
-
-func robotCredentialReady(robot *core.RobotCredential) bool {
-	return robot != nil && robot.Username != "" && robot.EncryptedSecret != ""
-}
-
-func robotEqual(left, right *core.RobotCredential) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.ID == right.ID &&
-		left.Username == right.Username &&
-		left.EncryptedSecret == right.EncryptedSecret
-}
-
-func timePtrEqual(left, right *time.Time) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.Equal(*right)
 }
