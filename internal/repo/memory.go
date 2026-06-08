@@ -152,6 +152,39 @@ func (m *Memory) FindStoreTokenByHash(_ context.Context, hash string) (core.Stor
 	return token, account, nil
 }
 
+// FindStoreTokenByPrefix is part of the [Repository] interface.
+func (m *Memory) FindStoreTokenByPrefix(_ context.Context, prefix string) (core.StoreToken, core.Account, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, token := range m.tokens {
+		if token.TokenPrefix == prefix {
+			account, ok := m.accountsByID[token.AccountID]
+			if !ok {
+				return core.StoreToken{}, core.Account{}, ErrNotFound
+			}
+			return token, account, nil
+		}
+	}
+	return core.StoreToken{}, core.Account{}, ErrNotFound
+}
+
+// UpdateTokenHashScheme is part of the [Repository] interface.
+func (m *Memory) UpdateTokenHashScheme(_ context.Context, sessionID, hash, prefix, scheme string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, token := range m.tokens {
+		if token.SessionID == sessionID {
+			token.TokenHash = hash
+			token.TokenPrefix = prefix
+			token.HashScheme = scheme
+			delete(m.tokens, key) // remove old key
+			m.tokens[hash] = token
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 // CreatePackage is part of the [Repository] interface.
 func (m *Memory) CreatePackage(_ context.Context, pkg core.Package) error {
 	m.mu.Lock()

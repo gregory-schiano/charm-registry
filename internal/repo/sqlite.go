@@ -163,17 +163,17 @@ func (s *SQLite) CreateStoreToken(ctx context.Context, token core.StoreToken) er
 	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO store_tokens (
-    session_id, token_hash, account_id, description, packages, channels, permissions,
+    session_id, token_hash, token_prefix, token_hash_scheme, account_id, description, packages, channels, permissions,
     valid_since, valid_until, revoked_at, revoked_by
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		token.SessionID, token.TokenHash, token.AccountID, token.Description, string(packagesJSON), string(channelsJSON),
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		token.SessionID, token.TokenHash, token.TokenPrefix, token.HashScheme, token.AccountID, token.Description, string(packagesJSON), string(channelsJSON),
 		string(permissionsJSON), token.ValidSince, token.ValidUntil, token.RevokedAt, token.RevokedBy)
 	return err
 }
 
 func (s *SQLite) ListStoreTokens(ctx context.Context, accountID string, includeInactive bool) ([]core.StoreToken, error) {
 	query := `
-SELECT session_id, token_hash, account_id, description, packages, channels, permissions,
+SELECT session_id, token_hash, token_prefix, token_hash_scheme, account_id, description, packages, channels, permissions,
        valid_since, valid_until, revoked_at, revoked_by
 FROM store_tokens
 WHERE account_id = ?`
@@ -208,7 +208,7 @@ WHERE account_id = ? AND session_id = ?`, time.Now().UTC(), revokedBy, accountID
 
 func (s *SQLite) FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT t.session_id, t.token_hash, t.account_id, t.description, t.packages, t.channels, t.permissions,
+SELECT t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description, t.packages, t.channels, t.permissions,
        t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
        a.id, a.subject, a.username, a.display_name, a.email, a.validation, a.is_admin, a.created_at
 FROM store_tokens t
@@ -216,6 +216,25 @@ JOIN accounts a ON a.id = t.account_id
 WHERE t.token_hash = ?`, hash)
 	token, account, err := scanTokenAndAccount(row)
 	return token, account, err
+}
+
+func (s *SQLite) FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description, t.packages, t.channels, t.permissions,
+       t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
+       a.id, a.subject, a.username, a.display_name, a.email, a.validation, a.is_admin, a.created_at
+FROM store_tokens t
+JOIN accounts a ON a.id = t.account_id
+WHERE t.token_prefix = ?`, prefix)
+	token, account, err := scanTokenAndAccount(row)
+	return token, account, err
+}
+
+func (s *SQLite) UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE store_tokens SET token_hash = ?, token_prefix = ?, token_hash_scheme = ? WHERE session_id = ?`,
+		hash, prefix, scheme, sessionID)
+	return err
 }
 
 func (s *SQLite) CreatePackage(ctx context.Context, pkg core.Package) error {
@@ -1111,10 +1130,12 @@ func scanToken(scanner interface{ Scan(dest ...any) error }) (core.StoreToken, e
 	var (
 		token                           core.StoreToken
 		description, revokedBy          sql.NullString
+		tokenPrefix                     sql.NullString
+		tokenHashScheme                 string
 		packages, channels, permissions string
 		revokedAt                       sql.NullTime
 	)
-	if err := scanner.Scan(&token.SessionID, &token.TokenHash, &token.AccountID, &description, &packages, &channels, &permissions, &token.ValidSince, &token.ValidUntil, &revokedAt, &revokedBy); err != nil {
+	if err := scanner.Scan(&token.SessionID, &token.TokenHash, &tokenPrefix, &tokenHashScheme, &token.AccountID, &description, &packages, &channels, &permissions, &token.ValidSince, &token.ValidUntil, &revokedAt, &revokedBy); err != nil {
 		if sqlNotFound(err) {
 			return core.StoreToken{}, ErrNotFound
 		}
@@ -1122,6 +1143,10 @@ func scanToken(scanner interface{ Scan(dest ...any) error }) (core.StoreToken, e
 	}
 	token.Description = nullStringPtr(description)
 	token.RevokedBy = nullStringPtr(revokedBy)
+	if tokenPrefix.Valid {
+		token.TokenPrefix = tokenPrefix.String
+	}
+	token.HashScheme = tokenHashScheme
 	if revokedAt.Valid {
 		token.RevokedAt = &revokedAt.Time
 	}
@@ -1142,10 +1167,12 @@ func scanTokenAndAccount(scanner interface{ Scan(dest ...any) error }) (core.Sto
 		token                           core.StoreToken
 		account                         core.Account
 		description, revokedBy          sql.NullString
+		tokenPrefix                     sql.NullString
+		tokenHashScheme                 string
 		packages, channels, permissions string
 		revokedAt                       sql.NullTime
 	)
-	err := scanner.Scan(&token.SessionID, &token.TokenHash, &token.AccountID, &description, &packages, &channels, &permissions, &token.ValidSince, &token.ValidUntil, &revokedAt, &revokedBy, &account.ID, &account.Subject, &account.Username, &account.DisplayName, &account.Email, &account.Validation, &account.IsAdmin, &account.CreatedAt)
+	err := scanner.Scan(&token.SessionID, &token.TokenHash, &tokenPrefix, &tokenHashScheme, &token.AccountID, &description, &packages, &channels, &permissions, &token.ValidSince, &token.ValidUntil, &revokedAt, &revokedBy, &account.ID, &account.Subject, &account.Username, &account.DisplayName, &account.Email, &account.Validation, &account.IsAdmin, &account.CreatedAt)
 	if sqlNotFound(err) {
 		return core.StoreToken{}, core.Account{}, ErrNotFound
 	}
@@ -1154,6 +1181,10 @@ func scanTokenAndAccount(scanner interface{ Scan(dest ...any) error }) (core.Sto
 	}
 	token.Description = nullStringPtr(description)
 	token.RevokedBy = nullStringPtr(revokedBy)
+	if tokenPrefix.Valid {
+		token.TokenPrefix = tokenPrefix.String
+	}
+	token.HashScheme = tokenHashScheme
 	if revokedAt.Valid {
 		token.RevokedAt = &revokedAt.Time
 	}

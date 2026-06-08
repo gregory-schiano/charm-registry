@@ -154,17 +154,19 @@ type Revision struct {
 }
 
 type StoreToken struct {
-	SessionID   string
-	TokenHash   string
-	AccountID   string
-	Description *string
-	Packages    json.RawMessage
-	Channels    json.RawMessage
-	Permissions json.RawMessage
-	ValidSince  time.Time
-	ValidUntil  time.Time
-	RevokedAt   pgtype.Timestamptz
-	RevokedBy   *string
+	SessionID       string
+	TokenHash       string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+	TokenPrefix     *string
+	TokenHashScheme string
 }
 
 type Track struct {

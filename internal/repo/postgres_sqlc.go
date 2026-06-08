@@ -269,6 +269,10 @@ func tokenFromSQLC(item sqlcdb.StoreToken) (core.StoreToken, error) {
 	if item.RevokedAt.Valid {
 		token.RevokedAt = &item.RevokedAt.Time
 	}
+	if item.TokenPrefix != nil {
+		token.TokenPrefix = *item.TokenPrefix
+	}
+	token.HashScheme = item.TokenHashScheme
 	if err := unmarshalJSON(item.Packages, &token.Packages); err != nil {
 		return core.StoreToken{}, err
 	}
@@ -283,17 +287,51 @@ func tokenFromSQLC(item sqlcdb.StoreToken) (core.StoreToken, error) {
 
 func tokenAndAccountFromSQLC(item sqlcdb.FindStoreTokenByHashRow) (core.StoreToken, core.Account, error) {
 	token, err := tokenFromSQLC(sqlcdb.StoreToken{
-		SessionID:   item.SessionID,
-		TokenHash:   item.TokenHash,
-		AccountID:   item.AccountID,
-		Description: item.Description,
-		Packages:    item.Packages,
-		Channels:    item.Channels,
-		Permissions: item.Permissions,
-		ValidSince:  item.ValidSince,
-		ValidUntil:  item.ValidUntil,
-		RevokedAt:   item.RevokedAt,
-		RevokedBy:   item.RevokedBy,
+		SessionID:       item.SessionID,
+		TokenHash:       item.TokenHash,
+		TokenPrefix:     item.TokenPrefix,
+		TokenHashScheme: item.TokenHashScheme,
+		AccountID:       item.AccountID,
+		Description:     item.Description,
+		Packages:        item.Packages,
+		Channels:        item.Channels,
+		Permissions:     item.Permissions,
+		ValidSince:      item.ValidSince,
+		ValidUntil:      item.ValidUntil,
+		RevokedAt:       item.RevokedAt,
+		RevokedBy:       item.RevokedBy,
+	})
+	if err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
+	account := core.Account{
+		ID:          item.AccID,
+		Subject:     item.AccSubject,
+		Username:    item.AccUsername,
+		DisplayName: item.AccDisplayName,
+		Email:       item.AccEmail,
+		Validation:  item.AccValidation,
+		IsAdmin:     item.AccIsAdmin,
+		CreatedAt:   item.AccCreatedAt,
+	}
+	return token, account, nil
+}
+
+func tokenAndAccountFromPrefixRow(item sqlcdb.FindStoreTokenByPrefixRow) (core.StoreToken, core.Account, error) {
+	token, err := tokenFromSQLC(sqlcdb.StoreToken{
+		SessionID:       item.SessionID,
+		TokenHash:       item.TokenHash,
+		TokenPrefix:     item.TokenPrefix,
+		TokenHashScheme: item.TokenHashScheme,
+		AccountID:       item.AccountID,
+		Description:     item.Description,
+		Packages:        item.Packages,
+		Channels:        item.Channels,
+		Permissions:     item.Permissions,
+		ValidSince:      item.ValidSince,
+		ValidUntil:      item.ValidUntil,
+		RevokedAt:       item.RevokedAt,
+		RevokedBy:       item.RevokedBy,
 	})
 	if err != nil {
 		return core.StoreToken{}, core.Account{}, err

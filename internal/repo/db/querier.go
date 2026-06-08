@@ -32,6 +32,7 @@ type Querier interface {
 	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)
 	FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error)
+	FindStoreTokenByPrefix(ctx context.Context, tokenPrefix *string) (FindStoreTokenByPrefixRow, error)
 	GetAccountByID(ctx context.Context, id string) (Account, error)
 	GetLatestRevision(ctx context.Context, packageID string) (Revision, error)
 	GetPackageByID(ctx context.Context, id string) (GetPackageByIDRow, error)
@@ -41,8 +42,8 @@ type Querier interface {
 	GetResourceRevision(ctx context.Context, arg GetResourceRevisionParams) (ResourceRevision, error)
 	GetRevisionByNumber(ctx context.Context, arg GetRevisionByNumberParams) (Revision, error)
 	GetUpload(ctx context.Context, id string) (Upload, error)
-	ListActiveStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
-	ListAllStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
+	ListActiveStoreTokens(ctx context.Context, accountID string) ([]ListActiveStoreTokensRow, error)
+	ListAllStoreTokens(ctx context.Context, accountID string) ([]ListAllStoreTokensRow, error)
 	ListCharmhubSyncRules(ctx context.Context) ([]ListCharmhubSyncRulesRow, error)
 	ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]ListCharmhubSyncRulesByPackageNameRow, error)
 	ListPackagesForAccount(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountRow, error)
@@ -64,6 +65,7 @@ type Querier interface {
 	UpdateCharmhubSyncRule(ctx context.Context, arg UpdateCharmhubSyncRuleParams) (int64, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (int64, error)
 	UpdateResourceRevision(ctx context.Context, arg UpdateResourceRevisionParams) (int64, error)
+	UpdateTokenHashScheme(ctx context.Context, arg UpdateTokenHashSchemeParams) error
 	UpsertResourceDefinition(ctx context.Context, arg UpsertResourceDefinitionParams) (ResourceDefinition, error)
 }
 

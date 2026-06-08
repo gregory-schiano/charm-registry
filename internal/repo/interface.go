@@ -18,6 +18,8 @@ type AccountRepo interface {
 	CreateStoreToken(ctx context.Context, token core.StoreToken) error
 	ListStoreTokens(ctx context.Context, accountID string, includeInactive bool) ([]core.StoreToken, error)
 	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
+	FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error)
+	UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error
 	RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error
 }
 

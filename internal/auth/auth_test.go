@@ -31,8 +31,8 @@ func TestNewOpaqueToken(t *testing.T) {
 	raw, hash, err := NewOpaqueToken()
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(raw, "cr_"), "token should start with cr_ prefix")
-	assert.Equal(t, HashToken(raw), hash)
-	assert.Len(t, hash, 64)
+	assert.True(t, VerifyTokenHash(raw, hash, TokenHashSchemeBcrypt), "bcrypt hash should verify against raw token")
+	assert.True(t, strings.HasPrefix(hash, "$2a$"), "hash should be bcrypt format")
 
 }
 
@@ -151,13 +151,16 @@ func TestAuthenticateMacaroonScheme(t *testing.T) {
 
 	raw, hash, err := NewOpaqueToken()
 	require.NoError(t, err)
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	require.NoError(t, repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-mac",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-time.Hour),
-		ValidUntil: now.Add(time.Hour),
+		SessionID:   "sess-mac",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-time.Hour),
+		ValidUntil:  now.Add(time.Hour),
 	}))
 
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
@@ -197,13 +200,16 @@ func TestAuthenticateValidStoreToken(t *testing.T) {
 
 	raw, hash, err := NewOpaqueToken()
 	require.NoError(t, err)
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	require.NoError(t, repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-1",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-time.Hour),
-		ValidUntil: now.Add(time.Hour),
+		SessionID:   "sess-1",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-time.Hour),
+		ValidUntil:  now.Add(time.Hour),
 	}))
 
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
@@ -225,15 +231,18 @@ func TestAuthenticateRevokedToken(t *testing.T) {
 		ID: "acc-1", Subject: "sub-1", Username: "alice",
 	})
 	raw, hash, _ := NewOpaqueToken()
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	revokedAt := now.Add(-time.Minute)
 	_ = repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-1",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-time.Hour),
-		ValidUntil: now.Add(time.Hour),
-		RevokedAt:  &revokedAt,
+		SessionID:   "sess-1",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-time.Hour),
+		ValidUntil:  now.Add(time.Hour),
+		RevokedAt:   &revokedAt,
 	})
 
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
@@ -252,13 +261,16 @@ func TestAuthenticateExpiredToken(t *testing.T) {
 		ID: "acc-1", Subject: "sub-1", Username: "alice",
 	})
 	raw, hash, _ := NewOpaqueToken()
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	_ = repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-1",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-2 * time.Hour),
-		ValidUntil: now.Add(-time.Hour),
+		SessionID:   "sess-1",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-2 * time.Hour),
+		ValidUntil:  now.Add(-time.Hour),
 	})
 
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
@@ -365,13 +377,16 @@ func TestAuthenticateTokenValid(t *testing.T) {
 
 	raw, hash, err := NewOpaqueToken()
 	require.NoError(t, err)
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	require.NoError(t, repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-at",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-time.Hour),
-		ValidUntil: now.Add(time.Hour),
+		SessionID:   "sess-at",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-time.Hour),
+		ValidUntil:  now.Add(time.Hour),
 	}))
 
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
@@ -398,13 +413,16 @@ func TestAuthenticateTokenExpired(t *testing.T) {
 	repository := repo.NewMemory()
 	account, _ := repository.EnsureAccount(ctx, core.Account{ID: "acc-exp", Subject: "sub-exp", Username: "exp"})
 	raw, hash, _ := NewOpaqueToken()
+	prefix := TokenPrefixFromRaw(raw)
 	now := time.Now().UTC()
 	_ = repository.CreateStoreToken(ctx, core.StoreToken{
-		SessionID:  "sess-exp",
-		TokenHash:  hash,
-		AccountID:  account.ID,
-		ValidSince: now.Add(-2 * time.Hour),
-		ValidUntil: now.Add(-time.Hour),
+		SessionID:   "sess-exp",
+		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  TokenHashSchemeBcrypt,
+		AccountID:   account.ID,
+		ValidSince:  now.Add(-2 * time.Hour),
+		ValidUntil:  now.Add(-time.Hour),
 	})
 	a := &Authenticator{config: config.Config{}, tokenStore: repository}
 	_, _, err := a.AuthenticateToken(ctx, raw)

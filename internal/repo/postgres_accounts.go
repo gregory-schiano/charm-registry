@@ -50,17 +50,19 @@ func (p *Postgres) CreateStoreToken(ctx context.Context, token core.StoreToken) 
 		return err
 	}
 	return p.queries().CreateStoreToken(ctx, sqlcdb.CreateStoreTokenParams{
-		SessionID:   token.SessionID,
-		TokenHash:   token.TokenHash,
-		AccountID:   token.AccountID,
-		Description: token.Description,
-		Packages:    packagesJSON,
-		Channels:    channelsJSON,
-		Permissions: permissionsJSON,
-		ValidSince:  token.ValidSince,
-		ValidUntil:  token.ValidUntil,
-		RevokedAt:   timestamptzPtr(token.RevokedAt),
-		RevokedBy:   token.RevokedBy,
+		SessionID:       token.SessionID,
+		TokenHash:       token.TokenHash,
+		TokenPrefix:     &token.TokenPrefix,
+		TokenHashScheme: token.HashScheme,
+		AccountID:       token.AccountID,
+		Description:     token.Description,
+		Packages:        packagesJSON,
+		Channels:        channelsJSON,
+		Permissions:     permissionsJSON,
+		ValidSince:      token.ValidSince,
+		ValidUntil:      token.ValidUntil,
+		RevokedAt:       timestamptzPtr(token.RevokedAt),
+		RevokedBy:       token.RevokedBy,
 	})
 }
 
@@ -70,20 +72,57 @@ func (p *Postgres) ListStoreTokens(
 	includeInactive bool,
 ) ([]core.StoreToken, error) {
 	var (
-		rows []sqlcdb.StoreToken
+		rows []sqlcdb.ListAllStoreTokensRow
 		err  error
 	)
 	if includeInactive {
 		rows, err = p.queries().ListAllStoreTokens(ctx, accountID)
 	} else {
-		rows, err = p.queries().ListActiveStoreTokens(ctx, accountID)
+		activeRows, activeErr := p.queries().ListActiveStoreTokens(ctx, accountID)
+		// Convert active rows to all rows type for uniform processing.
+		if activeErr != nil {
+			return nil, activeErr
+		}
+		rows = make([]sqlcdb.ListAllStoreTokensRow, len(activeRows))
+		for i, r := range activeRows {
+			rows[i] = sqlcdb.ListAllStoreTokensRow{
+				SessionID:       r.SessionID,
+				TokenHash:       r.TokenHash,
+				TokenPrefix:     r.TokenPrefix,
+				TokenHashScheme: r.TokenHashScheme,
+				AccountID:       r.AccountID,
+				Description:     r.Description,
+				Packages:        r.Packages,
+				Channels:        r.Channels,
+				Permissions:     r.Permissions,
+				ValidSince:      r.ValidSince,
+				ValidUntil:      r.ValidUntil,
+				RevokedAt:       r.RevokedAt,
+				RevokedBy:       r.RevokedBy,
+			}
+		}
+		err = nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	out := make([]core.StoreToken, 0, len(rows))
 	for _, row := range rows {
-		token, err := tokenFromSQLC(row)
+		token, err := tokenFromSQLC(sqlcdb.StoreToken{
+			SessionID:       row.SessionID,
+			TokenHash:       row.TokenHash,
+			TokenPrefix:     row.TokenPrefix,
+			TokenHashScheme: row.TokenHashScheme,
+			AccountID:       row.AccountID,
+			Description:     row.Description,
+			Packages:        row.Packages,
+			Channels:        row.Channels,
+			Permissions:     row.Permissions,
+			ValidSince:      row.ValidSince,
+			ValidUntil:      row.ValidUntil,
+			RevokedAt:       row.RevokedAt,
+			RevokedBy:       row.RevokedBy,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -120,4 +159,28 @@ func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.
 		return core.StoreToken{}, core.Account{}, fmt.Errorf("decode store token row: %w", err)
 	}
 	return token, account, nil
+}
+
+func (p *Postgres) FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error) {
+	row, err := p.queries().FindStoreTokenByPrefix(ctx, &prefix)
+	if pgxNotFound(err) {
+		return core.StoreToken{}, core.Account{}, ErrNotFound
+	}
+	if err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
+	token, account, err := tokenAndAccountFromPrefixRow(row)
+	if err != nil {
+		return core.StoreToken{}, core.Account{}, fmt.Errorf("decode store token row: %w", err)
+	}
+	return token, account, nil
+}
+
+func (p *Postgres) UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error {
+	return p.queries().UpdateTokenHashScheme(ctx, sqlcdb.UpdateTokenHashSchemeParams{
+		SessionID:       sessionID,
+		TokenHash:       hash,
+		TokenPrefix:     &prefix,
+		TokenHashScheme: scheme,
+	})
 }

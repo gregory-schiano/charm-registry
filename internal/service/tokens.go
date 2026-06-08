@@ -68,10 +68,13 @@ func (s *Service) IssueStoreToken(
 	if err != nil {
 		return "", core.StoreToken{}, err
 	}
+	prefix := auth.TokenPrefixFromRaw(raw)
 	now := s.now()
 	token, err := core.NewStoreToken(core.StoreToken{
 		SessionID:   uuid.NewString(),
 		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  auth.TokenHashSchemeBcrypt,
 		AccountID:   identity.Account.ID,
 		Description: req.Description,
 		Packages:    req.Packages,

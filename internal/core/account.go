@@ -25,6 +25,8 @@ type PackageSelector struct {
 type StoreToken struct {
 	SessionID   string            `json:"session-id"`
 	TokenHash   string            `json:"-"`
+	TokenPrefix string            `json:"-"`
+	HashScheme  string            `json:"-"`
 	AccountID   string            `json:"-"`
 	Description *string           `json:"description,omitempty"`
 	Packages    []PackageSelector `json:"packages,omitempty"`
