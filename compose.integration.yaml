@@ -1,0 +1,193 @@
+# Integration test compose stack for charm-registry.
+# Extends the production compose.yaml with test-specific configuration:
+#   - Separate Postgres database (charm_registry_test)
+#   - Separate MinIO buckets (itest-* prefixes)
+#   - Insecure dev auth enabled for auth-free test paths
+#   - OCI secret key fixed for deterministic test credentials
+#   - All ports exposed to host for test client access
+#
+# Usage:
+#   docker compose -f compose.integration.yaml up --build -d
+#   ./scripts/wait-for-healthy.sh
+#   go test -tags=integration -timeout 300s ./tests/integration/...
+#   docker compose -f compose.integration.yaml down -v
+
+services:
+  postgres-itest:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: charm_registry_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d charm_registry_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5433:5432"
+    volumes:
+      - itest-postgres-data:/var/lib/postgresql/data
+    networks:
+      - itest
+
+  minio-itest:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    volumes:
+      - itest-minio-data:/data
+    networks:
+      itest:
+        aliases:
+          - minio-itest
+
+  create-buckets-itest:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    depends_on:
+      - minio-itest
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio-itest:9000 minioadmin minioadmin; do sleep 1; done
+        mc mb --ignore-existing local/charm-registry-blobs-itest
+        mc mb --ignore-existing local/charm-registry-oci-itest
+        cat >/tmp/charm-registry-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:ListBucket"],
+              "Resource": ["arn:aws:s3:::charm-registry-blobs-itest"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+              "Resource": ["arn:aws:s3:::charm-registry-blobs-itest/*"]
+            }
+          ]
+        }
+        EOF
+        cat >/tmp/oci-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads"
+              ],
+              "Resource": ["arn:aws:s3:::charm-registry-oci-itest"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+              ],
+              "Resource": ["arn:aws:s3:::charm-registry-oci-itest/*"]
+            }
+          ]
+        }
+        EOF
+        mc admin user info local registry-app-itest >/dev/null 2>&1 || \
+          mc admin user add local registry-app-itest registry-app-itest-secret
+        mc admin policy create local charm-registry-policy-itest /tmp/charm-registry-policy.json >/dev/null 2>&1 || true
+        mc admin policy create local oci-policy-itest /tmp/oci-policy.json >/dev/null 2>&1 || true
+        mc admin policy attach local charm-registry-policy-itest --user registry-app-itest
+        mc admin policy attach local oci-policy-itest --user registry-app-itest
+    networks:
+      - itest
+
+  charm-registry-itest:
+    build:
+      context: .
+    depends_on:
+      postgres-itest:
+        condition: service_healthy
+      create-buckets-itest:
+        condition: service_completed_successfully
+    environment:
+      CHARM_REGISTRY_LISTEN: ":8080"
+      CHARM_REGISTRY_OCI_LISTEN: ":5000"
+      CHARM_REGISTRY_PUBLIC_API_URL: "http://localhost:18080"
+      CHARM_REGISTRY_PUBLIC_STORAGE_URL: "http://localhost:18080"
+      CHARM_REGISTRY_PUBLIC_REGISTRY_URL: "https://localhost:15000"
+      CHARM_REGISTRY_OCI_INTERNAL_URL: "https://127.0.0.1:5000"
+      CHARM_REGISTRY_OCI_S3_BUCKET: "charm-registry-oci-itest"
+      CHARM_REGISTRY_OCI_S3_PREFIX: "oci"
+      CHARM_REGISTRY_OCI_SECRET_KEY: "integration-test-oci-secret"
+      CHARM_REGISTRY_OCI_PROJECT_PREFIX: "charm"
+      CHARM_REGISTRY_OCI_PULL_ROBOT_PREFIX: "pull"
+      CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX: "push"
+      CHARM_REGISTRY_OCI_TLS_CERT_FILE: "/certs/oci.crt"
+      CHARM_REGISTRY_OCI_TLS_KEY_FILE: "/certs/oci.key"
+      CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres-itest:5432/charm_registry_test?sslmode=disable"
+      CHARM_REGISTRY_S3_BUCKET: "charm-registry-blobs-itest"
+      CHARM_REGISTRY_S3_REGION: "us-east-1"
+      CHARM_REGISTRY_S3_ENDPOINT: "http://minio-itest:9000"
+      CHARM_REGISTRY_S3_ACCESS_KEY_ID: "registry-app-itest"
+      CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: "registry-app-itest-secret"
+      CHARM_REGISTRY_S3_USE_PATH_STYLE: "true"
+      CHARM_REGISTRY_S3_DISABLE_TLS: "false"
+      CHARM_REGISTRY_OIDC_ISSUER_URL: ""
+      CHARM_REGISTRY_OIDC_CLIENT_ID: ""
+      CHARM_REGISTRY_OIDC_USERNAME_CLAIM: "preferred_username"
+      CHARM_REGISTRY_OIDC_DISPLAY_NAME_CLAIM: "name"
+      CHARM_REGISTRY_OIDC_EMAIL_CLAIM: "email"
+      CHARM_REGISTRY_ADMIN_SUBJECTS: ""
+      CHARM_REGISTRY_ADMIN_EMAILS: ""
+      CHARM_REGISTRY_ADMIN_USERNAMES: ""
+      # Insecure dev auth is enabled for auth-free integration test paths.
+      # Rate limiting is disabled (limit=0) so the integration test suite,
+      # which runs many sequential requests from localhost, doesn't hit 429.
+      CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+      CHARM_REGISTRY_IP_RATE_LIMIT: "0"
+      CHARM_REGISTRY_IP_RATE_WINDOW: "1m"
+      CHARM_REGISTRY_TOKEN_RATE_LIMIT: "0"
+      CHARM_REGISTRY_TOKEN_RATE_WINDOW: "1m"
+      CHARM_REGISTRY_CHARMHUB_URL: "https://api.charmhub.io"
+      CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL: "15m"
+      CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT: "10s"
+      CHARM_REGISTRY_SERVER_READ_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_WRITE_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_IDLE_TIMEOUT: "2m"
+      CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT: "30s"
+      CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES: "1048576"
+      CHARM_REGISTRY_MAX_JSON_BODY_BYTES: "1048576"
+      CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES: "10485760"
+      CHARM_REGISTRY_MAX_UPLOAD_BYTES: "67108864"
+    cap_drop:
+      - ALL
+    ports:
+      - "18080:8080"
+      - "15000:5000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./certs:/certs:ro
+    networks:
+      - itest
+
+volumes:
+  itest-postgres-data:
+  itest-minio-data:
+
+networks:
+  itest:
+    name: charm-registry-itest

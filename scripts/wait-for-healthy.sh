@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # wait-for-healthy.sh — Poll the charm-registry health endpoint until it
-# returns 200 or the timeout expires. Used by integration test workflows
-# to ensure the service is ready before running tests.
+# returns 200 or the timeout expires. Used by the integration-test Makefile
+# target to ensure the compose stack is ready before running tests.
 set -euo pipefail
 
 API_URL="${ITEST_API_URL:-http://localhost:18080}"
@@ -21,4 +21,7 @@ while [ $((attempt)) -lt "${MAX_ATTEMPTS}" ]; do
 done
 
 echo "ERROR: Service did not become healthy within $((MAX_ATTEMPTS * SLEEP_SEC))s" >&2
+echo "Checking docker compose status..."
+docker compose -f compose.integration.yaml ps 2>/dev/null || true
+docker compose -f compose.integration.yaml logs charm-registry-itest --tail 50 2>/dev/null || true
 exit 1
