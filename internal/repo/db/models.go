@@ -178,16 +178,17 @@ type Track struct {
 }
 
 type Upload struct {
-	ID         string
-	Filename   string
-	ObjectKey  string
-	Size       int64
-	Sha256     string
-	Sha384     string
-	Status     string
-	Kind       string
-	CreatedAt  time.Time
-	ApprovedAt pgtype.Timestamptz
-	Revision   *int32
-	Errors     json.RawMessage
+	ID                 string
+	Filename           string
+	ObjectKey          string
+	Size               int64
+	Sha256             string
+	Sha384             string
+	Status             string
+	Kind               string
+	CreatedAt          time.Time
+	ApprovedAt         pgtype.Timestamptz
+	Revision           *int32
+	Errors             json.RawMessage
+	CreatedByAccountID *string
 }

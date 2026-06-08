@@ -253,9 +253,24 @@ FROM uploads
 WHERE id = $1
 `
 
-func (q *Queries) GetUpload(ctx context.Context, id string) (Upload, error) {
+type GetUploadRow struct {
+	ID         string
+	Filename   string
+	ObjectKey  string
+	Size       int64
+	Sha256     string
+	Sha384     string
+	Status     string
+	Kind       string
+	CreatedAt  time.Time
+	ApprovedAt pgtype.Timestamptz
+	Revision   *int32
+	Errors     json.RawMessage
+}
+
+func (q *Queries) GetUpload(ctx context.Context, id string) (GetUploadRow, error) {
 	row := q.db.QueryRow(ctx, getUpload, id)
-	var i Upload
+	var i GetUploadRow
 	err := row.Scan(
 		&i.ID,
 		&i.Filename,
