@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 SHARED_DOCKER_NETWORK ?= charm-registry-shared
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert integration-certs integration-test integration-up integration-down integration-run
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert integration-certs integration-test integration-up integration-down integration-run functional-test functional-test-build charm-pack rock-pack snap-pack artifact-build charm-integration-test snap-integration-test
 
 help:
 	@printf "%s\n" \
@@ -30,7 +30,17 @@ help:
 		"make integration-down  - stop the integration test Docker Compose stack" \
 		"make integration-run   - run integration tests against the running stack" \
 		"make integration-test  - start stack, wait for healthy, run tests, stop stack" \
-		"make integration-certs - generate OCI TLS certs and make key readable for integration containers"
+		"make integration-certs - generate OCI TLS certs and make key readable for integration containers" \
+		"" \
+		"make functional-test       - run shared functional scenarios against FTEST_API_URL" \
+		"make functional-test-build - compile the functional-test binary" \
+		"" \
+		"make charm-pack              - pack the charm" \
+		"make rock-pack               - pack the rock OCI image" \
+		"make snap-pack               - pack the snap" \
+		"make artifact-build          - build all artifacts (charm, rock, snap)" \
+		"make charm-integration-test  - run charm integration tests (requires Juju/LXD)" \
+		"make snap-integration-test   - run snap spread tests (requires snapd/LXD)"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -154,3 +164,64 @@ integration-run:
 	$(GO) test -tags=integration -count=1 -timeout=10m -v ./tests/integration/...
 
 integration-test: integration-up integration-run integration-down
+
+# ---------- Functional test harness ----------
+# Runs endpoint-driven functional scenarios against any running instance.
+# Configure with FTEST_* environment variables (see tests/functional/README.md).
+
+FTEST_API_URL ?= http://localhost:8080
+
+functional-test-build:
+	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
+
+functional-test: functional-test-build
+	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test
+
+# Run functional scenarios as Go tests (alternative to the compiled binary):
+#   FTEST_API_URL=http://10.0.0.5:8080 go test -tags=functional -v ./tests/functional/...
+
+# ---------- Artifact packaging (stubs — implemented by T05/T06/T07) ----------
+
+charm-pack:
+	@echo "charm-pack: pack charm (requires charmcraft)" && \
+	if command -v charmcraft >/dev/null 2>&1; then \
+		cd charm && charmcraft pack; \
+	else \
+		echo "ERROR: charmcraft not found — install it or run this in a CI environment with charmcraft available." && exit 1; \
+	fi
+
+rock-pack:
+	@echo "rock-pack: pack rock OCI image (requires rockcraft)" && \
+	if command -v rockcraft >/dev/null 2>&1; then \
+		rockcraft pack; \
+	else \
+		echo "ERROR: rockcraft not found — install it or run this in a CI environment with rockcraft available." && exit 1; \
+	fi
+
+snap-pack:
+	@echo "snap-pack: pack snap (requires snapcraft)" && \
+	if command -v snapcraft >/dev/null 2>&1; then \
+		cd snap && snapcraft pack; \
+	else \
+		echo "ERROR: snapcraft not found — install it or run this in a CI environment with snapcraft available." && exit 1; \
+	fi
+
+artifact-build: charm-pack rock-pack snap-pack
+
+charm-integration-test:
+	@echo "charm-integration-test: run charm integration tests (requires Juju + LXD)" && \
+	if command -v juju >/dev/null 2>&1 && command -v lxc >/dev/null 2>&1; then \
+		echo "Running Jubilant charm integration tests..."; \
+		cd tests/integration && go test -tags=functional -count=1 -timeout=30m -v .; \
+	else \
+		echo "ERROR: Juju and/or LXD not found — prerequisite missing." && exit 1; \
+	fi
+
+snap-integration-test:
+	@echo "snap-integration-test: run snap spread tests (requires snapd + LXD)" && \
+	if command -v snap >/dev/null 2>&1 && command -v lxd >/dev/null 2>&1; then \
+		if [ -f spread.yaml ]; then spread -v ./tests/spread/...; \
+		else echo "ERROR: spread.yaml not found — not yet implemented by T06." && exit 1; fi; \
+	else \
+		echo "ERROR: snapd and/or LXD not found — prerequisite missing." && exit 1; \
+	fi
