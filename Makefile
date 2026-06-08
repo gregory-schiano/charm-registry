@@ -176,14 +176,4 @@ snap-integration-test:
 		exit 1; \
 	fi
 
-# ---------- Functional test harness ----------
-# Runs endpoint-driven functional scenarios against any running instance.
-# Configure with FTEST_* environment variables (see tests/functional/README.md).
-
-FTEST_API_URL ?= http://localhost:8080
-
-functional-test-build:
-	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
-
-functional-test: functional-test-build
 	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test
