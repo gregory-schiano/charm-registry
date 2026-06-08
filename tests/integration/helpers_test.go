@@ -296,7 +296,7 @@ func mustPushRevision(t *testing.T, charmName, uploadID, authHeader string) {
 	body := fmt.Sprintf(`{"upload-id":"%s"}`, uploadID)
 	resp, err := doRequest("POST", "/v1/charm/"+charmName+"/revisions", body, authHeader)
 	require.NoError(t, err)
-	requireStatusCode(t, resp, http.StatusOK)
+	requireStatusCode(t, resp, http.StatusCreated)
 	// Drain body to ensure connection reuse.
 	_, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()

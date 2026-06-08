@@ -91,11 +91,13 @@ func TestACL05_UnauthenticatedAccessReturns401(t *testing.T) {
 		{"GET", "/v1/charm/nonexistent"},
 		{"PATCH", "/v1/charm/nonexistent"},
 		{"DELETE", "/v1/charm/nonexistent"},
-		{"GET", "/v1/tokens"},
-		{"POST", "/v1/tokens"},
 		{"GET", "/v1/whoami"},
 		{"GET", "/v2/charms/find"},
 		{"GET", "/v2/charms/info/nonexistent"},
+		// Note: GET /v1/tokens and POST /v1/tokens are intentionally
+		// excluded — they implement the charmcraft OIDC bootstrap protocol
+		// and must return 200/201 (with oidc-login-required / auto-provision)
+		// rather than 401 for unauthenticated requests.
 	}
 
 	for _, ep := range endpoints {

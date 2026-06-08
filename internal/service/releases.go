@@ -24,6 +24,9 @@ func (s *Service) CreateRelease(
 	charmName string,
 	requests []core.Release,
 ) ([]core.Release, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return nil, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return nil, translateRepoError(err, messagePackageNotFound)
@@ -182,6 +185,9 @@ func (s *Service) CreateTracks(
 	charmName string,
 	tracks []core.Track,
 ) (int, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return 0, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return 0, translateRepoError(err, messagePackageNotFound)
@@ -220,6 +226,9 @@ func (s *Service) CreateTracks(
 // error response.  Only unexpected infrastructure errors (DB, blob storage)
 // are returned as a top-level error.
 func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return refreshResponse{}, err
+	}
 	results := make([]refreshActionResponse, 0, len(request.Actions))
 	for _, action := range request.Actions {
 		item, err := s.resolveRefreshAction(ctx, identity, action)

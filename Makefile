@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 SHARED_DOCKER_NETWORK ?= charm-registry-shared
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert integration-test integration-up integration-down integration-run
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert integration-certs integration-test integration-up integration-down integration-run
 
 help:
 	@printf "%s\n" \
@@ -29,7 +29,8 @@ help:
 		"make integration-up    - start the integration test Docker Compose stack" \
 		"make integration-down  - stop the integration test Docker Compose stack" \
 		"make integration-run   - run integration tests against the running stack" \
-		"make integration-test  - start stack, wait for healthy, run tests, stop stack"
+		"make integration-test  - start stack, wait for healthy, run tests, stop stack" \
+		"make integration-certs - generate OCI TLS certs and make key readable for integration containers"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -134,7 +135,15 @@ down:
 COMPOSE_ITEST = docker compose -f compose.integration.yaml
 ITEST_TIMEOUT = 120
 
-integration-up:
+# Integration certs: generate then make key readable by the
+# nonroot container user (uid 65534) that the distroless image runs as.
+# generate-cert sets oci.key to 0640 (owner+group), but the bind mount
+# serves the host filesystem directly, so the container process — which
+# is neither the host user nor the host docker group — cannot read it.
+integration-certs: generate-cert
+	chmod 0644 certs/oci.key
+
+integration-up: integration-certs
 	$(COMPOSE_ITEST) up --build -d
 	bash ./scripts/wait-for-healthy.sh http://localhost:18080/healthz $(ITEST_TIMEOUT)
 

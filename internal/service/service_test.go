@@ -147,13 +147,18 @@ func TestPrivatePackagesRequireAuthentication(t *testing.T) {
 	owner := newIdentity("owner-2", "owner")
 	_, err := svc.RegisterPackage(ctx, owner, "secret-charm", "charm", true)
 	require.NoError(t, err)
-	findResult, err := svc.SearchPackages(ctx, core.Identity{}, "secret")
-	require.NoError(t, err)
-	assert.Len(t, findResult.Results, 0)
-	_, err = svc.GetPackage(ctx, core.Identity{}, "secret-charm", false)
+
+	// Unauthenticated SearchPackages should return unauthorized.
+	_, err = svc.SearchPackages(ctx, core.Identity{}, "secret")
 	require.Error(t, err)
 	var svcErr *Error
-	require.ErrorAs(t, err, &svcErr) // guards svcErr field access below
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+
+	// Unauthenticated GetPackage should also return unauthorized.
+	_, err = svc.GetPackage(ctx, core.Identity{}, "secret-charm", false)
+	require.Error(t, err)
+	require.ErrorAs(t, err, &svcErr)
 	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
 }
 
@@ -1154,7 +1159,7 @@ func TestFindPublicPackages(t *testing.T) {
 		Channel: "latest/stable", Revision: 1,
 	}})
 	require.NoError(t, err)
-	result, err := svc.SearchPackages(ctx, core.Identity{}, "public")
+	result, err := svc.SearchPackages(ctx, newIdentity("finder-2", "finder"), "public")
 
 	require.NoError(t, err)
 	assert.Len(t, result.Results, 1)
@@ -1321,11 +1326,18 @@ func TestPublicPackageAccessibleAnonymously(t *testing.T) {
 	owner := newIdentity("acc-1", "alice")
 	_, err := svc.RegisterPackage(ctx, owner, "public-charm", "charm", false)
 	require.NoError(t, err)
-	// Unauthenticated user can view public packages
-	pkg, err := svc.GetPackage(ctx, core.Identity{}, "public-charm", true)
+
+	// Unauthenticated access is rejected even for public packages.
+	_, err = svc.GetPackage(ctx, core.Identity{}, "public-charm", true)
+	require.Error(t, err)
+	var svcErr *Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+
+	// Authenticated user can view public packages.
+	pkg, err := svc.GetPackage(ctx, newIdentity("other-1", "bob"), "public-charm", true)
 	require.NoError(t, err)
 	assert.Equal(t, "public-charm", pkg.Name)
-
 }
 
 func TestRefreshDefaultRelease(t *testing.T) {
@@ -1881,7 +1893,8 @@ func TestFindNoMatchingPackages(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	svc, _ := newTestService()
-	result, err := svc.SearchPackages(ctx, core.Identity{}, "nonexistent-query-xyz")
+	caller := newIdentity("finder-1", "finder")
+	result, err := svc.SearchPackages(ctx, caller, "nonexistent-query-xyz")
 	require.NoError(t, err)
 	assert.Empty(t, result.Results)
 
@@ -2623,7 +2636,7 @@ func TestFindPublicPackageWithMultipleTracks(t *testing.T) {
 		Channel: "latest/stable", Revision: 1,
 	}})
 	require.NoError(t, err)
-	result, err := svc.SearchPackages(ctx, core.Identity{}, "trackcharm")
+	result, err := svc.SearchPackages(ctx, newIdentity("finder-3", "finder"), "trackcharm")
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	assert.Equal(t, "trackcharm", result.Results[0].Name)

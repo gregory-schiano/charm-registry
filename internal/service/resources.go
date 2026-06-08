@@ -167,6 +167,9 @@ func (s *Service) ListResourceRevisions(
 	identity core.Identity,
 	charmName, resourceName string,
 ) ([]core.ResourceRevision, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return nil, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
 		return nil, translateRepoError(err, messagePackageNotFound)
@@ -356,6 +359,9 @@ func (s *Service) DownloadResourceStream(
 	packageID, resourceName string,
 	revisionNumber int,
 ) (io.ReadCloser, int64, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return nil, 0, err
+	}
 	pkg, err := s.repo.GetPackageByID(ctx, packageID)
 	if err != nil {
 		return nil, 0, translateRepoError(err, messagePackageNotFound)

@@ -277,7 +277,7 @@ func TestREV06_CharmDownload(t *testing.T) {
 
 	// The downloaded archive should be a valid zip (same content as uploaded).
 	assert.NotEmpty(t, downloadedBytes, "downloaded archive should not be empty")
-	assert.Equal(t, archive.Len(), len(downloadedBytes), "downloaded archive size should match uploaded archive size")
+	assert.Equal(t, len(archive), len(downloadedBytes), "downloaded archive size should match uploaded archive size")
 }
 
 // REV-07: Unscanned upload returns upload-id.
