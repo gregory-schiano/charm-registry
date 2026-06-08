@@ -52,3 +52,6 @@ Thumbs.db
 *.charm
 *.rock
 *.snap
+
+# Build artifacts
+functional-test
