@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 SHARED_DOCKER_NETWORK ?= charm-registry-shared
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check integration-test up down down-clean generate-cert install-cert install-k8s-cert
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert integration-test integration-up integration-down integration-run
 
 help:
 	@printf "%s\n" \
@@ -18,15 +18,18 @@ help:
 		"make gosec        - run gosec static analysis" \
 		"make sqlc-diff    - verify sqlc-generated code is up to date" \
 		"make audit        - run lint, tests, and security checks" \
-		"make integration-test - run integration tests against a live stack (requires Docker)" \
 		"make build        - build the registry and admin CLI binaries" \
 		"make run          - run the registry locally" \
 		"make generate-cert - generate the local embedded OCI TLS certificate" \
 		"make install-cert - install the local embedded OCI certificate into system trust (requires sudo)" \
 		"make install-k8s-cert - install the local embedded OCI certificate into Canonical k8s containerd trust (requires sudo)" \
 		"make up           - start the local compose stack with embedded OCI registry" \
-		"make down         - stop the local compose stack (preserves data)" \
-"make down-clean   - stop the local compose stack and remove volumes"
+		"make down         - stop the local compose stack" \
+		"" \
+		"make integration-up    - start the integration test Docker Compose stack" \
+		"make integration-down  - stop the integration test Docker Compose stack" \
+		"make integration-run   - run integration tests against the running stack" \
+		"make integration-test  - start stack, wait for healthy, run tests, stop stack"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -100,13 +103,6 @@ audit: tidy vet lint test vuln gosec
 
 check: fmt audit
 
-# Integration tests: run against a live charm-registry stack started via
-# Docker Compose.  Requires Docker and the compose stack to be running
-# (`make up`), or the CI workflow will start it for you.
-# The -tags=integration flag selects only tests in tests/integration/.
-integration-test:
-	$(GO) test -tags=integration -count=1 ./tests/integration/...
-
 generate-cert:
 	bash ./deploy/oci/generate-certs.sh
 
@@ -131,7 +127,21 @@ up: generate-cert
 	docker compose up --build -d postgres charm-registry
 
 down:
-	- docker compose down
-
-down-clean:
 	- docker compose down -v
+
+# ---------- Integration tests ----------
+
+COMPOSE_ITEST = docker compose -f compose.integration.yaml
+ITEST_TIMEOUT = 120
+
+integration-up:
+	$(COMPOSE_ITEST) up --build -d
+	bash ./scripts/wait-for-healthy.sh http://localhost:18080/healthz $(ITEST_TIMEOUT)
+
+integration-down:
+	- $(COMPOSE_ITEST) down -v
+
+integration-run:
+	$(GO) test -tags=integration -count=1 -timeout=10m -v ./tests/integration/...
+
+integration-test: integration-up integration-run integration-down
