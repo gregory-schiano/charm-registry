@@ -81,10 +81,10 @@ type Config struct {
 	CharmhubMaxArtifactBytes int64
 	OCIMaxManifestBytes      int64
 
-	IPRateLimit   int
-	IPRateWindow  time.Duration
-	TokenRateLimit   int
-	TokenRateWindow  time.Duration
+	IPRateLimit     int
+	IPRateWindow    time.Duration
+	TokenRateLimit  int
+	TokenRateWindow time.Duration
 }
 
 type parsedConfig struct {
@@ -107,9 +107,9 @@ type parsedConfig struct {
 	charmhubMaxArtifactBytes int64
 	ociMaxManifestBytes      int64
 
-	ipRateLimit    int
-	ipRateWindow   time.Duration
-	tokenRateLimit int
+	ipRateLimit     int
+	ipRateWindow    time.Duration
+	tokenRateLimit  int
 	tokenRateWindow time.Duration
 }
 
@@ -205,10 +205,10 @@ func Load() (Config, error) {
 		CharmhubMaxArtifactBytes: parsed.charmhubMaxArtifactBytes,
 		OCIMaxManifestBytes:      parsed.ociMaxManifestBytes,
 
-		IPRateLimit:      parsed.ipRateLimit,
-		IPRateWindow:     parsed.ipRateWindow,
-		TokenRateLimit:   parsed.tokenRateLimit,
-		TokenRateWindow:  parsed.tokenRateWindow,
+		IPRateLimit:     parsed.ipRateLimit,
+		IPRateWindow:    parsed.ipRateWindow,
+		TokenRateLimit:  parsed.tokenRateLimit,
+		TokenRateWindow: parsed.tokenRateWindow,
 	}
 
 	return validateConfig(cfg)
@@ -268,19 +268,7 @@ func loadParsedConfig() (parsedConfig, error) {
 		return parsedConfig{}, err
 	}
 
-	ipRateLimit, err := envInt("CHARM_REGISTRY_IP_RATE_LIMIT", 30)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	ipRateWindow, err := envDuration("CHARM_REGISTRY_IP_RATE_WINDOW", time.Minute)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	tokenRateLimit, err := envInt("CHARM_REGISTRY_TOKEN_RATE_LIMIT", 5)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	tokenRateWindow, err := envDuration("CHARM_REGISTRY_TOKEN_RATE_WINDOW", time.Minute)
+	rateLimits, err := loadParsedRateLimits()
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -305,6 +293,38 @@ func loadParsedConfig() (parsedConfig, error) {
 		charmhubMaxArtifactBytes: byteLimits.charmhubMaxArtifactBytes,
 		ociMaxManifestBytes:      byteLimits.ociMaxManifestBytes,
 
+		ipRateLimit:     rateLimits.ipRateLimit,
+		ipRateWindow:    rateLimits.ipRateWindow,
+		tokenRateLimit:  rateLimits.tokenRateLimit,
+		tokenRateWindow: rateLimits.tokenRateWindow,
+	}, nil
+}
+
+type parsedRateLimits struct {
+	ipRateLimit     int
+	ipRateWindow    time.Duration
+	tokenRateLimit  int
+	tokenRateWindow time.Duration
+}
+
+func loadParsedRateLimits() (parsedRateLimits, error) {
+	ipRateLimit, err := envInt("CHARM_REGISTRY_IP_RATE_LIMIT", 30)
+	if err != nil {
+		return parsedRateLimits{}, err
+	}
+	ipRateWindow, err := envDuration("CHARM_REGISTRY_IP_RATE_WINDOW", time.Minute)
+	if err != nil {
+		return parsedRateLimits{}, err
+	}
+	tokenRateLimit, err := envInt("CHARM_REGISTRY_TOKEN_RATE_LIMIT", 5)
+	if err != nil {
+		return parsedRateLimits{}, err
+	}
+	tokenRateWindow, err := envDuration("CHARM_REGISTRY_TOKEN_RATE_WINDOW", time.Minute)
+	if err != nil {
+		return parsedRateLimits{}, err
+	}
+	return parsedRateLimits{
 		ipRateLimit:     ipRateLimit,
 		ipRateWindow:    ipRateWindow,
 		tokenRateLimit:  tokenRateLimit,
