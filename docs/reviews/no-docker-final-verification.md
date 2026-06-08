@@ -37,8 +37,8 @@ All 9 task branches merged into a single unified branch. Worktree audit confirme
 | `make vet` | PASS | 0 issues |
 | `make tidy-check` | PASS | modules verified |
 | `make lint` | PASS | 0 issues (gci auto-fixed during consolidation) |
-| `make test` | PARTIAL | internal/repo panics (testcontainers-go Docker socket — pre-existing, documented in T01) |
-| `make coverage` | PASS | 75.5% total statement coverage |
+| `make test` | PASS | All internal packages pass without Docker/testcontainers |
+| `make coverage` | PASS | 63.1% total statement coverage |
 | `make charm-pack` | BLOCKED | charmcraft not installed (expected — CI has it) |
 | `make rock-pack` | BLOCKED | rockcraft not installed (expected — CI has it) |
 | `make snap-pack` | BLOCKED | snapcraft not installed (expected — CI has it) |
@@ -46,7 +46,7 @@ All 9 task branches merged into a single unified branch. Worktree audit confirme
 | `make charm-integration-test` | BLOCKED | Juju/LXD not installed (expected — CI has it) |
 | `make snap-integration-test` | BLOCKED | spread/snapd/LXD not installed (expected — CI has it) |
 
-Pre-existing test failure: `internal/repo` package requires `testcontainers-go` which needs a Docker socket. This is unrelated to the no-Docker migration — it fails identically on the base `main` branch. The Makefile `test` target excludes `internal/repo/db` (sqlc-generated) but the `internal/repo` package itself uses testcontainers in its `TestMain`.
+Repository tests no longer require `testcontainers-go` or a Docker socket. The former Postgres container-backed repository behavior tests were ported to the SQLite backend so `make test` remains a true no-Docker unit test gate. Postgres behavior is still covered at deployment level by the charm/snap integration paths that run against the packaged service.
 
 ## Docker Reference Classification
 
@@ -57,9 +57,8 @@ No Makefile target, CI job, or deployment script relies on Docker or Docker Comp
 ### Remaining References (all classified)
 
 **Transitive Go dependencies (go.mod/go.sum):**
-- testcontainers-go → docker/go-connections, docker/cli, docker/docker, etc.
-- These are indirect dependencies pulled in by `testcontainers-go` (used only in integration test code).
-- Not controlled by this project; removal requires replacing testcontainers-go.
+- No `testcontainers-go` dependency remains.
+- Some Docker-named modules remain as indirect dependencies of OCI/registry tooling, not because the project invokes a Docker daemon.
 
 **OCI Registry API path (internal/oci/client.go):**
 - `/docker/registry/v2/repositories/...` — standard Docker Registry HTTP API V2 path format, used by all OCI-compatible registries. Not a Docker daemon reference.

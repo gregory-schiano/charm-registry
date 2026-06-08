@@ -6,6 +6,8 @@
 **Branch:** `prod-ready-use-harbor/no-docker-baseline`
 **Date:** 2026-06-08
 
+> Resolution update: commit `7c61b5d` removed the `internal/repo` unit-test dependency on `testcontainers-go` by porting the former container-backed repository behavior tests to SQLite. `make test` now passes without Docker. The baseline failures below are retained as historical pre-migration evidence.
+
 ---
 
 ## 1. Baseline Command Results

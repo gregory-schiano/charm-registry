@@ -3,89 +3,26 @@ package repo
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
-var (
-	postgresTestContainer *tcpostgres.PostgresContainer
-	postgresTestDSN       string
-	postgresTestErr       error
-)
-
-func TestMain(m *testing.M) {
-	ctx := context.Background()
-	postgresTestContainer, postgresTestErr = tcpostgres.Run(
-		ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("registry"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
-	)
-	if postgresTestErr == nil {
-		postgresTestDSN, postgresTestErr = postgresTestContainer.ConnectionString(ctx, "sslmode=disable")
-	}
-
-	code := m.Run()
-
-	if postgresTestContainer != nil {
-		if err := postgresTestContainer.Terminate(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "terminate postgres test container: %v\n", err)
-		}
-	}
-	os.Exit(code)
-
-}
-
-func newPostgresIntegrationRepository(t *testing.T) *Postgres {
+func newRepositoryBehaviorTestRepository(t *testing.T) *SQLite {
 	t.Helper()
-	if postgresTestErr != nil {
-		t.Skipf("postgres integration environment unavailable: %v", postgresTestErr)
-	}
-
-	ctx := context.Background()
-	repository, err := NewPostgres(ctx, postgresTestDSN)
-	require.NoError(t, err)
-	t.Cleanup(repository.pool.Close)
-
-	_, err = repository.pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`)
-	require.NoError(t, err)
-	require.NoError(t, repository.Migrate(ctx))
-
-	return repository
+	return newSQLiteTestRepository(t)
 }
 
-func ensureTestAccount(t *testing.T, repository *Postgres, id, username string) core.Account {
+func ensureRepositoryBehaviorTestAccount(t *testing.T, repository *SQLite, id, username string) core.Account {
 	t.Helper()
-
-	account, err := repository.EnsureAccount(context.Background(), core.Account{
-		ID:          id,
-		Subject:     username,
-		Username:    username,
-		DisplayName: username,
-		Email:       username + "@example.com",
-		Validation:  "verified",
-		CreatedAt:   time.Now().UTC(),
-	})
-	require.NoError(t, err)
-	return account
+	return ensureSQLiteAccount(t, repository, id, username)
 }
 
-func createTestPackage(t *testing.T, repository *Postgres, owner core.Account, pkg core.Package) core.Package {
+func createRepositoryBehaviorTestPackage(t *testing.T, repository *SQLite, owner core.Account, pkg core.Package) core.Package {
 	t.Helper()
 
 	now := time.Now().UTC()
@@ -115,28 +52,28 @@ func createTestPackage(t *testing.T, repository *Postgres, owner core.Account, p
 	return pkg
 }
 
-func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryCanManagePackageViaGroupACL(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-1", "owner")
-	editor := ensureTestAccount(t, repository, "editor-1", "editor")
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-1", "owner")
+	editor := ensureRepositoryBehaviorTestAccount(t, repository, "editor-1", "editor")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:      "pkg-manage",
 		Name:    "manage-me",
 		Private: true,
 	})
-	_, err := repository.pool.Exec(ctx, `
+	_, err := repository.db.ExecContext(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
-		VALUES ($1, $2, $3, $4)
+		VALUES (?, ?, ?, ?)
 	`, "group-1", "editors", "Editors", time.Now().UTC())
 	require.NoError(t, err)
-	_, err = repository.pool.Exec(ctx, `
-		INSERT INTO account_group_members (group_id, account_id) VALUES ($1, $2)
+	_, err = repository.db.ExecContext(ctx, `
+		INSERT INTO account_group_members (group_id, account_id) VALUES (?, ?)
 	`, "group-1", editor.ID)
 	require.NoError(t, err)
-	_, err = repository.pool.Exec(ctx, `
+	_, err = repository.db.ExecContext(ctx, `
 		INSERT INTO package_acl (package_id, principal_type, principal_id, role)
-		VALUES ($1, 'group', $2, 'editor')
+		VALUES (?, 'group', ?, 'editor')
 	`, pkg.ID, "group-1")
 	require.NoError(t, err)
 
@@ -146,28 +83,28 @@ func TestPostgresCanManagePackageViaGroupACL(t *testing.T) {
 
 }
 
-func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryCanViewPackageViaGroupACL(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-2", "owner2")
-	viewer := ensureTestAccount(t, repository, "viewer-1", "viewer")
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-2", "owner2")
+	viewer := ensureRepositoryBehaviorTestAccount(t, repository, "viewer-1", "viewer")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:      "pkg-view",
 		Name:    "view-me",
 		Private: true,
 	})
-	_, err := repository.pool.Exec(ctx, `
+	_, err := repository.db.ExecContext(ctx, `
 		INSERT INTO account_groups (id, slug, display_name, created_at)
-		VALUES ($1, $2, $3, $4)
+		VALUES (?, ?, ?, ?)
 	`, "group-2", "viewers", "Viewers", time.Now().UTC())
 	require.NoError(t, err)
-	_, err = repository.pool.Exec(ctx, `
-		INSERT INTO account_group_members (group_id, account_id) VALUES ($1, $2)
+	_, err = repository.db.ExecContext(ctx, `
+		INSERT INTO account_group_members (group_id, account_id) VALUES (?, ?)
 	`, "group-2", viewer.ID)
 	require.NoError(t, err)
-	_, err = repository.pool.Exec(ctx, `
+	_, err = repository.db.ExecContext(ctx, `
 		INSERT INTO package_acl (package_id, principal_type, principal_id, role)
-		VALUES ($1, 'group', $2, 'viewer')
+		VALUES (?, 'group', ?, 'viewer')
 	`, pkg.ID, "group-2")
 	require.NoError(t, err)
 
@@ -181,11 +118,11 @@ func TestPostgresCanViewPackageViaGroupACL(t *testing.T) {
 
 }
 
-func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryResolveDefaultReleaseFallback(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-3", "owner3")
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-3", "owner3")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:           "pkg-release",
 		Name:         "release-me",
 		DefaultTrack: stringPtr("2.0"),
@@ -212,10 +149,10 @@ func TestPostgresResolveDefaultReleaseFallback(t *testing.T) {
 
 }
 
-func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryWithinTransactionRollsBackOnError(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-4", "owner4")
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-4", "owner4")
 	err := repository.WithinTransaction(ctx, func(txRepo CompositeRepo) error {
 		return txRepo.CreatePackage(ctx, core.Package{
 			ID:             "pkg-tx",
@@ -250,13 +187,13 @@ func TestPostgresWithinTransactionRollsBackOnError(t *testing.T) {
 
 }
 
-func TestPostgresPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *testing.T) {
+func TestRepositoryPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *testing.T) {
 
-	repository := newPostgresIntegrationRepository(t)
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-push-revision", "owner-push-revision")
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-push-revision", "owner-push-revision")
 	now := time.Now().UTC()
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-push-revision-tx",
 		Name: "push-revision-tx",
 	})
@@ -277,7 +214,7 @@ func TestPostgresPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *
 	revisionNumber := 1
 
 	err := repository.WithinTransaction(ctx, func(txRepo CompositeRepo) error {
-		failingTx := postgresUpdatePackageFailingRepository{CompositeRepo: txRepo, err: assert.AnError}
+		failingTx := repositoryBehaviorUpdatePackageFailingRepository{CompositeRepo: txRepo, err: assert.AnError}
 		if err := failingTx.CreateRevision(ctx, core.Revision{
 			ID:        "rev-push-revision-tx",
 			PackageID: pkg.ID,
@@ -310,19 +247,19 @@ func TestPostgresPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *
 	assert.Nil(t, storedUpload.Revision)
 }
 
-func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositorySearchPackagesEscapesWildcards(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-search", "owner-search")
-	createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-search", "owner-search")
+	createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-percent",
 		Name: "literal%name",
 	})
-	createTestPackage(t, repository, owner, core.Package{
+	createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-underscore",
 		Name: "literal_name",
 	})
-	createTestPackage(t, repository, owner, core.Package{
+	createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-plain",
 		Name: "literalxname",
 	})
@@ -338,10 +275,10 @@ func TestPostgresSearchPackagesEscapesWildcards(t *testing.T) {
 
 }
 
-func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryCharmhubSyncRuleCRUD(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	admin := ensureTestAccount(t, repository, "admin-sync", "admin-sync")
+	admin := ensureRepositoryBehaviorTestAccount(t, repository, "admin-sync", "admin-sync")
 	now := time.Now().UTC()
 	err := repository.CreateCharmhubSyncRule(ctx, core.CharmhubSyncRule{
 		PackageName:        "demo",
@@ -388,11 +325,11 @@ func TestPostgresCharmhubSyncRuleCRUD(t *testing.T) {
 
 }
 
-func TestPostgresReleaseVariantsByBase(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryReleaseVariantsByBase(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-release-variant", "owner-release-variant")
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-release-variant", "owner-release-variant")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-release-variant",
 		Name: "release-variant",
 	})
@@ -440,11 +377,11 @@ func TestPostgresReleaseVariantsByBase(t *testing.T) {
 
 }
 
-func TestPostgresDeletePrimitivesForSyncCleanup(t *testing.T) {
-	repository := newPostgresIntegrationRepository(t)
+func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
-	owner := ensureTestAccount(t, repository, "owner-sync-delete", "owner-sync-delete")
-	pkg := createTestPackage(t, repository, owner, core.Package{
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-sync-delete", "owner-sync-delete")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
 		ID:   "pkg-sync-delete",
 		Name: "sync-delete",
 	})
@@ -523,12 +460,12 @@ func stringPtr(value string) *string {
 	return &value
 }
 
-type postgresUpdatePackageFailingRepository struct {
+type repositoryBehaviorUpdatePackageFailingRepository struct {
 	CompositeRepo
 	err error
 }
 
-func (r postgresUpdatePackageFailingRepository) UpdatePackage(_ context.Context, _ core.Package) error {
+func (r repositoryBehaviorUpdatePackageFailingRepository) UpdatePackage(_ context.Context, _ core.Package) error {
 	return r.err
 }
 
