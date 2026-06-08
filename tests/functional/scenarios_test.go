@@ -53,6 +53,30 @@ func TestV2Info(t *testing.T) {
 	runScenario(t, functional.ScenarioV2Info)
 }
 
+func TestResourceList(t *testing.T) {
+	runScenario(t, functional.ScenarioResourceList)
+}
+
+func TestResourceRevisionLifecycle(t *testing.T) {
+	runScenario(t, functional.ScenarioResourceRevisionLifecycle)
+}
+
+func TestResourceDownload(t *testing.T) {
+	runScenario(t, functional.ScenarioResourceDownload)
+}
+
+func TestSyncListRules(t *testing.T) {
+	runScenario(t, functional.ScenarioSyncListRules)
+}
+
+func TestSyncAddDeleteRule(t *testing.T) {
+	runScenario(t, functional.ScenarioSyncAddDeleteRule)
+}
+
+func TestOCIRegistryV2(t *testing.T) {
+	runScenario(t, functional.ScenarioOCIRegistryV2)
+}
+
 // TestAll runs every scenario sequentially (useful as a quick smoke test).
 func TestAll(t *testing.T) {
 	c := functional.NewClientFromEnv()

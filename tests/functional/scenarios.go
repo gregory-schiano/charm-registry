@@ -496,6 +496,432 @@ func ScenarioV2Info(c *Client) ScenarioResult {
 	return pass(name)
 }
 
+// ---------- Resources ----------
+
+// ScenarioResourceList registers a charm declaring resources in metadata.yaml,
+// pushes a revision, and verifies GET /v1/charm/{name}/resources returns them.
+func ScenarioResourceList(c *Client) ScenarioResult {
+	name := "resources/list"
+	auth := c.AdminAuthHeader()
+	pkgName := UniqueName("res-list")
+
+	// Register charm.
+	regBody := fmt.Sprintf(`{"name":"%s","type":"charm"}`, pkgName)
+	resp, err := c.DoRequest("POST", "/v1/charm", regBody, auth)
+	if err != nil {
+		return fail(name, "register: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := ReadAllBytes(resp)
+		return fail(name, "register: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	_, _ = ReadAllBytes(resp)
+
+	// Upload charm archive with resource declarations.
+	archive, err := BuildTestCharmArchiveWithResources(pkgName)
+	if err != nil {
+		return fail(name, "build archive: %v", err)
+	}
+	uploadBody, uploadStatus, err := c.UploadMultipart("/unscanned-upload/", "binary", pkgName+".charm", archive, auth)
+	if err != nil {
+		return fail(name, "upload charm: %v", err)
+	}
+	if uploadStatus != http.StatusOK && uploadStatus != http.StatusCreated {
+		return fail(name, "upload charm: status %d, body: %v", uploadStatus, uploadBody)
+	}
+	uploadID, ok := uploadBody["upload_id"].(string)
+	if !ok || uploadID == "" {
+		return fail(name, "upload response missing upload_id")
+	}
+
+	// Push charm revision.
+	revBody := fmt.Sprintf(`{"upload-id":"%s"}`, uploadID)
+	resp2, err := c.DoRequest("POST", "/v1/charm/"+pkgName+"/revisions", revBody, auth)
+	if err != nil {
+		return fail(name, "push revision: %v", err)
+	}
+	if resp2.StatusCode != http.StatusCreated {
+		body2, _ := ReadAllBytes(resp2)
+		return fail(name, "push revision: status %d, body: %s", resp2.StatusCode, string(body2))
+	}
+	_, _ = ReadAllBytes(resp2)
+
+	// List resources.
+	resp3, err := c.DoRequest("GET", "/v1/charm/"+pkgName+"/resources", "", auth)
+	if err != nil {
+		return fail(name, "list resources: %v", err)
+	}
+	if resp3.StatusCode != http.StatusOK {
+		body3, _ := ReadAllBytes(resp3)
+		return fail(name, "list resources: status %d, body: %s", resp3.StatusCode, string(body3))
+	}
+	listBody, err := ReadJSON(resp3)
+	if err != nil {
+		return fail(name, "decode resources: %v", err)
+	}
+	resources, ok := listBody["resources"].([]any)
+	if !ok || len(resources) == 0 {
+		return fail(name, "expected at least one declared resource, got %v", listBody["resources"])
+	}
+	first, ok := resources[0].(map[string]any)
+	if !ok {
+		return fail(name, "resource entry is not a map")
+	}
+	if first["name"] != "config" {
+		return fail(name, "expected resource name 'config', got %v", first["name"])
+	}
+	if first["type"] != "file" {
+		return fail(name, "expected resource type 'file', got %v", first["type"])
+	}
+	return pass(name)
+}
+
+// ScenarioResourceRevisionLifecycle pushes a resource file revision and lists
+// the revisions to verify the round-trip.
+func ScenarioResourceRevisionLifecycle(c *Client) ScenarioResult {
+	name := "resources/revision-lifecycle"
+	auth := c.AdminAuthHeader()
+	pkgName := UniqueName("res-rev")
+
+	// Register + upload charm with resources + push revision.
+	regBody := fmt.Sprintf(`{"name":"%s","type":"charm"}`, pkgName)
+	resp, err := c.DoRequest("POST", "/v1/charm", regBody, auth)
+	if err != nil {
+		return fail(name, "register: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := ReadAllBytes(resp)
+		return fail(name, "register: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	_, _ = ReadAllBytes(resp)
+
+	archive, err := BuildTestCharmArchiveWithResources(pkgName)
+	if err != nil {
+		return fail(name, "build archive: %v", err)
+	}
+	uploadBody, _, err := c.UploadMultipart("/unscanned-upload/", "binary", pkgName+".charm", archive, auth)
+	if err != nil {
+		return fail(name, "upload charm: %v", err)
+	}
+	uploadID, _ := uploadBody["upload_id"].(string)
+	revBody := fmt.Sprintf(`{"upload-id":"%s"}`, uploadID)
+	resp2, err := c.DoRequest("POST", "/v1/charm/"+pkgName+"/revisions", revBody, auth)
+	if err != nil {
+		return fail(name, "push charm revision: %v", err)
+	}
+	if resp2.StatusCode != http.StatusCreated {
+		body2, _ := ReadAllBytes(resp2)
+		return fail(name, "push charm revision: status %d, body: %s", resp2.StatusCode, string(body2))
+	}
+	_, _ = ReadAllBytes(resp2)
+
+	// Upload a resource file.
+	resourceContent := []byte("key: value\n")
+	resUploadBody, resStatus, err := c.UploadMultipart("/unscanned-upload/", "binary", "config.yaml", resourceContent, auth)
+	if err != nil {
+		return fail(name, "upload resource: %v", err)
+	}
+	if resStatus != http.StatusOK && resStatus != http.StatusCreated {
+		return fail(name, "upload resource: status %d", resStatus)
+	}
+	resUploadID, ok := resUploadBody["upload_id"].(string)
+	if !ok || resUploadID == "" {
+		return fail(name, "resource upload missing upload_id")
+	}
+
+	// Push resource revision.
+	pushBody := fmt.Sprintf(`{"upload-id":"%s"}`, resUploadID)
+	resp3, err := c.DoRequest("POST", "/v1/charm/"+pkgName+"/resources/config/revisions", pushBody, auth)
+	if err != nil {
+		return fail(name, "push resource revision: %v", err)
+	}
+	if resp3.StatusCode != http.StatusCreated {
+		body3, _ := ReadAllBytes(resp3)
+		return fail(name, "push resource revision: status %d, body: %s", resp3.StatusCode, string(body3))
+	}
+	_, _ = ReadAllBytes(resp3)
+
+	// List resource revisions.
+	resp4, err := c.DoRequest("GET", "/v1/charm/"+pkgName+"/resources/config/revisions", "", auth)
+	if err != nil {
+		return fail(name, "list resource revisions: %v", err)
+	}
+	if resp4.StatusCode != http.StatusOK {
+		body4, _ := ReadAllBytes(resp4)
+		return fail(name, "list resource revisions: status %d, body: %s", resp4.StatusCode, string(body4))
+	}
+	listBody, err := ReadJSON(resp4)
+	if err != nil {
+		return fail(name, "decode resource revisions: %v", err)
+	}
+	revisions, ok := listBody["revisions"].([]any)
+	if !ok || len(revisions) == 0 {
+		return fail(name, "expected at least one resource revision")
+	}
+	rev0, ok := revisions[0].(map[string]any)
+	if !ok {
+		return fail(name, "revision entry is not a map")
+	}
+	for _, field := range []string{"revision", "filename", "created-at"} {
+		if _, exists := rev0[field]; !exists {
+			return fail(name, "resource revision missing field %q", field)
+		}
+	}
+	return pass(name)
+}
+
+// ScenarioResourceDownload pushes a resource and downloads it via the
+// /api/v1/resources/download/{filename} endpoint, verifying content integrity.
+func ScenarioResourceDownload(c *Client) ScenarioResult {
+	name := "resources/download"
+	auth := c.AdminAuthHeader()
+	pkgName := UniqueName("res-dl")
+
+	// Register + get package ID.
+	regBody := fmt.Sprintf(`{"name":"%s","type":"charm"}`, pkgName)
+	resp, err := c.DoRequest("POST", "/v1/charm", regBody, auth)
+	if err != nil {
+		return fail(name, "register: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := ReadAllBytes(resp)
+		return fail(name, "register: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	regResult, err := ReadJSON(resp)
+	if err != nil {
+		return fail(name, "decode register: %v", err)
+	}
+	pkgID, _ := regResult["id"].(string)
+
+	// Upload charm with resources + push revision.
+	archive, err := BuildTestCharmArchiveWithResources(pkgName)
+	if err != nil {
+		return fail(name, "build archive: %v", err)
+	}
+	uploadBody, _, err := c.UploadMultipart("/unscanned-upload/", "binary", pkgName+".charm", archive, auth)
+	if err != nil {
+		return fail(name, "upload charm: %v", err)
+	}
+	uploadID, _ := uploadBody["upload_id"].(string)
+	revBody := fmt.Sprintf(`{"upload-id":"%s"}`, uploadID)
+	resp2, err := c.DoRequest("POST", "/v1/charm/"+pkgName+"/revisions", revBody, auth)
+	if err != nil {
+		return fail(name, "push revision: %v", err)
+	}
+	_, _ = ReadAllBytes(resp2)
+
+	// Upload resource file + push resource revision.
+	resourceContent := []byte("key: value\n")
+	resUploadBody, _, err := c.UploadMultipart("/unscanned-upload/", "binary", "config.yaml", resourceContent, auth)
+	if err != nil {
+		return fail(name, "upload resource: %v", err)
+	}
+	resUploadID, _ := resUploadBody["upload_id"].(string)
+	pushBody := fmt.Sprintf(`{"upload-id":"%s"}`, resUploadID)
+	resp3, err := c.DoRequest("POST", "/v1/charm/"+pkgName+"/resources/config/revisions", pushBody, auth)
+	if err != nil {
+		return fail(name, "push resource revision: %v", err)
+	}
+	_, _ = ReadAllBytes(resp3)
+
+	// Determine resource revision number.
+	resp4, err := c.DoRequest("GET", "/v1/charm/"+pkgName+"/resources/config/revisions", "", auth)
+	if err != nil {
+		return fail(name, "list resource revisions: %v", err)
+	}
+	listBody, err := ReadJSON(resp4)
+	if err != nil {
+		return fail(name, "decode revisions: %v", err)
+	}
+	revisions, _ := listBody["revisions"].([]any)
+	if len(revisions) == 0 {
+		return fail(name, "no resource revisions found for download")
+	}
+	revNum := int(revisions[0].(map[string]any)["revision"].(float64))
+
+	// Download resource.
+	downloadFilename := fmt.Sprintf("charm_%s.config_%d", pkgID, revNum)
+	resp5, err := c.DoRequest("GET", "/api/v1/resources/download/"+downloadFilename, "", auth)
+	if err != nil {
+		return fail(name, "download resource: %v", err)
+	}
+	if resp5.StatusCode != http.StatusOK {
+		body5, _ := ReadAllBytes(resp5)
+		return fail(name, "download: status %d, body: %s", resp5.StatusCode, string(body5))
+	}
+	downloaded, err := ReadAllBytes(resp5)
+	if err != nil {
+		return fail(name, "read download: %v", err)
+	}
+	if string(downloaded) != string(resourceContent) {
+		return fail(name, "downloaded content %q != uploaded %q", string(downloaded), string(resourceContent))
+	}
+	return pass(name)
+}
+
+// ---------- Charmhub sync rules ----------
+
+// ScenarioSyncListRules lists Charmhub sync rules and verifies the endpoint
+// returns a valid response with a rules array.
+func ScenarioSyncListRules(c *Client) ScenarioResult {
+	name := "sync/list-rules"
+	auth := c.AdminAuthHeader()
+
+	resp, err := c.DoRequest("GET", "/v1/admin/charmhub-sync", "", auth)
+	if err != nil {
+		return fail(name, "GET /v1/admin/charmhub-sync: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ReadAllBytes(resp)
+		return fail(name, "GET sync rules: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	body, err := ReadJSON(resp)
+	if err != nil {
+		return fail(name, "decode sync rules: %v", err)
+	}
+	rules, ok := body["rules"].([]any)
+	if !ok {
+		return fail(name, "response missing 'rules' array, got: %v", body)
+	}
+	// Rules may be empty — that's fine for a clean instance.
+	_ = rules
+	return pass(name)
+}
+
+// ScenarioSyncAddDeleteRule adds a Charmhub sync rule, verifies it appears
+// in the list, deletes it, and verifies it's gone.
+func ScenarioSyncAddDeleteRule(c *Client) ScenarioResult {
+	name := "sync/add-delete-rule"
+	auth := c.AdminAuthHeader()
+	ruleName := UniqueName("sync-rule")
+	track := "latest"
+
+	// Add sync rule.
+	addBody := fmt.Sprintf(`{"name":"%s","track":"%s","bases":["ubuntu@22.04"],"architectures":["amd64"]}`, ruleName, track)
+	resp, err := c.DoRequest("POST", "/v1/admin/charmhub-sync", addBody, auth)
+	if err != nil {
+		return fail(name, "POST add sync rule: %v", err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := ReadAllBytes(resp)
+		return fail(name, "add sync rule: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	addResult, err := ReadJSON(resp)
+	if err != nil {
+		return fail(name, "decode add response: %v", err)
+	}
+	if addResult["name"] != ruleName {
+		return fail(name, "add rule: name %v != %s", addResult["name"], ruleName)
+	}
+
+	// List and verify the rule appears.
+	resp2, err := c.DoRequest("GET", "/v1/admin/charmhub-sync", "", auth)
+	if err != nil {
+		return fail(name, "list after add: %v", err)
+	}
+	listBody, err := ReadJSON(resp2)
+	if err != nil {
+		return fail(name, "decode list: %v", err)
+	}
+	rules, _ := listBody["rules"].([]any)
+	found := false
+	for _, r := range rules {
+		rMap, ok := r.(map[string]any)
+		if ok && rMap["name"] == ruleName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fail(name, "added rule %q not found in list of %d rules", ruleName, len(rules))
+	}
+
+	// Delete the rule.
+	delPath := fmt.Sprintf("/v1/admin/charmhub-sync/%s/%s", ruleName, track)
+	resp3, err := c.DoRequest("DELETE", delPath, "", auth)
+	if err != nil {
+		return fail(name, "DELETE sync rule: %v", err)
+	}
+	if resp3.StatusCode != http.StatusAccepted {
+		body3, _ := ReadAllBytes(resp3)
+		return fail(name, "delete sync rule: status %d, body: %s", resp3.StatusCode, string(body3))
+	}
+	_, _ = ReadAllBytes(resp3)
+
+	// List again and verify removal.
+	resp4, err := c.DoRequest("GET", "/v1/admin/charmhub-sync", "", auth)
+	if err != nil {
+		return fail(name, "list after delete: %v", err)
+	}
+	listBody2, err := ReadJSON(resp4)
+	if err != nil {
+		return fail(name, "decode list after delete: %v", err)
+	}
+	rules2, _ := listBody2["rules"].([]any)
+	for _, r := range rules2 {
+		rMap, ok := r.(map[string]any)
+		if ok && rMap["name"] == ruleName {
+			return fail(name, "deleted rule %q still appears in list", ruleName)
+		}
+	}
+
+	return pass(name)
+}
+
+// ---------- OCI registry ----------
+
+// ScenarioOCIRegistryV2 checks the OCI registry /v2/ and /v2/_catalog
+// endpoints are reachable and return expected responses.
+func ScenarioOCIRegistryV2(c *Client) ScenarioResult {
+	name := "oci/registry-v2"
+
+	tlsClient, err := c.OCITLSClient()
+	if err != nil {
+		return fail(name, "OCI TLS client: %v", err)
+	}
+	ociURL := c.OCIURL()
+
+	// GET /v2/
+	req, err := http.NewRequest(http.MethodGet, ociURL+"/v2/", nil)
+	if err != nil {
+		return fail(name, "build /v2/ request: %v", err)
+	}
+	resp, err := tlsClient.Do(req)
+	if err != nil {
+		return fail(name, "OCI /v2/: %v", err)
+	}
+	_, _ = ReadAllBytes(resp)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnauthorized {
+		return fail(name, "OCI /v2/: expected 200 or 401, got %d", resp.StatusCode)
+	}
+
+	// GET /v2/_catalog
+	req2, err := http.NewRequest(http.MethodGet, ociURL+"/v2/_catalog", nil)
+	if err != nil {
+		return fail(name, "build /v2/_catalog request: %v", err)
+	}
+	resp2, err := tlsClient.Do(req2)
+	if err != nil {
+		return fail(name, "OCI /v2/_catalog: %v", err)
+	}
+	if resp2.StatusCode == http.StatusOK {
+		body2, err := ReadJSON(resp2)
+		if err != nil {
+			return fail(name, "decode catalog: %v", err)
+		}
+		if _, ok := body2["repositories"]; !ok {
+			return fail(name, "catalog response missing 'repositories' key")
+		}
+	} else if resp2.StatusCode != http.StatusUnauthorized {
+		_, _ = ReadAllBytes(resp2)
+		return fail(name, "OCI /v2/_catalog: expected 200 or 401, got %d", resp2.StatusCode)
+	} else {
+		_, _ = ReadAllBytes(resp2)
+	}
+
+	return pass(name)
+}
+
 // ---------- Scenario registry ----------
 
 // AllScenarios returns the full set of functional scenarios in recommended
@@ -514,12 +940,18 @@ func AllScenarios() []func(*Client) ScenarioResult {
 		ScenarioRevisionUploadPush,
 		ScenarioReleaseChannel,
 		ScenarioV2Info,
+		ScenarioResourceList,
+		ScenarioResourceRevisionLifecycle,
+		ScenarioResourceDownload,
+		ScenarioSyncListRules,
+		ScenarioSyncAddDeleteRule,
+		ScenarioOCIRegistryV2,
 	}
 }
 
 // runAll executes every scenario and returns the results.
 func runAll(c *Client) []ScenarioResult {
-	results := make([]ScenarioResult, 0, 10)
+	results := make([]ScenarioResult, 0, len(AllScenarios()))
 	for _, fn := range AllScenarios() {
 		results = append(results, fn(c))
 	}

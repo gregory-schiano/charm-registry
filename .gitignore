@@ -51,3 +51,6 @@ Thumbs.db
 # Craft tools
 *.charm
 *.rock
+
+# Build artifacts
+functional-test

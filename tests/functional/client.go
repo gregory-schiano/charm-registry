@@ -113,6 +113,11 @@ func (c *Client) AdminAuthHeader() string {
 	return DevAuthHeader(c.cfg.AdminSubject, c.cfg.AdminUsername)
 }
 
+// OCIURL returns the configured OCI registry base URL.
+func (c *Client) OCIURL() string {
+	return c.cfg.OCIURL
+}
+
 // ---------- HTTP request helpers ----------
 
 // DoRequest performs an HTTP request against the API. path may include a

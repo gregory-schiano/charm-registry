@@ -27,7 +27,7 @@ func main() {
 	fmt.Printf("functional-test: API=%s OCI=%s admin=%s/%s\n",
 		cfg.APIURL, cfg.OCIURL, cfg.AdminSubject, cfg.AdminUsername)
 
-	results := make([]functional.ScenarioResult, 0, 16)
+	results := make([]functional.ScenarioResult, 0, 20)
 	for _, fn := range functional.AllScenarios() {
 		r := fn(c)
 		results = append(results, r)

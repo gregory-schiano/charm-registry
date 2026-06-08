@@ -73,6 +73,12 @@ make functional-test
 | `revisions/upload-push` | Upload charm archive, push revision, list revisions |
 | `releases/channel` | Upload + push + release to channel, verify release list |
 | `v2/info-after-release` | V2 info endpoint reflects released data |
+| `resources/list` | List declared resources for a charm with resource declarations |
+| `resources/revision-lifecycle` | Upload resource file, push revision, list revisions with field validation |
+| `resources/download` | Push resource + download via /api/v1/resources/download, verify content integrity |
+| `sync/list-rules` | List Charmhub sync rules, verify response shape |
+| `sync/add-delete-rule` | Add sync rule → verify in list → delete → verify removal |
+| `oci/registry-v2` | OCI registry /v2/ base and /v2/_catalog endpoints reachable |
 
 ## Design decisions
 
