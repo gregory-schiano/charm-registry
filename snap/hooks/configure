@@ -62,7 +62,7 @@ $hosts
 EOF
 	san="${san%,}"
 
-	"$SNAP/usr/bin/openssl" req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+	"$SNAP/usr/bin/openssl" req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
 		-keyout "$key_file" \
 		-out "$cert_file" \
 		-subj "/CN=$(url_host "$default_url")" \

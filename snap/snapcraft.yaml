@@ -32,7 +32,7 @@ parts:
     build-packages:
       - git
     build-snaps:
-      - go/latest/stable
+      - go/1.26/stable
     build-environment:
       - CGO_ENABLED: "0"
       - GOFLAGS: "-trimpath -buildvcs=true"

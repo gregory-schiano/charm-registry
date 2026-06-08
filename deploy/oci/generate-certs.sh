@@ -59,7 +59,7 @@ while IFS= read -r host; do
 done <<<"${unique_hosts}"
 san="${san%,}"
 
-openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
 	-keyout "${CERT_DIR}/oci.key" \
 	-out "${CERT_DIR}/oci.crt" \
 	-subj "/CN=${public_host:-localhost}" \

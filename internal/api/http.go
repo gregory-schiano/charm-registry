@@ -59,6 +59,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	router.Use(chimiddleware.RequestID)
 	router.Use(chimiddleware.RealIP)
 	router.Use(api.logRequests)
+	router.Use(chimiddleware.Timeout(30*time.Second))
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
 	router.Use(api.rateLimit)
@@ -256,7 +257,9 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) err
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		slog.Error("json encode", "error", err)
+	}
 }
 
 func writeCreatedJSON(w http.ResponseWriter, location string, payload any) {

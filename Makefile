@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 SHARED_DOCKER_NETWORK ?= charm-registry-shared
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check integration-test up down generate-cert install-cert install-k8s-cert
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check integration-test up down down-clean generate-cert install-cert install-k8s-cert
 
 help:
 	@printf "%s\n" \
@@ -25,7 +25,8 @@ help:
 		"make install-cert - install the local embedded OCI certificate into system trust (requires sudo)" \
 		"make install-k8s-cert - install the local embedded OCI certificate into Canonical k8s containerd trust (requires sudo)" \
 		"make up           - start the local compose stack with embedded OCI registry" \
-		"make down         - stop the local compose stack"
+		"make down         - stop the local compose stack (preserves data)" \
+"make down-clean   - stop the local compose stack and remove volumes"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -130,4 +131,7 @@ up: generate-cert
 	docker compose up --build -d postgres charm-registry
 
 down:
+	- docker compose down
+
+down-clean:
 	- docker compose down -v
