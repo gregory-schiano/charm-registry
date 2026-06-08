@@ -53,5 +53,5 @@ Thumbs.db
 *.rock
 *.snap
 
-# Build artifacts
+# Functional test binary
 functional-test

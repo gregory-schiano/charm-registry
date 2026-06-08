@@ -26,13 +26,13 @@ help:
 		"make functional-test       - run shared functional scenarios against FTEST_API_URL" \
 		"make functional-test-build - compile the functional-test binary" \
 		"" \
-		"make charm-pack   - pack the charm with charmcraft" \
-		"make rock-pack    - pack the OCI rock with rockcraft" \
-		"make rock-smoke-test - inspect and validate a built .rock artifact" \
-		"make snap-pack    - pack the snap with snapcraft" \
-		"make artifact-build - build all artifacts (charm, rock, snap)" \
-		"make charm-integration-test  - run Jubilant charm integration tests (requires Juju/LXD)" \
-		"make snap-integration-test   - run snap spread tests (requires snapd/LXD)"
+		"make charm-pack            - pack the charm with charmcraft" \
+		"make rock-pack             - pack the OCI rock with rockcraft" \
+		"make rock-smoke-test       - inspect and validate a built .rock artifact" \
+		"make snap-pack             - pack the snap with snapcraft" \
+		"make artifact-build        - build all artifacts (charm, rock, snap)" \
+		"make charm-integration-test - run charm integration tests with Jubilant" \
+		"make snap-integration-test  - run snap spread tests (requires spread + snapd)"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -149,7 +149,7 @@ rock-pack:
 	rockcraft pack
 
 rock-smoke-test:
-	@bash scripts/rock-smoke-test.sh $(ROCK_FILE)
+	bash scripts/rock-smoke-test.sh $(ROCK_FILE)
 
 snap-pack:
 	snapcraft pack
@@ -169,10 +169,21 @@ charm-integration-test:
 	fi
 
 snap-integration-test:
-	@if command -v snap >/dev/null 2>&1 && command -v lxd >/dev/null 2>&1; then \
-		if [ -f spread.yaml ]; then spread -v ./tests/spread/...; \
-		else echo "ERROR: spread.yaml not found — not yet implemented by T06." && exit 1; fi; \
+	@if command -v spread >/dev/null 2>&1; then \
+		spread -v ./tests/spread/...; \
 	else \
-		echo "BLOCKED: snapd and/or LXD not found — cannot run snap spread tests." && \
-		echo "Prerequisites: snapd and lxd." && exit 1; \
+		echo "ERROR: spread not found — install it (snap install spread --classic) or run in CI."; \
+		exit 1; \
 	fi
+
+# ---------- Functional test harness ----------
+# Runs endpoint-driven functional scenarios against any running instance.
+# Configure with FTEST_* environment variables (see tests/functional/README.md).
+
+FTEST_API_URL ?= http://localhost:8080
+
+functional-test-build:
+	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
+
+functional-test: functional-test-build
+	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test

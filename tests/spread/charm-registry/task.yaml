@@ -1,0 +1,93 @@
+summary: Install the charm-registry snap, configure it, and run functional scenarios.
+
+description: |
+  Smoke-test the charm-registry snap end-to-end: pack the snap from
+  source, install it with dangerous/local mode, configure insecure dev-auth
+  and public URLs, wait for the service to become healthy, and run the
+  shared functional scenario binary against the running snap-exposed
+  endpoints.
+
+systems: [ubuntu-24.04-amd64]
+
+environment:
+  SNAP_FILE: "$PROJECT_DIR/charm-registry_0.1_amd64.snap"
+
+prepare: |
+  set -euo pipefail
+
+  # Pack the snap if not already built.
+  if [ ! -f "$SNAP_FILE" ]; then
+    if command -v snapcraft >/dev/null 2>&1; then
+      cd "$PROJECT_DIR"
+      snapcraft pack
+    elif [ -f "$PROJECT_DIR/charm-registry_*.snap" ]; then
+      # Use any pre-built snap already present.
+      true
+    else
+      echo "SKIP: no snapcraft available and no pre-built .snap found"
+      exit 0
+    fi
+  fi
+
+  # Locate the .snap file (packed or pre-existing).
+  SNAP_PATH="$(ls -1t "$PROJECT_DIR"/charm-registry_*.snap 2>/dev/null | head -1)"
+  if [ -z "$SNAP_PATH" ]; then
+    echo "SKIP: no .snap file found in $PROJECT_DIR"
+    exit 0
+  fi
+
+  # Install the snap locally with dangerous confinement acceptance.
+  snap install --dangerous "$SNAP_PATH"
+
+  # Configure snap settings: enable dev-auth and set public URLs.
+  snap set charm-registry \
+    insecure-dev-auth=true \
+    public-api-url="http://localhost:8080" \
+    public-registry-url="https://127.0.0.1:5000" \
+    public-storage-url="http://localhost:8080"
+
+  # Start the snap service.
+  snap start charm-registry.charm-registry
+
+  # Wait for the API to become healthy (up to 60 seconds).
+  for i in $(seq 1 60); do
+    if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
+      echo "charm-registry is healthy after ${i}s"
+      break
+    fi
+    if [ "$i" -eq 60 ]; then
+      echo "FAIL: charm-registry did not become healthy within 60s"
+      snap logs charm-registry.charm-registry -n 50
+      exit 1
+    fi
+    sleep 1
+  done
+
+restore: |
+  snap remove --purge charm-registry || true
+
+execute: |
+  set -euo pipefail
+
+  echo "=== Running charm-registry functional scenarios ==="
+  echo "API: $FTEST_API_URL"
+  echo "OCI: $FTEST_OCI_URL"
+  echo "OCI cert: $FTEST_OCI_CERT_PATH"
+
+  # Verify the functional-test binary was built in the suite prepare.
+  if [ ! -x "$PROJECT_DIR/.bin/functional-test" ]; then
+    echo "FAIL: functional-test binary not found at $PROJECT_DIR/.bin/functional-test"
+    exit 1
+  fi
+
+  # Run all functional scenarios.
+  export FTEST_API_URL FTEST_OCI_URL FTEST_OCI_CERT_PATH
+  export FTEST_ADMIN_SUBJECT FTEST_ADMIN_USER
+
+  "$PROJECT_DIR/.bin/functional-test"
+
+debug: |
+  snap logs charm-registry.charm-registry -n 100 || true
+  snap services charm-registry || true
+  curl -sf http://localhost:8080/healthz || true
+  curl -sf http://localhost:8080/readyz || true

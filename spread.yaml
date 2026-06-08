@@ -1,0 +1,39 @@
+project: charm-registry-summary
+
+backends:
+  lxd:
+    systems:
+      - ubuntu-24.04-amd64
+  qemu:
+    systems:
+      - ubuntu-24.04-amd64
+
+path: /home/test/charm-registry
+
+environment:
+  PROJECT_DIR: /home/test/charm-registry
+  SNAP_NAME: charm-registry
+  FTEST_API_URL: "http://localhost:8080"
+  FTEST_OCI_URL: "https://127.0.0.1:5000"
+  FTEST_OCI_CERT_PATH: "/var/snap/charm-registry/common/certs/oci.crt"
+  FTEST_ADMIN_SUBJECT: admin
+  FTEST_ADMIN_USER: admin
+
+prepare: |
+  # Install Go for building the functional-test binary
+  snap install go --classic --channel=1.26/stable
+
+restore: |
+  snap remove --purse charm-registry || true
+
+suites:
+  tests/spread/charm-registry:
+    summary: "charm-registry snap integration tests"
+    systems: [ubuntu-24.04-amd64]
+    prepare: |
+      # Build the functional-test binary from source
+      cd "$PROJECT_DIR"
+      go build -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
+
+    restore: |
+      rm -f "$PROJECT_DIR/.bin/functional-test"
