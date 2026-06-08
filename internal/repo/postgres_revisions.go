@@ -41,7 +41,7 @@ func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload,
 	if err != nil {
 		return core.Upload{}, err
 	}
-	return uploadFromSQLC(upload)
+	return uploadRowFromSQLC(upload)
 }
 
 func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision *int, apiErrors []core.APIError) error {

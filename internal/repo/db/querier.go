@@ -6,6 +6,8 @@ package repo
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -29,6 +31,7 @@ type Querier interface {
 	DeleteResourceDefinition(ctx context.Context, id string) (int64, error)
 	DeleteResourceRevision(ctx context.Context, arg DeleteResourceRevisionParams) (int64, error)
 	DeleteRevision(ctx context.Context, arg DeleteRevisionParams) (int64, error)
+	DeleteStaleUploads(ctx context.Context, dollar_1 pgtype.Interval) (int64, error)
 	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)
 	FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error)
@@ -41,7 +44,7 @@ type Querier interface {
 	GetResourceDefinition(ctx context.Context, arg GetResourceDefinitionParams) (ResourceDefinition, error)
 	GetResourceRevision(ctx context.Context, arg GetResourceRevisionParams) (ResourceRevision, error)
 	GetRevisionByNumber(ctx context.Context, arg GetRevisionByNumberParams) (Revision, error)
-	GetUpload(ctx context.Context, id string) (Upload, error)
+	GetUpload(ctx context.Context, id string) (GetUploadRow, error)
 	ListActiveStoreTokens(ctx context.Context, accountID string) ([]ListActiveStoreTokensRow, error)
 	ListAllStoreTokens(ctx context.Context, accountID string) ([]ListAllStoreTokensRow, error)
 	ListCharmhubSyncRules(ctx context.Context) ([]ListCharmhubSyncRulesRow, error)
