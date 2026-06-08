@@ -150,7 +150,14 @@ services:
       CHARM_REGISTRY_ADMIN_SUBJECTS: ""
       CHARM_REGISTRY_ADMIN_EMAILS: ""
       CHARM_REGISTRY_ADMIN_USERNAMES: ""
+      # Insecure dev auth is enabled for auth-free integration test paths.
+      # Rate limiting is disabled (limit=0) so the integration test suite,
+      # which runs many sequential requests from localhost, doesn't hit 429.
       CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+      CHARM_REGISTRY_IP_RATE_LIMIT: "0"
+      CHARM_REGISTRY_IP_RATE_WINDOW: "1m"
+      CHARM_REGISTRY_TOKEN_RATE_LIMIT: "0"
+      CHARM_REGISTRY_TOKEN_RATE_WINDOW: "1m"
       CHARM_REGISTRY_CHARMHUB_URL: "https://api.charmhub.io"
       CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL: "15m"
       CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT: "10s"

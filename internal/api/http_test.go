@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,10 @@ var testCfg = config.Config{
 	OCISecretKey:          "test-oci-secret",
 	MaxJSONBodyBytes:      1 << 20,
 	MaxUploadBytes:        64 << 20,
+	IPRateLimit:           30,
+	IPRateWindow:          time.Minute,
+	TokenRateLimit:        5,
+	TokenRateWindow:       time.Minute,
 }
 
 func TestRootResponseIncludesSecurityHeaders(t *testing.T) {

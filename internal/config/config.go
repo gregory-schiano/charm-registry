@@ -80,6 +80,11 @@ type Config struct {
 	CharmhubMaxResponseBytes int64
 	CharmhubMaxArtifactBytes int64
 	OCIMaxManifestBytes      int64
+
+	IPRateLimit   int
+	IPRateWindow  time.Duration
+	TokenRateLimit   int
+	TokenRateWindow  time.Duration
 }
 
 type parsedConfig struct {
@@ -101,6 +106,11 @@ type parsedConfig struct {
 	charmhubMaxResponseBytes int64
 	charmhubMaxArtifactBytes int64
 	ociMaxManifestBytes      int64
+
+	ipRateLimit    int
+	ipRateWindow   time.Duration
+	tokenRateLimit int
+	tokenRateWindow time.Duration
 }
 
 type parsedByteLimits struct {
@@ -194,6 +204,11 @@ func Load() (Config, error) {
 		CharmhubMaxResponseBytes: parsed.charmhubMaxResponseBytes,
 		CharmhubMaxArtifactBytes: parsed.charmhubMaxArtifactBytes,
 		OCIMaxManifestBytes:      parsed.ociMaxManifestBytes,
+
+		IPRateLimit:      parsed.ipRateLimit,
+		IPRateWindow:     parsed.ipRateWindow,
+		TokenRateLimit:   parsed.tokenRateLimit,
+		TokenRateWindow:  parsed.tokenRateWindow,
 	}
 
 	return validateConfig(cfg)
@@ -253,6 +268,23 @@ func loadParsedConfig() (parsedConfig, error) {
 		return parsedConfig{}, err
 	}
 
+	ipRateLimit, err := envInt("CHARM_REGISTRY_IP_RATE_LIMIT", 30)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	ipRateWindow, err := envDuration("CHARM_REGISTRY_IP_RATE_WINDOW", time.Minute)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	tokenRateLimit, err := envInt("CHARM_REGISTRY_TOKEN_RATE_LIMIT", 5)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	tokenRateWindow, err := envDuration("CHARM_REGISTRY_TOKEN_RATE_WINDOW", time.Minute)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+
 	return parsedConfig{
 		s3UsePathStyle:          s3UsePathStyle,
 		s3DisableTLS:            s3DisableTLS,
@@ -272,6 +304,11 @@ func loadParsedConfig() (parsedConfig, error) {
 		charmhubMaxResponseBytes: byteLimits.charmhubMaxResponseBytes,
 		charmhubMaxArtifactBytes: byteLimits.charmhubMaxArtifactBytes,
 		ociMaxManifestBytes:      byteLimits.ociMaxManifestBytes,
+
+		ipRateLimit:     ipRateLimit,
+		ipRateWindow:    ipRateWindow,
+		tokenRateLimit:  tokenRateLimit,
+		tokenRateWindow: tokenRateWindow,
 	}, nil
 }
 

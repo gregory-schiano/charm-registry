@@ -52,8 +52,8 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 		svc:          svc,
 		sync:         syncSvc,
 		auth:         authenticator,
-		tokenLimiter: newTokenIssueLimiter(5, time.Minute),
-		ipLimiter:    newIPRateLimiter(30, time.Minute), // 30 requests per minute per IP
+		tokenLimiter: newTokenIssueLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
+		ipLimiter:    newIPRateLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
 	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
@@ -144,6 +144,10 @@ func newTokenIssueLimiter(limit int, window time.Duration) *tokenIssueLimiter {
 
 func (l *tokenIssueLimiter) Allow(key string) bool {
 	if l == nil || key == "" {
+		return true
+	}
+	// A limit <= 0 means rate limiting is disabled (unlimited requests).
+	if l.limit <= 0 {
 		return true
 	}
 	l.mu.Lock()
@@ -435,6 +439,10 @@ func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
 }
 
 func (l *ipRateLimiter) Allow(ip string) bool {
+	// A limit <= 0 means rate limiting is disabled (unlimited requests).
+	if l.limit <= 0 {
+		return true
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
