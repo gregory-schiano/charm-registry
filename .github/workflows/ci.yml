@@ -17,7 +17,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -43,7 +43,7 @@ jobs:
     name: Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -59,7 +59,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -78,23 +78,60 @@ jobs:
             exit 1
           fi
 
-      - name: Upload coverage
-        if: github.event_name == 'pull_request'
+      - name: Upload coverage artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage
           path: coverage.out
+          retention-days: 7
 
   build:
     name: Build
     runs-on: ubuntu-latest
     needs: [lint, security, test]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Build binary
+      - name: Build binaries
         run: make build
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: charm-registry-binaries
+          path: .bin/
+          retention-days: 7
+
+      - name: Build Docker image
+        run: docker build --tag charm-registry:ci --file Dockerfile .
+
+      - name: Inspect Docker image
+        run: |
+          IMAGE_ID=$(docker inspect --format='{{index .Id}}' charm-registry:ci)
+          echo "Built image digest: ${IMAGE_ID}"
+          echo "image_digest=${IMAGE_ID}" >> "$GITHUB_ENV"
+
+  # Required status check gate — all lint/unit/security/build must pass
+  # before a PR can merge.  Integration tests run separately on schedule
+  # or manual dispatch (see integration.yml) because they need Docker
+  # Compose services.
+  required-status-checks:
+    name: Required status checks
+    runs-on: ubuntu-latest
+    needs: [lint, security, test, build]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.security.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.build.result }}" != "success" ]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required status checks passed."

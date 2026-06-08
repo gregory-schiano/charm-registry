@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 SHARED_DOCKER_NETWORK ?= charm-registry-shared
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check up down generate-cert install-cert install-k8s-cert
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check integration-test up down generate-cert install-cert install-k8s-cert
 
 help:
 	@printf "%s\n" \
@@ -18,6 +18,7 @@ help:
 		"make gosec        - run gosec static analysis" \
 		"make sqlc-diff    - verify sqlc-generated code is up to date" \
 		"make audit        - run lint, tests, and security checks" \
+		"make integration-test - run integration tests against a live stack (requires Docker)" \
 		"make build        - build the registry and admin CLI binaries" \
 		"make run          - run the registry locally" \
 		"make generate-cert - generate the local embedded OCI TLS certificate" \
@@ -97,6 +98,13 @@ sqlc-diff:
 audit: tidy vet lint test vuln gosec
 
 check: fmt audit
+
+# Integration tests: run against a live charm-registry stack started via
+# Docker Compose.  Requires Docker and the compose stack to be running
+# (`make up`), or the CI workflow will start it for you.
+# The -tags=integration flag selects only tests in tests/integration/.
+integration-test:
+	$(GO) test -tags=integration -count=1 ./tests/integration/...
 
 generate-cert:
 	bash ./deploy/oci/generate-certs.sh

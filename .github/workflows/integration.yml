@@ -1,0 +1,77 @@
+name: Integration Tests
+
+on:
+  # Run on pushes to main after CI passes, and on PRs against main
+  # when integration tests are explicitly requested.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual dispatch for any branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.2"
+  SHARED_DOCKER_NETWORK: charm-registry-shared
+
+jobs:
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Create shared Docker network
+        run: docker network inspect ${{ env.SHARED_DOCKER_NETWORK }} >/dev/null 2>&1 || docker network create ${{ env.SHARED_DOCKER_NETWORK }}
+
+      - name: Generate OCI TLS certificates
+        run: bash ./deploy/oci/generate-certs.sh
+
+      - name: Start compose stack
+        run: docker compose up --build -d postgres charm-registry
+        env:
+          CHARM_REGISTRY_S3_BUCKET: charm-registry-blobs
+          CHARM_REGISTRY_S3_ACCESS_KEY_ID: registry-app
+          CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: registry-app-secret
+          CHARM_REGISTRY_OCI_S3_BUCKET: charm-registry-oci
+          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+          CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
+
+      - name: Wait for service health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/v1/health >/dev/null 2>&1; then
+              echo "Service is healthy."
+              exit 0
+            fi
+            echo "Waiting for service... attempt $i/30"
+            sleep 2
+          done
+          echo "::error::Service did not become healthy within 60 seconds"
+          docker compose logs charm-registry
+          exit 1
+
+      - name: Run integration tests
+        run: make integration-test
+        env:
+          CHARM_REGISTRY_URL: http://localhost:8080
+          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== charm-registry logs ==="
+          docker compose logs charm-registry
+          echo "=== postgres logs ==="
+          docker compose logs postgres
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose down -v
