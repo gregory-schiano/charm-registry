@@ -146,8 +146,9 @@ func (l *tokenIssueLimiter) Allow(key string) bool {
 	if l == nil || key == "" {
 		return true
 	}
-	// A limit <= 0 means rate limiting is disabled (unlimited requests).
-	if l.limit <= 0 {
+	// A limit of 0 means rate limiting is disabled (unlimited requests).
+	// Negative limits are rejected by config validation.
+	if l.limit == 0 {
 		return true
 	}
 	l.mu.Lock()
@@ -439,8 +440,9 @@ func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
 }
 
 func (l *ipRateLimiter) Allow(ip string) bool {
-	// A limit <= 0 means rate limiting is disabled (unlimited requests).
-	if l.limit <= 0 {
+	// A limit of 0 means rate limiting is disabled (unlimited requests).
+	// Negative limits are rejected by config validation.
+	if l.limit == 0 {
 		return true
 	}
 	l.mu.Lock()

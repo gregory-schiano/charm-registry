@@ -370,6 +370,19 @@ func validateConfig(cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES must be greater than zero")
 	}
 
+	if cfg.IPRateLimit < 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_LIMIT must be >= 0 (0 means unlimited)")
+	}
+	if cfg.TokenRateLimit < 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_LIMIT must be >= 0 (0 means unlimited)")
+	}
+	if cfg.IPRateWindow <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_WINDOW must be greater than zero")
+	}
+	if cfg.TokenRateWindow <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_WINDOW must be greater than zero")
+	}
+
 	return cfg, nil
 }
 

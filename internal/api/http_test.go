@@ -201,6 +201,44 @@ func TestIssueTokenRateLimitedPerAccount(t *testing.T) {
 
 }
 
+func TestIPRateLimiterZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
+	limiter := newIPRateLimiter(0, time.Minute)
+	for i := 0; i < 1000; i++ {
+		assert.True(t, limiter.Allow("1.2.3.4"), "limit=0 should allow all requests")
+	}
+}
+
+func TestIPRateLimiterPositiveEnforcesLimit(t *testing.T) {
+	t.Parallel()
+	limiter := newIPRateLimiter(3, time.Minute)
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.False(t, limiter.Allow("1.2.3.4"), "should reject after exceeding limit")
+	// Different IP should still be allowed.
+	assert.True(t, limiter.Allow("5.6.7.8"))
+}
+
+func TestTokenIssueLimiterZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
+	limiter := newTokenIssueLimiter(0, time.Minute)
+	for i := 0; i < 1000; i++ {
+		assert.True(t, limiter.Allow("alice"), "limit=0 should allow all requests")
+	}
+}
+
+func TestTokenIssueLimiterPositiveEnforcesLimit(t *testing.T) {
+	t.Parallel()
+	limiter := newTokenIssueLimiter(3, time.Minute)
+	assert.True(t, limiter.Allow("alice"))
+	assert.True(t, limiter.Allow("alice"))
+	assert.True(t, limiter.Allow("alice"))
+	assert.False(t, limiter.Allow("alice"), "should reject after exceeding limit")
+	// Different account should still be allowed.
+	assert.True(t, limiter.Allow("bob"))
+}
+
 func TestExchangeToken(t *testing.T) {
 	t.Parallel()
 	handler := newTestHandler(t, testCfg)

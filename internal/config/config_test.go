@@ -602,3 +602,75 @@ func TestLoadRequiresCompleteOCITLSConfig(t *testing.T) {
 	assert.ErrorContains(t, err, "CHARM_REGISTRY_OCI_TLS_KEY_FILE")
 
 }
+
+func TestValidateConfigRejectsNegativeIPRateLimit(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.IPRateLimit = -1
+	_, err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_IP_RATE_LIMIT must be >= 0")
+}
+
+func TestValidateConfigRejectsNegativeTokenRateLimit(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.TokenRateLimit = -1
+	_, err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_TOKEN_RATE_LIMIT must be >= 0")
+}
+
+func TestValidateConfigAcceptsZeroRateLimitsAsUnlimited(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.IPRateLimit = 0
+	cfg.TokenRateLimit = 0
+	_, err := validateConfig(cfg)
+	require.NoError(t, err)
+}
+
+func TestValidateConfigAcceptsPositiveRateLimits(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.IPRateLimit = 30
+	cfg.TokenRateLimit = 5
+	_, err := validateConfig(cfg)
+	require.NoError(t, err)
+}
+
+func TestValidateConfigRejectsZeroRateWindow(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.IPRateWindow = 0
+	_, err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_IP_RATE_WINDOW must be greater than zero")
+
+	cfg = validMinConfig()
+	cfg.TokenRateWindow = 0
+	_, err = validateConfig(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_TOKEN_RATE_WINDOW must be greater than zero")
+}
+
+func validMinConfig() Config {
+	return Config{
+		DatabaseBackend:    DatabaseBackendSQLite,
+		StorageBackend:     StorageBackendFilesystem,
+		OCIStorageBackend:  StorageBackendFilesystem,
+		SQLitePath:         "data/registry.sqlite",
+		BlobDir:            "data/blobs",
+		OCIStorageDir:      "data/oci-registry",
+		OCISecretKey:       "test-secret",
+		EnableInsecureDevAuth: true,
+		MaxArchiveFileBytes:   10 << 20,
+		CharmhubMaxResponseBytes: 4 << 20,
+		CharmhubMaxArtifactBytes: 4 << 20,
+		OCIMaxManifestBytes:     16 << 20,
+		IPRateLimit:           30,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        5,
+		TokenRateWindow:       time.Minute,
+	}
+}
