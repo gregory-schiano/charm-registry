@@ -24,6 +24,9 @@ func main() {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
+	if cfg.EnableInsecureDevAuth {
+		slog.Warn("INSECURE DEV AUTH ENABLED — not for production use")
+	}
 	application, err := app.New(ctx, cfg)
 	if err != nil {
 		slog.Error("build application", "error", err)
