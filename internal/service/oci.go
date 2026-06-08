@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -55,10 +56,15 @@ func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (c
 	)
 	provisioned, err := s.syncOCIPackage(ctx, pkg)
 	if err != nil {
+		slog.ErrorContext(ctx, "OCI package provisioning failed",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"error", err,
+		)
 		return core.Package{}, newError(
 			ErrorKindConflict,
 			"oci-provisioning-unavailable",
-			"OCI package provisioning is unavailable",
+			fmt.Sprintf("OCI package provisioning unavailable: %s", err),
 		)
 	}
 	return provisioned, nil

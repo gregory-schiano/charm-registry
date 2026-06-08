@@ -42,6 +42,7 @@ type API struct {
 	sync         syncAdminService
 	auth         *auth.Authenticator
 	tokenLimiter *tokenIssueLimiter
+	ipLimiter    *ipRateLimiter
 }
 
 // New builds the HTTP handler for the registry API.
@@ -52,6 +53,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 		sync:         syncSvc,
 		auth:         authenticator,
 		tokenLimiter: newTokenIssueLimiter(5, time.Minute),
+		ipLimiter:    newIPRateLimiter(30, time.Minute), // 30 requests per minute per IP
 	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
@@ -59,6 +61,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	router.Use(api.logRequests)
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
+	router.Use(api.rateLimit)
 	router.NotFound(api.handleNotFound)
 	router.MethodNotAllowed(api.handleMethodNotAllowed)
 
@@ -265,7 +268,7 @@ func writeCreatedJSON(w http.ResponseWriter, location string, payload any) {
 
 func writeAttachment(w http.ResponseWriter, r *http.Request, filename string, body io.ReadCloser, size int64) {
 	defer body.Close()
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(filename)+`"`)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if size >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
@@ -276,6 +279,27 @@ func writeAttachment(w http.ResponseWriter, r *http.Request, filename string, bo
 			"error", err,
 		)
 	}
+}
+
+// sanitizeFilename strips characters that could cause Content-Disposition
+// header injection (quotes, backslashes, CRLF) and replaces non-printable
+// characters with underscores.
+func sanitizeFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r == '"' || r == '\\' || r == '\r' || r == '\n':
+			return -1 // strip
+		case r < 32 || r == 0x7f:
+			return '_' // replace control chars
+		default:
+			return r
+		}
+	}, name)
+	// Truncate to a safe length.
+	if len(name) > 255 {
+		name = name[:255]
+	}
+	return name
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -382,4 +406,80 @@ func parseResourceDownloadFilename(filename string) (string, string, int, error)
 		return "", "", 0, err
 	}
 	return packageID, resourcePart[:lastUnderscore], revision, nil
+}
+
+// ipRateLimiter provides per-IP request rate limiting using a sliding window.
+// Note: this is in-memory only; in a multi-instance deployment, use a shared
+// store (Redis, etc.) instead.
+type ipRateLimiter struct {
+	mu      sync.Mutex
+	limit   int
+	window  time.Duration
+	entries map[string]*ipWindow
+}
+
+type ipWindow struct {
+	timestamps []time.Time
+}
+
+func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
+	return &ipRateLimiter{
+		limit:   limit,
+		window:  window,
+		entries: make(map[string]*ipWindow),
+	}
+}
+
+func (l *ipRateLimiter) Allow(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+	w, ok := l.entries[ip]
+	if !ok {
+		w = &ipWindow{}
+		l.entries[ip] = w
+	}
+	// Prune old entries.
+	i := 0
+	for i < len(w.timestamps) && w.timestamps[i].Before(cutoff) {
+		i++
+	}
+	w.timestamps = w.timestamps[i:]
+	if len(w.timestamps) >= l.limit {
+		return false
+	}
+	w.timestamps = append(w.timestamps, now)
+	return true
+}
+
+// Cleanup removes stale entries. Call periodically.
+func (l *ipRateLimiter) Cleanup() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-l.window)
+	for ip, w := range l.entries {
+		i := 0
+		for i < len(w.timestamps) && w.timestamps[i].Before(cutoff) {
+			i++
+		}
+		w.timestamps = w.timestamps[i:]
+		if len(w.timestamps) == 0 {
+			delete(l.entries, ip)
+		}
+	}
+}
+
+func (api *API) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			ip = strings.SplitN(forwarded, ",", 2)[0]
+		}
+		if !api.ipLimiter.Allow(ip) {
+			writeJSON(w, http.StatusTooManyRequests, newErrorListResponse("too-many-requests", "rate limit exceeded"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
