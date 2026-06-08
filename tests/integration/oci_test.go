@@ -111,11 +111,14 @@ func TestOCI05_RegistryTLSCertificateValid(t *testing.T) {
 	t.Logf("OCI registry TLS handshake succeeded, status: %d", resp.StatusCode)
 }
 
-// OCI-06: OCI registry returns Docker-Content-Digest header on blob HEAD.
+// OCI-06: OCI registry blob HEAD returns auth challenge for unauthenticated requests.
+// Per the OCI Distribution Spec, the registry must authenticate before determining
+// whether a blob exists, so an unauthenticated HEAD on any blob path returns 401
+// (with WWW-Authenticate challenge) — even for nonexistent blobs.
 func TestOCI06_RegistryBlobHEADReturnsDigest(t *testing.T) {
 	client := ociTLSClient(t)
 
-	// HEAD request on a nonexistent blob should return 404.
+	// HEAD request on a nonexistent blob without auth → registry challenges first.
 	req, err := http.NewRequest(http.MethodHead, ociRegistryURL()+"/v2/nonexistent/blobs/sha256:deadbeef", nil)
 	require.NoError(t, err)
 
@@ -123,9 +126,12 @@ func TestOCI06_RegistryBlobHEADReturnsDigest(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// 404 is expected since we haven't pushed any blobs.
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-		"expected 404 for nonexistent blob, got %d", resp.StatusCode)
+	// The auth middleware requires credentials before checking blob existence.
+	// Per OCI spec: unauthenticated requests get 401 + WWW-Authenticate challenge.
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"expected 401 auth challenge for unauthenticated blob HEAD, got %d", resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("WWW-Authenticate"), "Basic",
+		"expected WWW-Authenticate header with Basic challenge")
 }
 
 // Helper: parse OCI upload credentials response.
