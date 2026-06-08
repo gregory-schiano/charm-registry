@@ -405,10 +405,10 @@ func (c *Client) credentialSecret(username string) (string, int64) {
 
 // authMiddleware enforces per-package OCI access control before forwarding
 // requests to the distribution registry handler. For each request:
-//   1. The project name is extracted from the URL path (/v2/<project>/...).
-//   2. The corresponding package is resolved from the repository.
-//   3. The BasicAuth credentials are validated against the package's push or
-//      pull robot credentials (push for mutation, pull or push for reads).
+//  1. The project name is extracted from the URL path (/v2/<project>/...).
+//  2. The corresponding package is resolved from the repository.
+//  3. The BasicAuth credentials are validated against the package's push or
+//     pull robot credentials (push for mutation, pull or push for reads).
 //
 // Cross-package access is prevented because each package has unique robot
 // credentials — a push robot for package A will not match the credentials

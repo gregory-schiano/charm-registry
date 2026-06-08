@@ -128,10 +128,10 @@ func Load() (Config, error) {
 	ociStorageSecretKey := envFallback("CHARM_REGISTRY_OCI_S3_SECRET_KEY", "APP_OCI_S3_SECRET_KEY", envFallback("CHARM_REGISTRY_S3_SECRET_ACCESS_KEY", "S3_SECRET_KEY", ""))
 
 	cfg := Config{
-		ListenAddress: listenAddress(),
+		ListenAddress:  listenAddress(),
 		APITLSCertFile: os.Getenv("CHARM_REGISTRY_API_TLS_CERT_FILE"),
 		APITLSKeyFile:  os.Getenv("CHARM_REGISTRY_API_TLS_KEY_FILE"),
-		PublicAPIURL:  strings.TrimRight(envFallback("CHARM_REGISTRY_PUBLIC_API_URL", "APP_PUBLIC_API_URL", "http://localhost:8080"), "/"),
+		PublicAPIURL:   strings.TrimRight(envFallback("CHARM_REGISTRY_PUBLIC_API_URL", "APP_PUBLIC_API_URL", "http://localhost:8080"), "/"),
 		PublicStorageURL: strings.TrimRight(
 			envFallback("CHARM_REGISTRY_PUBLIC_STORAGE_URL", "APP_PUBLIC_STORAGE_URL", "http://localhost:8080"),
 			"/",

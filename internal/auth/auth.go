@@ -168,6 +168,7 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, raw string) (Clai
 }
 
 // HashToken returns the SHA-256 hash for a raw store token.
+//
 // Deprecated: use bcryptHashToken for new tokens.
 func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))

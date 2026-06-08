@@ -85,21 +85,7 @@ func (p *Postgres) ListStoreTokens(
 		}
 		rows = make([]sqlcdb.ListAllStoreTokensRow, len(activeRows))
 		for i, r := range activeRows {
-			rows[i] = sqlcdb.ListAllStoreTokensRow{
-				SessionID:       r.SessionID,
-				TokenHash:       r.TokenHash,
-				TokenPrefix:     r.TokenPrefix,
-				TokenHashScheme: r.TokenHashScheme,
-				AccountID:       r.AccountID,
-				Description:     r.Description,
-				Packages:        r.Packages,
-				Channels:        r.Channels,
-				Permissions:     r.Permissions,
-				ValidSince:      r.ValidSince,
-				ValidUntil:      r.ValidUntil,
-				RevokedAt:       r.RevokedAt,
-				RevokedBy:       r.RevokedBy,
-			}
+			rows[i] = sqlcdb.ListAllStoreTokensRow(r)
 		}
 		err = nil
 	}

@@ -249,7 +249,7 @@ func TestREV06_CharmDownload(t *testing.T) {
 	name := uniqueName("download-charm")
 
 	// Register, upload, and push a revision.
-	pkgID := mustRegister(t, name, auth)
+	mustRegister(t, name, auth)
 	archive := buildTestCharmArchive(t, name)
 	uploadID := mustUploadCharm(t, archive, name+".zip", auth)
 	mustPushRevision(t, name, uploadID, auth)
@@ -266,7 +266,7 @@ func TestREV06_CharmDownload(t *testing.T) {
 	mustRelease(t, name, revNum, "latest/stable", auth)
 
 	// Download the charm archive.
-	downloadURL := fmt.Sprintf("/api/v1/charms/download/%s_%d.charm", pkgID, revNum)
+	downloadURL := fmt.Sprintf("/v1/charm/%s/download/%d", name, revNum)
 	resp, err = doRequest("GET", downloadURL, "", auth)
 	require.NoError(t, err)
 	requireStatusCode(t, resp, http.StatusOK)
@@ -277,7 +277,7 @@ func TestREV06_CharmDownload(t *testing.T) {
 
 	// The downloaded archive should be a valid zip (same content as uploaded).
 	assert.NotEmpty(t, downloadedBytes, "downloaded archive should not be empty")
-	assert.Equal(t, len(archive), len(downloadedBytes), "downloaded archive size should match uploaded archive size")
+	assert.Equal(t, archive.Len(), len(downloadedBytes), "downloaded archive size should match uploaded archive size")
 }
 
 // REV-07: Unscanned upload returns upload-id.
