@@ -699,3 +699,94 @@ func TestMemoryResolveDefaultReleaseFallback(t *testing.T) {
 	assert.Equal(t, 2, release.Revision, "should fall back to any release when no latest/stable")
 
 }
+
+func TestMemoryCanViewPackageViaACL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, owner := memWithAccount(t)
+
+	_ = m.CreatePackage(ctx, core.Package{ID: "p1", Name: "priv", OwnerAccountID: owner.ID, Private: true})
+
+	// Viewer ACL entry grants view access.
+	viewer := core.Account{ID: "viewer1", Subject: "viewer1"}
+	_, _ = m.EnsureAccount(ctx, viewer)
+	m.AddACLEntry("p1", "account", "viewer1", "viewer")
+
+	canView, err := m.CanViewPackage(ctx, "p1", "viewer1")
+	require.NoError(t, err)
+	assert.True(t, canView, "viewer ACL should grant view access")
+
+	canManage, err := m.CanManagePackage(ctx, "p1", "viewer1")
+	require.NoError(t, err)
+	assert.False(t, canManage, "viewer ACL should not grant manage access")
+}
+
+func TestMemoryCanManagePackageViaACL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, owner := memWithAccount(t)
+
+	_ = m.CreatePackage(ctx, core.Package{ID: "p1", Name: "priv", OwnerAccountID: owner.ID, Private: true})
+
+	editor := core.Account{ID: "editor1", Subject: "editor1"}
+	_, _ = m.EnsureAccount(ctx, editor)
+	m.AddACLEntry("p1", "account", "editor1", "editor")
+
+	canView, err := m.CanViewPackage(ctx, "p1", "editor1")
+	require.NoError(t, err)
+	assert.True(t, canView, "editor ACL should grant view access")
+
+	canManage, err := m.CanManagePackage(ctx, "p1", "editor1")
+	require.NoError(t, err)
+	assert.True(t, canManage, "editor ACL should grant manage access")
+}
+
+func TestMemoryCanViewPackageAnonymousPrivate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	_ = m.CreatePackage(ctx, core.Package{ID: "p1", Name: "priv", OwnerAccountID: acc.ID, Private: true})
+
+	canView, err := m.CanViewPackage(ctx, "p1", "")
+	require.NoError(t, err)
+	assert.False(t, canView, "anonymous should not view private package")
+}
+
+func TestMemoryEnsureAccountRespectsCreatedAt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	acc := core.Account{ID: "a1", Subject: "sub1", CreatedAt: ts}
+
+	got, err := m.EnsureAccount(ctx, acc)
+	require.NoError(t, err)
+	assert.Equal(t, ts, got.CreatedAt, "should preserve caller-provided CreatedAt")
+}
+
+func TestMemoryEnsureAccountDefaultsCreatedAt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	acc := core.Account{ID: "a2", Subject: "sub2"}
+	got, err := m.EnsureAccount(ctx, acc)
+	require.NoError(t, err)
+	assert.False(t, got.CreatedAt.IsZero(), "should default CreatedAt to now when zero")
+}
+
+func TestMemoryResolveDefaultReleasePicksHighestRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	_ = m.CreatePackage(ctx, core.Package{ID: "p1", Name: "charm", OwnerAccountID: acc.ID})
+	_ = m.ReplaceRelease(ctx, "p1", core.Release{Channel: "latest/edge", Revision: 5})
+	_ = m.ReplaceRelease(ctx, "p1", core.Release{Channel: "latest/candidate", Revision: 3})
+
+	release, err := m.ResolveDefaultRelease(ctx, "p1")
+	require.NoError(t, err)
+	assert.Equal(t, 5, release.Revision, "fallback should pick highest revision")
+}

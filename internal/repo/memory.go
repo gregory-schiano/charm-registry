@@ -11,6 +11,13 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
+// aclEntry mirrors the package_acl table row for in-memory access control.
+type aclEntry struct {
+	PrincipalType string
+	PrincipalID   string
+	Role          string // "viewer", "editor", or "owner"
+}
+
 type Memory struct {
 	mu                sync.RWMutex
 	accounts          map[string]core.Account
@@ -18,6 +25,7 @@ type Memory struct {
 	tokens            map[string]core.StoreToken
 	packages          map[string]core.Package
 	packagesByID      map[string]core.Package
+	acl               map[string][]aclEntry // packageID → ACL entries
 	uploads           map[string]core.Upload
 	revisions         map[string][]core.Revision
 	resourceDefs      map[string]map[string]core.ResourceDefinition
@@ -38,6 +46,7 @@ func NewMemory() *Memory {
 		tokens:            map[string]core.StoreToken{},
 		packages:          map[string]core.Package{},
 		packagesByID:      map[string]core.Package{},
+		acl:               map[string][]aclEntry{},
 		uploads:           map[string]core.Upload{},
 		revisions:         map[string][]core.Revision{},
 		resourceDefs:      map[string]map[string]core.ResourceDefinition{},
@@ -76,7 +85,11 @@ func (m *Memory) EnsureAccount(_ context.Context, account core.Account) (core.Ac
 		m.accountsByID[existing.ID] = existing
 		return existing, nil
 	}
-	account.CreatedAt = time.Now().UTC()
+	// Respect caller-provided CreatedAt to match Postgres behaviour;
+	// only default to now if the caller left it zero.
+	if account.CreatedAt.IsZero() {
+		account.CreatedAt = time.Now().UTC()
+	}
 	m.accounts[account.Subject] = account
 	m.accountsByID[account.ID] = account
 	return account, nil
@@ -279,7 +292,20 @@ func (m *Memory) CanViewPackage(_ context.Context, packageID, accountID string) 
 	if !ok {
 		return false, ErrNotFound
 	}
-	return !pkg.Private || pkg.OwnerAccountID == accountID, nil
+	// Public packages are visible to everyone.
+	if !pkg.Private {
+		return true, nil
+	}
+	// Anonymous users cannot see private packages.
+	if accountID == "" {
+		return false, nil
+	}
+	// Owner can always view.
+	if pkg.OwnerAccountID == accountID {
+		return true, nil
+	}
+	// Check ACL for viewer/editor/owner roles.
+	return m.hasACLRole(packageID, accountID, "viewer"), nil
 }
 
 // CanManagePackage is part of the [Repository] interface.
@@ -290,7 +316,38 @@ func (m *Memory) CanManagePackage(_ context.Context, packageID, accountID string
 	if !ok {
 		return false, ErrNotFound
 	}
-	return pkg.OwnerAccountID == accountID, nil
+	// Owner can always manage.
+	if pkg.OwnerAccountID == accountID {
+		return true, nil
+	}
+	// Check ACL for editor/owner roles.
+	return m.hasACLRole(packageID, accountID, "editor"), nil
+}
+
+// hasACLRole returns true if accountID has an ACL entry with at least the
+// specified minimum role on the given package. Role hierarchy: viewer < editor < owner.
+func (m *Memory) hasACLRole(packageID, accountID, minRole string) bool {
+	roleRank := map[string]int{"viewer": 1, "editor": 2, "owner": 3}
+	minRank := roleRank[minRole]
+	for _, entry := range m.acl[packageID] {
+		if entry.PrincipalID == accountID && roleRank[entry.Role] >= minRank {
+			return true
+		}
+	}
+	return false
+}
+
+// AddACLEntry adds a package_acl entry for testing. This is a test-only
+// convenience that mirrors what the Postgres implementation stores in the
+// package_acl table; it is not part of the [Repository] interface.
+func (m *Memory) AddACLEntry(packageID, principalType, principalID, role string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.acl[packageID] = append(m.acl[packageID], aclEntry{
+		PrincipalType: principalType,
+		PrincipalID:   principalID,
+		Role:          role,
+	})
 }
 
 // CreateTracks is part of the [Repository] interface.
@@ -757,8 +814,18 @@ func (m *Memory) ResolveDefaultRelease(_ context.Context, packageID string) (cor
 	if latestStable != nil {
 		return *latestStable, nil
 	}
+	// No stable release found; fall back to the release with the
+	// highest revision number across all channels, matching Postgres
+	// behaviour which orders by revision descending.
+	var best *core.Release
 	for _, release := range releases {
-		return release, nil
+		if best == nil || release.Revision > best.Revision {
+			candidate := release
+			best = &candidate
+		}
+	}
+	if best != nil {
+		return *best, nil
 	}
 	return core.Release{}, ErrNotFound
 }
