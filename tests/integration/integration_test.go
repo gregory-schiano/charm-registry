@@ -14,8 +14,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Compose lifecycle (up/down) is handled by the Makefile.
-	// This TestMain just runs the tests normally.
+	// Service lifecycle is handled externally by the deployment under test.
+	// This TestMain just runs endpoint-driven tests normally.
 	os.Exit(m.Run())
 }
 

@@ -4,7 +4,7 @@
 // admin credentials, and OCI registry endpoint via environment variables or
 // the Config struct.
 //
-// No helper in this package invokes Docker or Docker Compose.
+// No helper in this package manages local service orchestration.
 package functional
 
 import (

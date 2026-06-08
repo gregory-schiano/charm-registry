@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rock-smoke-test.sh — Inspect and validate a .rock OCI archive without Docker.
+# rock-smoke-test.sh — Inspect and validate a .rock OCI archive.
 #
 # Usage:
 #   ./scripts/rock-smoke-test.sh [path-to-rock]

@@ -128,10 +128,10 @@ If pushing the rock to a Harbor registry instead of GHCR:
 4. Trigger the release with `rock_registry` set to your Harbor instance
    (e.g. `harbor.example.com/myproject`)
 
-## Rock Publishing (skopeo, no Docker)
+## Rock Publishing (skopeo)
 
 The rock is published using `skopeo copy` directly from the `.rock` OCI archive.
-No Docker daemon, Dockerfile, or docker login-action is used.
+Publishing uses `skopeo` directly against the OCI registry; no daemon or GitHub container-login action is required.
 
 ```
 skopeo copy oci-archive:charm-registry_*.rock docker://ghcr.io/<org>/<repo>:<tag>
@@ -169,7 +169,7 @@ charmcraft status charm-registry
 # Inspect the manifest
 skopeo inspect docker://ghcr.io/<org>/charm-registry:<tag>
 
-# Pull and verify (no Docker needed)
+# Pull and verify with skopeo
 skopeo copy docker://ghcr.io/<org>/charm-registry:<tag> oci-archive:local.rock
 ```
 

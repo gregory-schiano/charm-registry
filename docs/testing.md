@@ -49,7 +49,7 @@ go test -fuzz=FuzzParseMacaroon ./internal/auth/
 
 ## Functional test harness
 
-The shared functional test harness (`cmd/functional-test/` and `tests/functional/`) runs endpoint-driven scenarios against any deployed instance — Juju charm, snap, or local process. No Docker needed.
+The shared functional test harness (`cmd/functional-test/` and `tests/functional/`) runs endpoint-driven scenarios against any deployed instance — Juju charm, snap, or local process.
 
 ### What it covers
 

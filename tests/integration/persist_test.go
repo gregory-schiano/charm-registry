@@ -12,10 +12,9 @@ import (
 
 // PERSIST-01: Data survives service restart.
 // This test verifies that registered packages and tokens persist across
-// a charm-registry container restart. It requires the compose stack to be
-// restarted between the two phases; this is typically orchestrated by the
-// Makefile (stop the charm-registry-itest container, start it again, re-run
-// the "verify" subset).
+// a charm-registry service restart. A full restart check is orchestrated by
+// the deployment-specific suite (Juju unit restart, snap restart, or local
+// process manager restart), then re-runs the verification subset.
 //
 // When run as a single go test invocation, this test can only verify that
 // data written earlier in the same session is still readable. A full restart

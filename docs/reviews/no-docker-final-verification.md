@@ -66,18 +66,12 @@ No Makefile target, CI job, or deployment script relies on Docker or Docker Comp
 **skopeo transport (release.yml):**
 - `docker://ghcr.io/...` — OCI image transport protocol scheme. skopeo uses this to push/pull to container registries. Not Docker daemon.
 
-**Historical comments (.env.example, generate-certs.sh, wait-for-healthy.sh):**
-- References to "Docker host", "compose stack" — contextual documentation for existing deployment patterns. Superseded by rock/snap/jubilant/spread.
-
 **Auth format comment (service/resources.go):**
 - "Docker-style auth blob" — describes the JSON credential format expected by Harbor/Charmhub. Refers to format, not Docker daemon usage.
 
 **Design documents (docs/plans/):**
 - `ci-release-design.md` — Original Docker-based design. Now superseded by T07 (CI artifacts) and T08 (release publishing).
 - `integration-test-suite.md` — Original Compose-based test plan. Superseded by T05 (Jubilant) and T06 (spread).
-
-**Deployment docs (docs/deployment.md):**
-- "rock replaces the previous Dockerfile-based image path" — correct informational statement about the migration.
 
 ### Forbidden Patterns Check
 

@@ -4,7 +4,7 @@
 # run the shared Go functional-test binary, and verify restart/persistence
 # behaviour through Juju unit reschedule.
 #
-# No Docker or Docker Compose references anywhere in this suite.
+# This suite is Juju-native and does not manage an external local stack.
 #
 # Usage:
 #   make charm-integration-test

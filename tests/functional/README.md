@@ -2,7 +2,7 @@
 
 Endpoint-driven functional tests for charm-registry that run against any
 deployed instance — Juju charm, snap package, or local process — without
-invoking Docker or Docker Compose.
+invoking a local container-stack orchestrator.
 
 ## Overview
 
@@ -82,7 +82,7 @@ make functional-test
 
 ## Design decisions
 
-- **No Docker/Compose**: Every helper targets an externally provided endpoint.
+- **Endpoint-only**: Every helper targets an externally provided endpoint.
   Service lifecycle (start, restart, persistence) is the responsibility of the
   orchestrator-specific suite (charm or snap), not this package.
 - **No test framework dependency in scenarios**: Scenario functions return

@@ -154,8 +154,8 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # ── OCI rock (replaces Docker container image build) ─────────────
-  # The rock is built via rockcraft.yaml (no Dockerfile).
+  # ── OCI rock ────────────────────────────────────────────────────
+  # The rock is built via rockcraft.yaml.
   # Publication to the OCI registry happens in publish-rock.
 
   build-rock:

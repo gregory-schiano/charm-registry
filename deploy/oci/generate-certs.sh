@@ -66,8 +66,7 @@ openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
 	-addext "subjectAltName=${san}" >/dev/null 2>&1
 
 chmod 0644 "${CERT_DIR}/oci.crt"
-# The compose image runs as distroless nonroot (uid/gid 65532), while the
-# generated files are owned by the host user. Restrict the private key to
+# Generated files are owned by the local user. Restrict the private key to
 # owner + group; production deployments should mount a tighter secret.
 chmod 0640 "${CERT_DIR}/oci.key"
 printf '%s\n' "${unique_hosts}" >"${HOSTS_FILE}"

@@ -47,8 +47,7 @@ spread -v ./tests/spread/...
 | `FTEST_ADMIN_SUBJECT` | `admin` | Dev-auth subject |
 | `FTEST_ADMIN_USER` | `admin` | Dev-auth username |
 
-## No Docker
+## Native snap test flow
 
-This suite does not use Docker or Docker Compose at any point. The snap
-is installed directly on the spread VM with `snap install --dangerous`,
+The snap is installed directly on the spread VM with `snap install --dangerous`,
 and the service runs as a systemd unit managed by snapd.

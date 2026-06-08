@@ -121,7 +121,7 @@ The snap is currently `grade: devel`, which blocks publishing to the stable chan
 
 ## Rock (OCI image)
 
-A Rockcraft-built OCI image for Kubernetes and other container orchestration platforms. The rock replaces the previous Dockerfile-based image path — it is built with `rockcraft pack`, not `docker build`.
+A Rockcraft-built OCI image for Kubernetes and other container orchestration platforms. The rock is built with `rockcraft pack`.
 
 ### Build
 

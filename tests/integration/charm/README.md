@@ -76,7 +76,7 @@ cd charm && tox run -e integration
 
 ## Design Decisions
 
-- **No Docker/Compose**: All deployment is Juju-native. The Go functional-test
+- **Juju-native deployment**: The Go functional-test
   binary runs as a separate process, not inside any container.
 - **Session-scoped deployment**: The charm is deployed once per pytest session.
   Tests share the same running model to avoid repeated pack/deploy overhead.
