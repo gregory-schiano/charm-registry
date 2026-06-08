@@ -21,7 +21,7 @@ type Download struct {
 	HashSHA256  string `json:"hash-sha-256,omitempty"`
 	HashSHA384  string `json:"hash-sha-384,omitempty"`
 	HashSHA512  string `json:"hash-sha-512,omitempty"`
-	HashSHA3384 string `json:"hash-sha3-384,omitempty"`
+	HashSHA3384 string `json:"hash-sha3-384,omitempty"` // JSON key matches Charmhub API; actual algorithm is SHA-384
 }
 
 // ResourceRevision describes a specific uploaded revision of a package resource.
@@ -38,7 +38,7 @@ type ResourceRevision struct {
 	SHA256          string    `json:"hash-sha-256,omitempty"`
 	SHA384          string    `json:"hash-sha-384,omitempty"`
 	SHA512          string    `json:"hash-sha-512,omitempty"`
-	SHA3384         string    `json:"hash-sha3-384,omitempty"`
+	SHA3384         string    `json:"hash-sha3-384,omitempty"` // JSON key matches Charmhub API; actual algorithm is SHA-384
 	ObjectKey       string    `json:"-"`
 	Bases           []Base    `json:"bases,omitempty"`
 	Architectures   []string  `json:"architectures,omitempty"`

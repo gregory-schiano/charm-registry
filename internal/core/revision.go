@@ -26,7 +26,7 @@ type Revision struct {
 	CreatedBy    string                         `json:"created-by"`
 	Size         int64                          `json:"size"`
 	SHA256       string                         `json:"sha256,omitempty"`
-	SHA384       string                         `json:"sha3-384,omitempty"`
+	SHA384       string                         `json:"sha3-384,omitempty"` // JSON key "sha3-384" matches Charmhub API; actual algorithm is SHA-384
 	ObjectKey    string                         `json:"-"`
 	MetadataYAML string                         `json:"metadata-yaml,omitempty"`
 	ConfigYAML   string                         `json:"config-yaml,omitempty"`
