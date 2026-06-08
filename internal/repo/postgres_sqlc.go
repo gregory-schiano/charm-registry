@@ -202,28 +202,6 @@ func releaseFromParts(
 	return release, nil
 }
 
-func uploadFromSQLC(item sqlcdb.Upload) (core.Upload, error) {
-	upload := core.Upload{
-		ID:        item.ID,
-		Filename:  item.Filename,
-		ObjectKey: item.ObjectKey,
-		Size:      item.Size,
-		SHA256:    item.Sha256,
-		SHA384:    item.Sha384,
-		Status:    item.Status,
-		Kind:      item.Kind,
-		CreatedAt: item.CreatedAt,
-		Revision:  fromInt32Ptr(item.Revision),
-	}
-	if item.ApprovedAt.Valid {
-		upload.ApprovedAt = &item.ApprovedAt.Time
-	}
-	if err := unmarshalJSON(item.Errors, &upload.Errors); err != nil {
-		return core.Upload{}, fmt.Errorf("unmarshal upload errors: %w", err)
-	}
-	return upload, nil
-}
-
 func uploadRowFromSQLC(item sqlcdb.GetUploadRow) (core.Upload, error) {
 	upload := core.Upload{
 		ID:        item.ID,
