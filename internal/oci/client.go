@@ -49,6 +49,8 @@ const (
 
 var keyDerivationSalt = []byte("charm-registry/oci-secret/v1")
 
+const ociKeyVersion = "v1"
+
 type Client struct {
 	handler          http.Handler
 	driver           storagedriver.StorageDriver
@@ -106,10 +108,14 @@ func New(ctx context.Context, cfg config.Config, repository repo.PackageRepo) (*
 		projectPrefix:    cfg.OCIProjectPrefix,
 		pullRobotPrefix:  cfg.OCIPullRobotPrefix,
 		pushRobotPrefix:  cfg.OCIPushRobotPrefix,
-		secretKey:        deriveKey(cfg.OCISecretKey),
 		transport:        transport,
 		maxManifestBytes: cfg.OCIMaxManifestBytes,
 	}
+	secretKey, err := deriveKey(cfg.OCISecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("cannot derive OCI secret key: %w", err)
+	}
+	client.secretKey = secretKey
 	client.handler = client.authMiddleware(registry)
 	return client, nil
 }
@@ -533,12 +539,12 @@ func registryHost(raw string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(raw), "https://"), "http://")
 }
 
-func deriveKey(value string) []byte {
+func deriveKey(value string) ([]byte, error) {
 	key, err := pbkdf2.Key(sha256.New, value, keyDerivationSalt, keyDerivationIterations, keyDerivationLength)
 	if err != nil {
-		panic(fmt.Sprintf("cannot derive OCI secret key: %v", err))
+		return nil, fmt.Errorf("cannot derive OCI secret key: %w", err)
 	}
-	return key
+	return key, nil
 }
 
 func (c *Client) encrypt(secret string) (string, error) {
@@ -555,10 +561,19 @@ func (c *Client) encrypt(secret string) (string, error) {
 		return "", err
 	}
 	sealed := aead.Seal(nonce, nonce, []byte(secret), nil)
-	return base64.RawStdEncoding.EncodeToString(sealed), nil
+	encoded := base64.RawStdEncoding.EncodeToString(sealed)
+	return ociKeyVersion + ":" + encoded, nil
 }
 
 func (c *Client) decrypt(encrypted string) (string, error) {
+	// Strip key version prefix if present.
+	if idx := strings.Index(encrypted, ":"); idx >= 0 {
+		prefix := encrypted[:idx]
+		if prefix != ociKeyVersion {
+			return "", fmt.Errorf("cannot decrypt OCI secret: unsupported key version %q (current: %q)", prefix, ociKeyVersion)
+		}
+		encrypted = encrypted[idx+1:]
+	}
 	raw, err := base64.RawStdEncoding.DecodeString(encrypted)
 	if err != nil {
 		return "", err

@@ -53,7 +53,8 @@ func TestCredentialsDecryptGeneratedCredential(t *testing.T) {
 func TestDeriveKeyUsesPBKDF2(t *testing.T) {
 	t.Parallel()
 
-	key := deriveKey("test-secret")
+	key, err := deriveKey("test-secret")
+	require.NoError(t, err)
 	rawSHA := sha256.Sum256([]byte("test-secret"))
 
 	assert.Len(t, key, 32)
@@ -258,6 +259,6 @@ func testClient(repository repo.Repository) *Client {
 		projectPrefix:    "charm",
 		pullRobotPrefix:  "pull",
 		pushRobotPrefix:  "push",
-		secretKey:        deriveKey("test-secret"),
+		secretKey:        func() []byte { k, _ := deriveKey("test-secret"); return k }(),
 	}
 }
