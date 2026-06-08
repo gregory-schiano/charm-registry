@@ -537,6 +537,10 @@ func newError(kind service.ErrorKind, code, message string) error {
 	return &service.Error{Kind: kind, Code: code, Message: message}
 }
 
+func newErrorWithCause(kind service.ErrorKind, code, message string, cause error) error {
+	return &service.Error{Kind: kind, Code: code, Message: message, Cause: cause}
+}
+
 func translateRepoError(err error, message string) error {
 	switch {
 	case err == nil:

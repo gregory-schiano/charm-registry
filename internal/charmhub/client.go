@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -408,9 +409,42 @@ func (c *Client) RefreshChannel(ctx context.Context, name, channel string, base 
 }
 
 func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, error) {
+	parsedURL, err := url.Parse(artifactURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid artifact URL: %w", err)
+	}
+	if parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("artifact URL must use https, got %q", parsedURL.Scheme)
+	}
+	// Block RFC 1918 private addresses to prevent SSRF.
+	if isPrivateHost(parsedURL.Hostname()) {
+		return nil, fmt.Errorf("artifact URL refers to private/reserved address: %s", parsedURL.Hostname())
+	}
+	// Validate that the artifact URL is under the configured Charmhub base URL
+	// or a known allowed domain. This prevents a compromised upstream from
+	// redirecting to internal services.
+	if !isAllowedDownloadHost(parsedURL.Hostname(), c.baseURL) {
+		return nil, fmt.Errorf("artifact URL host %q is not an allowed Charmhub domain", parsedURL.Hostname())
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifactURL, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	// Limit redirect hops and validate redirect targets.
+	c.http.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects for artifact download")
+		}
+		redirectHost := req.URL.Hostname()
+		if isPrivateHost(redirectHost) {
+			return fmt.Errorf("redirect to private/reserved address blocked: %s", redirectHost)
+		}
+		if !isAllowedDownloadHost(redirectHost, c.baseURL) {
+			return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
+		}
+		return nil
 	}
 
 	resp, err := c.http.Do(req)
@@ -427,6 +461,51 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
+}
+
+// isPrivateHost checks whether a hostname resolves to an RFC 1918 or
+// loopback address. Returns true for IP addresses in private/reserved ranges
+// and for "localhost".
+func isPrivateHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Could be a hostname; resolve it.
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			// Can't resolve — treat as potentially dangerous.
+			return false
+		}
+		ip = ips[0]
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast()
+}
+
+// isAllowedDownloadHost validates that a download host matches the
+// configured Charmhub base URL or a known Charmhub CDN domain.
+func isAllowedDownloadHost(host, baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	if host == parsed.Hostname() {
+		return true
+	}
+	// Known Charmhub CDN / storage hosts.
+	allowedSuffixes := []string{
+		".charmhub.io",
+		".juju.is",
+		".canonical.com",
+	}
+	lower := strings.ToLower(host)
+	for _, suffix := range allowedSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readAllLimited(reader io.Reader, maxBytes int64, label string) ([]byte, error) {

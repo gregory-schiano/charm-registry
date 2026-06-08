@@ -7,6 +7,7 @@ type Error struct {
 	Kind    ErrorKind
 	Code    string
 	Message string
+	Cause   error
 }
 
 // ErrorKind classifies service-layer errors for HTTP translation.
@@ -45,6 +46,15 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// Unwrap returns the underlying cause, enabling [errors.Is] and [errors.As].
+func (e *Error) Unwrap() error {
+	return e.Cause
+}
+
 func newError(kind ErrorKind, code, message string) error {
 	return &Error{Kind: kind, Code: code, Message: message}
+}
+
+func newErrorWithCause(kind ErrorKind, code, message string, cause error) error {
+	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
 }

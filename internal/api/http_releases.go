@@ -70,9 +70,15 @@ func (a *API) handleFind(w http.ResponseWriter, r *http.Request, identity core.I
 }
 
 func (a *API) handleInfo(w http.ResponseWriter, r *http.Request, identity core.Identity) {
-	payload, err := a.svc.GetPackageInfo(r.Context(), identity, chi.URLParam(r, "name"))
-	if channel := r.URL.Query().Get("channel"); channel != "" {
-		payload, err = a.svc.GetPackageInfoForChannel(r.Context(), identity, chi.URLParam(r, "name"), channel)
+	name := chi.URLParam(r, "name")
+	channel := r.URL.Query().Get("channel")
+
+	var payload any
+	var err error
+	if channel != "" {
+		payload, err = a.svc.GetPackageInfoForChannel(r.Context(), identity, name, channel)
+	} else {
+		payload, err = a.svc.GetPackageInfo(r.Context(), identity, name)
 	}
 	if err != nil {
 		var serviceErr *service.Error

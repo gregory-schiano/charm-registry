@@ -60,10 +60,11 @@ func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (c
 			"package_id", pkg.ID,
 			"error", err,
 		)
-		return core.Package{}, newError(
+		return core.Package{}, newErrorWithCause(
 			ErrorKindConflict,
 			"oci-provisioning-unavailable",
 			fmt.Sprintf("OCI package provisioning unavailable: %s", err),
+			err,
 		)
 	}
 	return provisioned, nil
