@@ -24,13 +24,6 @@ pg_dump -Fc -h $PGHOST -U $PGUSER -d $PGDATABASE -f registry_$(date +%Y%m%d).dum
 pg_dump -h $PGHOST -U $PGUSER -d $PGDATABASE -f registry_$(date +%Y%m%d).sql
 ```
 
-For Docker Compose deployments:
-
-```bash
-docker compose exec db pg_dump -U registry registry \
-  > registry_$(date +%Y%m%d).sql
-```
-
 ### Restore
 
 Custom-format restore:
@@ -44,13 +37,6 @@ Plain SQL restore:
 
 ```bash
 psql -h $PGHOST -U $PGUSER -d $PGDATABASE < registry_YYYYMMDD.sql
-```
-
-For Docker Compose:
-
-```bash
-docker compose exec -T db psql -U registry registry \
-  < registry_YYYYMMDD.sql
 ```
 
 > **Note:** `--clean --if-exists` drops existing objects before restoring.
@@ -82,8 +68,9 @@ aws s3 sync s3-backup-YYYYMMDD/ s3://$S3_BUCKET/ \
 1. **Stop the application** to prevent writes during restore:
 
    ```bash
-   docker compose stop registry
-   # Or, for snap: sudo snap stop charm-registry
+   # Snap deployment:
+   sudo snap stop charm-registry
+   # Binary deployment: stop the systemd service or send SIGTERM
    ```
 
 2. **Restore PostgreSQL** (see above).
@@ -100,8 +87,9 @@ aws s3 sync s3-backup-YYYYMMDD/ s3://$S3_BUCKET/ \
 5. **Restart the application**:
 
    ```bash
-   docker compose start registry
-   # Or: sudo snap start charm-registry
+   # Snap deployment:
+   sudo snap start charm-registry
+   # Binary deployment: start the systemd service
    ```
 
 6. **Smoke-test** the restored instance:
@@ -126,4 +114,4 @@ Example crontab for daily 03:00 UTC backups with 30-day retention:
 - [ ] S3 backup verified (object count matches source)
 - [ ] TLS certificates backed up separately
 - [ ] `.env` / snap configuration backed up
-- [ ] Restore procedure tested on a fresh compose stack at least once per quarter
+- [ ] Restore procedure tested on a fresh deployment at least once per quarter

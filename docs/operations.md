@@ -162,7 +162,7 @@ Removing a rule triggers cleanup: artifacts that are no longer referenced by any
 
 1. Take a backup (see above)
 2. Stop the registry service
-3. Install the new version (binary, Docker image, or snap refresh)
+3. Install the new version (binary replacement, rock image pull, or snap refresh)
 4. Start the service — database migrations run automatically on startup
 5. Check `/healthz` and `/readyz`
 6. Verify charm operations: `juju find`, `juju refresh`, `charmcraft upload`

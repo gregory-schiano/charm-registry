@@ -75,9 +75,8 @@ This is a compatibility-driven project. Small response-shape changes can break r
 
 ### Operational constraints that matter during development
 
-- `docker compose` uses an explicit environment allowlist in `compose.yaml`.
-  - Adding a new config env var in `internal/config/config.go` is not enough.
-  - If the dev stack should see it, update `compose.yaml` too.
+- Local development runs the binary directly — no container orchestration needed.
+  - When adding a new config env var, make sure it is documented in `.env.example` and the README.
 - `go test ./...` is not the preferred repo-wide test command here.
   - Use the `Makefile` targets or `./cmd/... ./internal/...` package scope instead.
 - Embedded OCI is the default local registry path.
@@ -120,7 +119,7 @@ This is a compatibility-driven project. Small response-shape changes can break r
   1. parsed and validated in config
   2. documented in `.env.example`
   3. documented in `README.md` if user-facing
-  4. forwarded in `compose.yaml` if the local Compose stack needs them
+  4. tested against the running binary or snap/charm
 
 ### Testing conventions
 
@@ -182,8 +181,7 @@ From `.github/workflows/ci.yml`:
 
 - If you touch `internal/repo/queries/*.sql`, run `make sqlc-diff`.
 - If you touch wire compatibility in `internal/api` or `internal/service`, run the relevant API and service tests, not just package-local unit tests.
-- If you add config, render Compose config to verify it actually reaches the container:
-  - `docker compose config`
+- If you add config, test it against a running instance to verify the env var is actually read.
 
 ## DO And DON'T
 
@@ -194,7 +192,7 @@ From `.github/workflows/ci.yml`:
 - Do keep Postgres behavior and sqlc query files in sync.
 - Do add regression tests when fixing a bug.
 - Do check both code and deployment wiring when adding config.
-- Do treat `compose.yaml` as part of the runtime contract for local development.
+- Do document new env vars in `.env.example` and `README.md` when they are user-facing.
 - Do use typed structs when they materially improve safety in large response builders.
 - Do propagate errors instead of swallowing them.
 - Do use transactions for multi-step mutations that must succeed or fail together.
@@ -204,7 +202,7 @@ From `.github/workflows/ci.yml`:
 ### DON'T
 
 - Don’t hand-edit sqlc-generated files under `internal/repo/db`.
-- Don’t assume a new env var works in Docker Compose just because it exists in `.env`.
+- Don't assume a new env var works in production just because it exists in `.env` — verify the running binary reads it.
 - Don’t use `go test ./...` as the default repo-wide check here.
 - Don’t silently fall back on invalid config values.
 - Don’t hide service or repo failures behind empty responses or zero values.
@@ -350,7 +348,7 @@ If any of these are yes, fix it before sending the change.
 
 - Is this a compatibility surface for `juju` or `charmcraft`?
 - Is this behavior enforced by tests today?
-- If I add a config variable, did I also update docs and Compose wiring?
+- If I add a config variable, did I also update docs and `.env.example`?
 - If I changed SQL, did I update query files and regenerate sqlc output?
 - If I changed a multi-step mutation, should this be transactional?
 - If I changed a read path, am I accidentally introducing a control-plane side effect?
