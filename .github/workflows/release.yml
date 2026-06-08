@@ -28,8 +28,6 @@ permissions:
 
 env:
   GO_VERSION: "1.26.4"
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-  IS_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' || github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == '' }}
 
 jobs:
   # ── Derive publish parameters ─────────────────────────────────────
@@ -474,7 +472,7 @@ jobs:
         run: |
           SNAP_FILE=$(ls *.snap | head -1)
           echo "Uploading: ${SNAP_FILE}"
-          OUTPUT=$(snapcraft upload "$SNAP_FILE" --release="" 2>&1) || true
+          OUTPUT=$(snapcraft upload "$SNAP_FILE" 2>&1) || true
           REVISION=$(echo "$OUTPUT" | grep -oP 'Revision \K[0-9]+' || echo "")
           if [ -z "$REVISION" ]; then
             # Try alternate output format
