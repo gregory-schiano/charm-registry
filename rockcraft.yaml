@@ -1,61 +1,33 @@
+# rockcraft.yaml — OCI rock definition for charm-registry
+#
+# Uses the go-framework extension which:
+#   - Compiles the Go binary from cmd/charm-registry
+#   - Installs it at /usr/local/bin/charm-registry
+#   - Generates a Pebble service layer for the charm runtime
+#
 # See https://documentation.ubuntu.com/rockcraft/latest/reference/extensions/go-framework
-# For questions or help, visit https://matrix.to/#/#12-factor-charms:ubuntu.com
 
 name: charm-registry
-# see https://documentation.ubuntu.com/rockcraft/latest/explanation/bases/
-# for more information about bases and using 'bare' bases for chiselled rocks
-base: bare # as an alternative, an ubuntu base can be used
-build-base: ubuntu@24.04 # build-base is required when the base is bare
-version: '0.1' # just for humans. Semantic versioning is recommended
+base: bare
+build-base: ubuntu@24.04
+version: '0.1'
 summary: Private charm registry for Juju and charmcraft workflows
 description: |
     Go-based private charm registry with Charmhub-compatible APIs,
     PostgreSQL metadata storage, S3-backed artifact storage, and an
     embedded OCI registry for charm resource workflows.
-# the platforms this rock should be built on and run on.
-# you can check your architecture with `dpkg --print-architecture`
+
 platforms:
     amd64:
-    # arm64:
-    # ppc64el:
-    # s390x:
-
-# to ensure the go-framework extension functions properly, your Go project
-# should have a go.mod file. Check the parts section for the selection of
-# the default binary.
-# see https://documentation.ubuntu.com/rockcraft/latest/reference/extensions/go-framework
-# for more information.
-# +-- charm_registry
-# |   |-- go.mod
-# |   |-- migrate.sh
 
 extensions:
     - go-framework
 
-# uncomment the sections you need and adjust according to your requirements.
 parts:
 
   go-framework/install-app:
-    # Match go.mod's toolchain requirement.
     build-snaps:
-    - go/1.26/stable
-#    organize:
-#    # if the main package is in the base directory and the rockcraft name
-#    # attribute is equal to the go module name, the name of the server will
-#    # be selected correctly, otherwise you can adjust it.
-#    # the file in /usr/local/bin/ with the name of the rockcraft project will be
-#    # the binary to run your server.
-#    # you can also include here other binary files to be included in the rock.
-#      bin/otherbinary: usr/local/bin/projectname
-
-#   go-framework/assets:
-#     stage:
-#       # by default, only the files migrate, migrate.sh, templates/ and static/
-#       # are copied into the image. You can modify the list below to override
-#       # the default list and include or exclude specific files/directories
-#       # in your project.
-#       # note: Prefix each entry with "app/" followed by the local path.
-#       - app/templates
-#       - app/static
-#       - app/otherdirectory
-#       - app/otherfile
+      - go/1.26/stable
+    organize:
+      # Include the admin CLI alongside the main server binary.
+      bin/charm-registryctl: usr/local/bin/charm-registryctl
