@@ -21,6 +21,8 @@ const (
 
 type Config struct {
 	ListenAddress           string
+	APITLSCertFile          string
+	APITLSKeyFile           string
 	PublicAPIURL            string
 	PublicStorageURL        string
 	PublicRegistryURL       string
@@ -127,6 +129,8 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		ListenAddress: listenAddress(),
+		APITLSCertFile: os.Getenv("CHARM_REGISTRY_API_TLS_CERT_FILE"),
+		APITLSKeyFile:  os.Getenv("CHARM_REGISTRY_API_TLS_KEY_FILE"),
 		PublicAPIURL:  strings.TrimRight(envFallback("CHARM_REGISTRY_PUBLIC_API_URL", "APP_PUBLIC_API_URL", "http://localhost:8080"), "/"),
 		PublicStorageURL: strings.TrimRight(
 			envFallback("CHARM_REGISTRY_PUBLIC_STORAGE_URL", "APP_PUBLIC_STORAGE_URL", "http://localhost:8080"),
@@ -390,6 +394,11 @@ func validateOCIConfig(cfg Config) error {
 	if (cfg.OCITLSCertFile == "") != (cfg.OCITLSKeyFile == "") {
 		return fmt.Errorf(
 			"cannot load config: CHARM_REGISTRY_OCI_TLS_CERT_FILE and CHARM_REGISTRY_OCI_TLS_KEY_FILE must be set together",
+		)
+	}
+	if (cfg.APITLSCertFile == "") != (cfg.APITLSKeyFile == "") {
+		return fmt.Errorf(
+			"cannot load config: CHARM_REGISTRY_API_TLS_CERT_FILE and CHARM_REGISTRY_API_TLS_KEY_FILE must be set together",
 		)
 	}
 	return nil

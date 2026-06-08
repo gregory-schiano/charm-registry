@@ -86,8 +86,16 @@ func main() {
 	}()
 
 	slog.Info("private charm registry listening", "listen_address", cfg.ListenAddress)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("serve", "error", err)
-		os.Exit(1)
+	if cfg.APITLSCertFile != "" || cfg.APITLSKeyFile != "" {
+		if err := server.ListenAndServeTLS(cfg.APITLSCertFile, cfg.APITLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("serve TLS", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		slog.Warn("API server running without TLS — use a reverse proxy in production")
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("serve", "error", err)
+			os.Exit(1)
+		}
 	}
 }
