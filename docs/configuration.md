@@ -47,7 +47,7 @@ In `auto` mode, the registry uses S3 when `CHARM_REGISTRY_S3_ENDPOINT` or creden
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHARM_REGISTRY_OCI_LISTEN` | `:5000` | Embedded OCI registry listen address |
-| `CHARM_REGISTRY_OCI_HOST_PORT` | `5000` | Host port published by compose for the OCI listener |
+| `CHARM_REGISTRY_OCI_HOST_PORT` | `5000` | Host port for the OCI listener (used in multi-process deployments) |
 | `CHARM_REGISTRY_OCI_INTERNAL_URL` | `https://127.0.0.1:5000` | URL the service uses to push into its own OCI registry |
 | `CHARM_REGISTRY_OCI_STORAGE_BACKEND` | `auto` | `auto`, `s3`, or `filesystem` for OCI blobs |
 | `CHARM_REGISTRY_OCI_STORAGE_DIR` | `<data_dir>/oci-registry` | Filesystem OCI storage directory |

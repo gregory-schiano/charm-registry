@@ -1,58 +1,27 @@
 # Deployment
 
-Charm Registry ships three deployment targets: Docker Compose, Snap, and Rock (OCI image).
+Charm Registry ships two production deployment targets: **Snap** (for Ubuntu hosts) and **Rock** (OCI image for Kubernetes). For local development and quick experiments, you can also run the Go binary directly.
 
-## Docker Compose
+## Running from source
 
-The compose stack includes Postgres, MinIO, and the registry service. It is designed for local development and small private deployments.
-
-### Quick start
+For local development without packaging:
 
 ```bash
-# Create the shared network
-docker network create charm-registry-shared
-
-# Start the stack
-make up
+make build
+.bin/charm-registry
 ```
 
-This builds the registry image, generates TLS certificates for the OCI listener, and starts all services.
+Set environment variables or copy `.env.example` to `.env` for configuration. The binary serves the API on `:8080` and the embedded OCI registry on `:5000` by default.
 
-### Customization
-
-Copy `.env.example` to `.env` and adjust values:
+Standalone mode (SQLite + filesystem, no external dependencies):
 
 ```bash
-cp .env.example .env
+export CHARM_REGISTRY_DATABASE_BACKEND=sqlite
+export CHARM_REGISTRY_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_OCI_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_DATA_DIR=/var/lib/charm-registry
+.bin/charm-registry
 ```
-
-Key settings to change for non-local use:
-
-```bash
-CHARM_REGISTRY_PUBLIC_API_URL=http://your-host:8080
-CHARM_REGISTRY_PUBLIC_STORAGE_URL=http://your-host:8080
-CHARM_REGISTRY_PUBLIC_REGISTRY_URL=https://your-host:5000
-```
-
-### Production hardening
-
-Before exposing the compose stack beyond localhost:
-
-1. **Disable insecure dev auth:** Set `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=false`
-2. **Configure OIDC:** Set `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`
-3. **Set admin identities:** Configure at least one of `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
-4. **Change default secrets:** Replace `CHARM_REGISTRY_OCI_SECRET_KEY`, MinIO root credentials, and S3 access keys
-5. **Enable database TLS:** Change `sslmode=disable` to `sslmode=require` or `verify-full` in `CHARM_REGISTRY_DATABASE_URL`
-6. **Put TLS in front of the API:** The Go app serves plain HTTP on `:8080`. Use a reverse proxy (nginx, Caddy, Traefik) with TLS termination.
-7. **Restrict network access:** The compose stack exposes ports on all interfaces by default. Bind to `127.0.0.1` or use firewall rules.
-
-### Stopping
-
-```bash
-make down
-```
-
-This stops and removes containers, networks, and volumes.
 
 ## Snap
 
@@ -108,7 +77,7 @@ snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
 
 # Switch to Postgres
 snap set charm-registry database.backend=postgres
-snap set charm-registry database.url=postgres://user:pass@host:5432/charm_registry?sslmode=require
+snap set charm-registry database.url=postgres://user:***@host:5432/charm_registry?sslmode=require
 
 # Switch to S3 storage
 snap set charm-registry storage.backend=s3
@@ -142,13 +111,9 @@ snap set charm-registry oci.tls.key-file=/etc/ssl/private/oci.key
 
 ### Known limitation: API TLS in the Go app
 
-The snap wrapper exports `CHARM_REGISTRY_TLS_CERT_FILE` and `CHARM_REGISTRY_TLS_KEY_FILE` when TLS is enabled, but the Go application does not yet read these variables. The main API server always uses `ListenAndServe()` (plain HTTP). This means:
+The snap wrapper exports `CHARM_REGISTRY_TLS_CERT_FILE` and `CHARM_REGISTRY_TLS_KEY_FILE` when TLS is enabled, but the Go application does not yet read these variables. The main API server always uses `ListenAndServe()` (plain HTTP). Use a reverse proxy (nginx, Caddy, Traefik) in front of the snap for API TLS termination.
 
-- With `tls.enabled=true`, the snap generates certificates but the API server ignores them
-- You still need a reverse proxy in front of the snap for API TLS termination
-- The OCI listener does support TLS directly via `CHARM_REGISTRY_OCI_TLS_CERT_FILE` / `CHARM_REGISTRY_OCI_TLS_KEY_FILE`
-
-This gap is tracked in the production-readiness roadmap.
+The OCI listener does support TLS directly via `CHARM_REGISTRY_OCI_TLS_CERT_FILE` / `CHARM_REGISTRY_OCI_TLS_KEY_FILE`.
 
 ### Snap grade
 
@@ -156,7 +121,7 @@ The snap is currently `grade: devel`, which blocks publishing to the stable chan
 
 ## Rock (OCI image)
 
-A Rockcraft-based OCI image is available for Kubernetes and other container orchestration platforms.
+A Rockcraft-built OCI image for Kubernetes and other container orchestration platforms. The rock replaces the previous Dockerfile-based image path — it is built with `rockcraft pack`, not `docker build`.
 
 ### Build
 
@@ -164,20 +129,15 @@ A Rockcraft-based OCI image is available for Kubernetes and other container orch
 rockcraft pack
 ```
 
-This produces a Rock (OCI image) that can be pushed to any OCI registry.
+This produces a `.rock` file (OCI image archive) that can be pushed to any OCI registry with `skopeo`:
 
-### Deploy
+```bash
+skopeo copy oci-archive:charm-registry_*.rock docker://ghcr.io/<org>/charm-registry:<tag>
+```
 
-The Rock runs the same `charm-registry` binary as the Docker and snap deployments. Configure it with the same environment variables.
+### Deploy on Kubernetes
 
-For Kubernetes, create a ConfigMap or Secret with the environment variables and mount them into the container. Key considerations:
-
-- The Rock does not include a shell — use `envFrom` in your pod spec
-- Mount TLS certificates as volumes
-- Set `CHARM_REGISTRY_OCI_SECRET_KEY` from a Kubernetes Secret
-- The Rock exposes ports 8080 (API) and 5000 (OCI registry)
-
-Example pod spec fragment:
+The rock runs the same `charm-registry` binary. Configure it with environment variables via ConfigMap or Secret:
 
 ```yaml
 envFrom:
@@ -192,6 +152,41 @@ ports:
     name: oci
 ```
 
+Key considerations:
+
+- The rock does not include a shell — use `envFrom` in your pod spec
+- Mount TLS certificates as volumes
+- Set `CHARM_REGISTRY_OCI_SECRET_KEY` from a Kubernetes Secret
+- The rock exposes ports 8080 (API) and 5000 (OCI registry)
+
 ### Platforms
 
-The Rock currently builds for `amd64` only. `arm64`, `ppc64el`, and `s390x` are commented out in `rockcraft.yaml`.
+The rock builds for `amd64`. Additional architectures (`arm64`, `ppc64el`, `s390x`) can be enabled in `rockcraft.yaml`.
+
+## Charm (Juju)
+
+The charm deploys charm-registry as a Kubernetes workload through Juju, with relations to PostgreSQL, S3-compatible storage, and ingress.
+
+### Deploy with Juju
+
+```bash
+juju deploy postgresql-k8s
+juju deploy traefik-k8s
+juju deploy ./charm-registry_*.charm
+juju integrate charm-registry postgresql-k8s
+juju integrate charm-registry traefik-k8s
+```
+
+See the charm's `charmcraft.yaml` for the full relation and configuration interface.
+
+## Production hardening
+
+Before any internet-facing deployment:
+
+1. **Disable insecure dev auth:** Set `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=***
+2. **Configure OIDC:** Set `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`
+3. **Set admin identities:** Configure at least one of `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
+4. **Set OCI secret key:** Generate a strong random key for `CHARM_REGISTRY_OCI_SECRET_KEY`
+5. **Enable database TLS:** Use `sslmode=require` or `verify-full` in `CHARM_REGISTRY_DATABASE_URL`
+6. **Put TLS in front of the API:** Use a reverse proxy or the snap's TLS support
+7. **Restrict network access:** Bind to specific interfaces or use firewall rules

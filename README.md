@@ -45,6 +45,7 @@ The service stores charm metadata in Postgres or SQLite, stores charm and resour
 ```
 cmd/charm-registry/       — process entrypoint
 cmd/charm-registryctl/    — admin CLI
+cmd/functional-test/      — shared functional test harness
 internal/api/             — HTTP router, response shaping, OpenAPI stub
 internal/app/             — application wiring
 internal/service/         — registry business logic
@@ -59,39 +60,35 @@ internal/config/          — environment-driven configuration
 
 ## Local development
 
-Bring up the full dev stack:
+Build and run from source:
 
 ```bash
-make up
+make build
+.bin/charm-registry
 ```
 
-The compose stack includes:
+Or in standalone mode (SQLite + filesystem, no Postgres or S3 needed):
 
-- **Postgres** — metadata storage
-- **MinIO** — S3-compatible blob storage (with auto-provisioned buckets and IAM policies)
-- **charm-registry** — the registry service with embedded OCI listener
+```bash
+export CHARM_REGISTRY_DATABASE_BACKEND=sqlite
+export CHARM_REGISTRY_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_OCI_STORAGE_BACKEND=filesystem
+export CHARM_REGISTRY_DATA_DIR=/var/lib/charm-registry
+.bin/charm-registry
+```
 
 | Service | URL |
 |---------|-----|
-| Charmhub-compatible API | http://localhost:8080 |
-| MinIO console | http://localhost:9001 |
+| API | http://localhost:8080 |
 | Embedded OCI registry | https://localhost:5000 |
-
-### External clients
-
-If `juju` or any other client runs outside the Docker host, set these to a reachable address:
-
-```bash
-CHARM_REGISTRY_PUBLIC_API_URL=http://192.0.2.10:8080
-CHARM_REGISTRY_PUBLIC_STORAGE_URL=http://192.0.2.10:8080
-CHARM_REGISTRY_PUBLIC_REGISTRY_URL=https://192.0.2.10:5000
-```
-
-Without these, the registry hands out download and OCI image URLs that only work on the host itself.
 
 ### TLS for the embedded OCI registry
 
-The local embedded OCI registry uses HTTPS because `charmcraft` assumes OCI registries use TLS. `make up` generates `certs/oci.crt` and `certs/oci.key` for the host in `CHARM_REGISTRY_PUBLIC_REGISTRY_URL`.
+The local OCI registry uses HTTPS because `charmcraft` assumes OCI registries use TLS. Generate self-signed certs:
+
+```bash
+make generate-cert
+```
 
 Install the certificate on any machine that runs `charmcraft`, `skopeo`, or another OCI client:
 
@@ -105,16 +102,12 @@ For Canonical `k8s` snap nodes where containerd needs to trust the certificate:
 make install-k8s-cert
 ```
 
-### API server TLS
-
-The main API server (`:8080`) serves plain HTTP by default. For production, put TLS in front with a reverse proxy, or use the snap's built-in TLS support (see [Deployment](docs/deployment.md)). The Go app itself does not yet read `CHARM_REGISTRY_TLS_CERT_FILE`/`CHARM_REGISTRY_TLS_KEY_FILE` — this is a known gap tracked in the production-readiness roadmap.
-
 ### Authentication
 
 For local-only development, you can opt into insecure bearer tokens:
 
 ```text
-Authorization: Bearer <dev-token>
+Authorization: Bearer ***
 ```
 
 This mode is **only** for development. Never enable it on a network-reachable deployment. Production deployments must configure OIDC.
@@ -122,23 +115,12 @@ This mode is **only** for development. Never enable it on a network-reachable de
 The embedded OCI registry does not allow anonymous image pulls or pushes outside the `/v2/` ping. Log in with the package-scoped credentials returned by the registry's OCI endpoints:
 
 ```bash
-docker login localhost:5000 --username '<package-push-username>' --password '<package-push-secret>'
+skopeo login localhost:5000 --username '<package-push-username>' --password '<package-push-secret>'
 ```
 
 Push credentials can push and pull; pull credentials can only pull.
 
-### Standalone mode
-
-For local-only operation without Postgres or S3:
-
-```bash
-export CHARM_REGISTRY_DATABASE_BACKEND=sqlite
-export CHARM_REGISTRY_STORAGE_BACKEND=filesystem
-export CHARM_REGISTRY_OCI_STORAGE_BACKEND=filesystem
-export CHARM_REGISTRY_DATA_DIR=/var/lib/charm-registry
-```
-
-This works for single-machine testing and development. See [Configuration](docs/configuration.md) for all options.
+See [Configuration](docs/configuration.md) for all options.
 
 ## Charmhub synchronization
 
@@ -181,10 +163,10 @@ The CLI talks to the registry over HTTP and requires an admin bearer token. Set 
 
 ```bash
 export CHARM_REGISTRY_URL=http://localhost:8080
-export CHARM_REGISTRY_TOKEN='dev:admin:admin'
+export CHARM_REGISTRY_TOKEN='***'
 ```
 
-If you are using insecure dev auth locally, make sure the identity is configured as an admin in the running server through one of:
+If you are using insecure dev auth locally, configure an admin identity on the running server through one of:
 
 - `CHARM_REGISTRY_ADMIN_SUBJECTS`
 - `CHARM_REGISTRY_ADMIN_EMAILS`
@@ -196,7 +178,7 @@ For example:
 export CHARM_REGISTRY_ADMIN_USERNAMES=admin
 ```
 
-That admin bootstrap setting must be present in the running `charm-registry` server process, not just in the shell where you invoke the CLI. With Docker Compose, either put `CHARM_REGISTRY_ADMIN_USERNAMES=admin` in your `.env`, or export it before `make up`, then restart the registry so the container picks it up.
+That admin bootstrap setting must be present in the running `charm-registry` server process, not just in the shell where you invoke the CLI.
 
 Then use the CLI:
 
@@ -214,7 +196,7 @@ You can also pass connection details explicitly:
 .bin/charm-registryctl --url http://localhost:8080 --token 'dev:admin:admin' sync list
 ```
 
-What the commands do:
+Commands:
 
 - `sync list` — show configured rules and last known sync status
 - `sync add <name> --track <track> [--base <name@channel> ...] [--arch <arch> ...]` — create a sync rule and enqueue an immediate sync
@@ -223,13 +205,12 @@ What the commands do:
 
 ## Deployment
 
-The registry ships three deployment targets:
+The registry ships two production deployment targets:
 
-1. **Docker Compose** — for local development and small private deployments. See [Local development](#local-development) to get started.
-2. **Snap** — for Ubuntu hosts. Includes built-in TLS certificate generation and snap configuration. See [docs/deployment.md](docs/deployment.md) for details.
-3. **Rock (OCI image)** — for Kubernetes and container orchestration. See [docs/deployment.md](docs/deployment.md) for details.
+1. **Snap** — for Ubuntu hosts. Includes built-in TLS certificate generation and snap configuration. See [docs/deployment.md](docs/deployment.md) for details.
+2. **Rock (OCI image)** — for Kubernetes and container orchestration. Built with `rockcraft pack`, published with `skopeo`. See [docs/deployment.md](docs/deployment.md) for details.
 
-See [docs/deployment.md](docs/deployment.md) for full deployment instructions, TLS configuration, and production hardening.
+The charm deploys charm-registry as a Kubernetes workload through Juju. See [docs/deployment.md](docs/deployment.md) for the full deployment reference including configuration, TLS, and production hardening.
 
 ## Configuration
 
@@ -275,8 +256,12 @@ make vuln         # run govulncheck
 make gosec        # run gosec static analysis
 make audit        # run lint, tests, and security checks
 make build        # build registry and admin CLI
-make up           # start the local compose stack
-make down         # stop the local compose stack
+make charm-pack   # pack the charm with charmcraft
+make rock-pack    # pack the OCI rock with rockcraft
+make snap-pack    # pack the snap with snapcraft
+make artifact-build                  # build all artifacts (charm, rock, snap)
+make charm-integration-test          # run charm integration tests (Jubilant)
+make snap-integration-test           # run snap integration tests (spread)
 ```
 
 `make build` produces both binaries in `.bin/`:
@@ -284,15 +269,17 @@ make down         # stop the local compose stack
 - `.bin/charm-registry`
 - `.bin/charm-registryctl`
 
+See [docs/testing.md](docs/testing.md) for the full testing guide.
+
 ## Current limitations
 
 - **No browse UI.** There is no web dashboard. Package management is API/CLI only.
 - **No bundle support.** Bundle-specific metadata and manifests are not handled.
 - **No charm library hosting.** `/v1/charm/libraries/bulk` returns an empty list. Library CRUD is not implemented. For a private registry, vendoring libraries or sharing them via git is usually sufficient.
-- **OCI garbage collection is best-effort.** The embedded OCI backend deletes manifests and repository metadata on best effort, but unreferenced S3 blobs still need a future garbage-collection pass. See the production-readiness roadmap.
+- **OCI garbage collection is best-effort.** The embedded OCI backend deletes manifests and repository metadata on best effort, but unreferenced S3 blobs still need a future garbage-collection pass.
 - **Minimal access model.** Group ACL tables exist in the database schema but are not implemented. The effective access model is: owners manage their own charms, and configured admins can access everything.
 - **Juju auth forwarding risk.** Stock `juju` can target an alternate Charmhub URL, but private package auth support is still the main compatibility risk to validate end-to-end in your environment. If Juju does not forward auth for consumer requests, private deployments may need network-level access controls in front of the registry.
-- **No API TLS in the Go app.** The main API server always uses plain HTTP. TLS termination requires a reverse proxy or the snap wrapper's TLS support. The Go app does not yet read `CHARM_REGISTRY_TLS_CERT_FILE`/`CHARM_REGISTRY_TLS_KEY_FILE`.
+- **No API TLS in the Go app.** The main API server always uses plain HTTP. TLS termination requires a reverse proxy or the snap wrapper's TLS support.
 - **No backup infrastructure.** There are no built-in backup or restore commands. See [docs/operations.md](docs/operations.md) for manual backup procedures.
 - **No Prometheus metrics.** There is no `/metrics` endpoint yet. Production monitoring relies on structured log output.
 - **Snap grade is `devel`.** The snap cannot be published to the stable channel until the grade is changed.
@@ -305,4 +292,4 @@ The repository carries a Juju-inspired Go hygiene baseline:
 - `go.mod` `tool` block pinning lint and security tooling
 - `make lint`, `make vuln`, `make gosec` for repeatable local checks
 - Explicit HTTP timeouts, body-size limits, and security headers
-- Non-root container execution and hardened compose profile
+- Non-root execution in the rock image

@@ -50,9 +50,9 @@ If you are deploying this service internally, treat the following as confidentia
 
 ### Container-level
 
-- Non-root container execution (`gcr.io/distroless/static-debian12:nonroot`)
-- Hardened compose profile: `cap_drop: ALL`, `security_opt: no-new-privileges`, `read_only: true`
-- No shell in the production container image
+- Non-root execution in the rock image (`ubuntu:24.04` base with non-root user)
+- No shell in the production rock image
+- Hardened build: security linters, govulncheck, gosec
 
 ## Hardening expectations
 
@@ -62,7 +62,7 @@ Production deployments should additionally provide:
 - **OIDC configuration** for end-user authentication (`CHARM_REGISTRY_OIDC_ISSUER_URL`, `CHARM_REGISTRY_OIDC_CLIENT_ID`)
 - **Admin identity configuration** via `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
 - **Network-level access control** for private registry traffic (the registry does not implement IP-based ACLs)
-- **Secret management** outside the repository (no credentials in `.env` or compose files)
+- **Secret management** outside the repository (no credentials in `.env` or snap/charm config files)
 - **A strong, unique `CHARM_REGISTRY_OCI_SECRET_KEY`** — this key encrypts all OCI push/pull credentials at rest. Changing it invalidates all existing credentials.
 - **Least-privilege S3/object-store permissions** for both charm blobs and embedded OCI registry storage
 - **Database TLS** (`sslmode` should not be `disable` in production)
