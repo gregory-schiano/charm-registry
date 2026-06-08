@@ -1,77 +1,141 @@
 name: Integration Tests
 
 on:
-  # Run on pushes to main after CI passes, and on PRs against main
-  # when integration tests are explicitly requested.
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   # Allow manual dispatch for any branch
   workflow_dispatch:
+  # Run on schedule for catching regressions (Monday 06:00 UTC)
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
 
 env:
   GO_VERSION: "1.26.4"
-  SHARED_DOCKER_NETWORK: charm-registry-shared
 
 jobs:
-  integration:
-    name: Integration Tests
+  # ── Charm integration tests (Jubilant + Juju) ──────────────────────
+  #
+  # Deploys postgresql-k8s, traefik-k8s, and the local charm via Juju on
+  # a microk8s controller, then runs the Jubilant pytest suite.
+  #
+  # Prerequisites on the runner: juju, lxd, microk8s, python3, pytest.
+  #
+  # NOTE on operator-workflows reuse:
+  # canonical/operator-workflows provides `integration_test.yaml` which
+  # builds charms via charmcraft, deploys via Juju, and runs pytest via
+  # tox. Our service is a Go application — the charm is a thin wrapper
+  # that packs Go binaries, not a Python operator. Custom jobs are
+  # needed here because:
+  #   1. We deploy multiple related charms (postgresql-k8s, traefik-k8s,
+  #      s3-integrator) as prerequisites, not just the subject charm.
+  #   2. Functional scenarios run via a compiled Go binary, not through
+  #      tox/pytest unit patterns.
+  #   3. S3 integration is optional and gated on JUB_S3_* env vars.
+
+  charm-integration:
+    name: Charm Integration (Jubilant)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Create shared Docker network
-        run: docker network inspect ${{ env.SHARED_DOCKER_NETWORK }} >/dev/null 2>&1 || docker network create ${{ env.SHARED_DOCKER_NETWORK }}
-
-      - name: Generate OCI TLS certificates
-        run: bash ./deploy/oci/generate-certs.sh
-
-      - name: Start compose stack
-        run: docker compose up --build -d postgres charm-registry
-        env:
-          CHARM_REGISTRY_S3_BUCKET: charm-registry-blobs
-          CHARM_REGISTRY_S3_ACCESS_KEY_ID: registry-app
-          CHARM_REGISTRY_S3_SECRET_ACCESS_KEY: registry-app-secret
-          CHARM_REGISTRY_OCI_S3_BUCKET: charm-registry-oci
-          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
-          CHARM_REGISTRY_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/charm_registry?sslmode=disable"
-
-      - name: Wait for service health
+      - name: Install Juju and microk8s
         run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/v1/health >/dev/null 2>&1; then
-              echo "Service is healthy."
-              exit 0
-            fi
-            echo "Waiting for service... attempt $i/30"
-            sleep 2
-          done
-          echo "::error::Service did not become healthy within 60 seconds"
-          docker compose logs charm-registry
-          exit 1
+          sudo snap install juju --classic
+          sudo snap install microk8s --classic
+          sudo snap install charmcraft --classic
+          sudo usermod -aG microk8s "$USER"
+          sg microk8s -c 'microk8s status --wait-ready'
+          sg microk8s -c 'microk8s enable dns storage rbac'
 
-      - name: Run integration tests
-        run: make integration-test
+      - name: Bootstrap Juju controller
+        run: |
+          sudo snap install juju-wait --classic || true
+          juju bootstrap microk8s charm-registry-test-ctrl
+          juju add-model charm-registry-test || true
+
+      - name: Install Python test dependencies
+        run: |
+          cd tests/integration/charm
+          pip install -r requirements.txt
+
+      - name: Build functional test binary
+        run: make functional-test-build
+
+      - name: Run charm integration tests
+        run: |
+          cd tests/integration/charm
+          python3 -m pytest -v -s --tb native --log-cli-level=INFO
         env:
-          CHARM_REGISTRY_URL: http://localhost:8080
-          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+          JUB_MODEL: charm-registry-test
+          JUB_POSTGRES_CHARM: postgresql-k8s
+          JUB_POSTGRES_CHANNEL: 14/stable
+          JUB_TRAEFIK_CHARM: traefik-k8s
+          JUB_TRAEFIK_CHANNEL: latest/stable
+          FTEST_API_URL: http://localhost:8080
 
-      - name: Collect logs on failure
+      - name: Collect Juju status on failure
         if: failure()
         run: |
-          echo "=== charm-registry logs ==="
-          docker compose logs charm-registry
-          echo "=== postgres logs ==="
-          docker compose logs postgres
+          juju status -m charm-registry-test || true
+          juju debug-log --replay --no-log -m charm-registry-test || true
 
-      - name: Tear down compose stack
+      - name: Tear down Juju environment
         if: always()
-        run: docker compose down -v
+        run: |
+          juju destroy-model charm-registry-test --force --no-wait || true
+          juju destroy-controller charm-registry-test-ctrl --destroy-all-models || true
+
+  # ── Snap spread integration tests ──────────────────────────────────
+  #
+  # Packs, installs, and configures the charm-registry snap in a LXD
+  # spread backend, then runs all 16 shared functional scenarios.
+  #
+  # Prerequisites on the runner: lxd, spread, snapcraft.
+
+  snap-integration:
+    name: Snap Integration (Spread)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Install spread
+        run: |
+          go install github.com/snapcore/spread/cmd/spread@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build functional test binary
+        run: make functional-test-build
+
+      - name: Pack snap
+        run: snapcraft pack --use-lxd
+
+      - name: Run spread tests
+        run: sg lxd -c 'spread -v ./tests/spread/...'
+
+      - name: Collect snap logs on failure
+        if: failure()
+        run: |
+          echo "=== snap services ==="
+          snap services charm-registry || true
+          echo "=== snap logs ==="
+          snap logs charm-registry || true

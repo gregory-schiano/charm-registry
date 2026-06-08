@@ -3,8 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]+*-rc[0-9]+"
 
 permissions:
   contents: write
@@ -12,8 +12,6 @@ permissions:
 
 env:
   GO_VERSION: "1.26.4"
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   validate-tag:
@@ -34,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate-tag
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -62,7 +60,7 @@ jobs:
           - goos: darwin
             goarch: arm64
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -96,71 +94,84 @@ jobs:
           path: dist/
           retention-days: 7
 
-  build-container:
-    name: Build and push container image
+  # ── OCI rock (replaces Docker container image build) ─────────────
+  # The rock is built via rockcraft.yaml (no Dockerfile).
+  # T08 will add publication to the target OCI registry.
+
+  build-rock:
+    name: Build rock (OCI image)
     runs-on: ubuntu-latest
     needs: [validate-tag, test]
-    permissions:
-      contents: read
-      packages: write
-      # Needed for OIDC token exchange with cosign keyless signing
-      id-token: write
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@29e803d8c3c3a89f8e6d6ee4dae3c06f7b8b4a0e # v3.6.0
+      - name: Install LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216f676660f9b825b5de6e8561be5 # v3.11.1
+      - name: Install rockcraft
+        run: sudo snap install rockcraft --classic
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@c71f5733e3175e554a4352d6e9e8ed2a64e0456f # v5.7.0
+      - name: Pack rock
+        run: sg lxd -c 'rockcraft pack'
+
+      - name: Smoke-test rock
+        run: |
+          ROCK_FILE=$(ls *.rock 2>/dev/null | head -1)
+          if [ -z "$ROCK_FILE" ]; then
+            echo "::error::No .rock file produced"
+            exit 1
+          fi
+          bash scripts/rock-smoke-test.sh "$ROCK_FILE"
+
+      - name: Upload rock artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !contains(github.ref, '-rc') }}
-            type=sha
+          name: charm-registry-rock
+          path: "*.rock"
+          retention-days: 7
 
-      - name: Log in to GHCR
-        uses: docker/login-action@5e57cd80a01e5294d6c9d86bc3c1553d8e7e4c48 # v3.5.0
+  build-charm:
+    name: Build charm
+    runs-on: ubuntu-latest
+    needs: [validate-tag, test]
+    steps:
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Pack charm
+        run: |
+          cd charm
+          charmcraft pack
+
+      - name: Upload charm artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@263435390d3a27d4ab8b61ac8e5e3c5e71ed5e9b # v6.18.0
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign container image
-        run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.meta.outputs.digest }}
+          name: charm-registry-charm
+          path: charm/*.charm
+          retention-days: 7
 
   build-snap:
     name: Build snap
     runs-on: ubuntu-latest
     needs: [validate-tag, test]
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install snapcraft
         run: sudo snap install snapcraft --classic
 
-      - name: Build snap
-        run: snapcraft pack --destructive-mode
+      - name: Install LXD (required by snapcraft)
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+
+      - name: Pack snap
+        run: snapcraft pack --use-lxd
 
       - name: Upload snap artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -174,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-tag, test]
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -199,11 +210,11 @@ jobs:
   release:
     name: Create GitHub release
     runs-on: ubuntu-latest
-    needs: [build-binaries, build-container, build-snap, generate-sbom]
+    needs: [build-binaries, build-rock, build-charm, build-snap, generate-sbom]
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b011c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Download all artifacts
         uses: actions/download-artifact@634f94c46c361b6c28e6b4e0e4e3e7b49457820c # v5.0.0
@@ -224,4 +235,6 @@ jobs:
             release-artifacts/charm-registry-*
             release-artifacts/charm-registryctl-*
             release-artifacts/*.snap
+            release-artifacts/*.rock
+            release-artifacts/*.charm
             release-artifacts/sbom.*
