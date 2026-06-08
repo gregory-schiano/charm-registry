@@ -140,12 +140,15 @@ func TestGetInfoRejectsOversizedResponse(t *testing.T) {
 }
 
 func TestDownloadRejectsOversizedArtifact(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// Use a TLS server so the SSRF host-allowlist and HTTPS checks pass.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", 6)))
 	}))
 	defer server.Close()
 
 	client := NewWithLimits(server.URL, 1024, 5)
+	// Wire the test server's CA so the HTTPS client trusts it.
+	client.http.Transport = server.Client().Transport
 	_, err := client.Download(context.Background(), server.URL+"/artifact.charm")
 
 	require.ErrorContains(t, err, "Charmhub artifact exceeds 5 bytes")

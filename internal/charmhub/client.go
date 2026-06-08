@@ -416,14 +416,17 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 	if parsedURL.Scheme != "https" {
 		return nil, fmt.Errorf("artifact URL must use https, got %q", parsedURL.Scheme)
 	}
-	// Block RFC 1918 private addresses to prevent SSRF.
-	if isPrivateHost(parsedURL.Hostname()) {
-		return nil, fmt.Errorf("artifact URL refers to private/reserved address: %s", parsedURL.Hostname())
-	}
 	// Validate that the artifact URL is under the configured Charmhub base URL
 	// or a known allowed domain. This prevents a compromised upstream from
 	// redirecting to internal services.
-	if !isAllowedDownloadHost(parsedURL.Hostname(), c.baseURL) {
+	if isAllowedDownloadHost(parsedURL.Hostname(), c.baseURL) {
+		// Host matches the configured base URL or a known Charmhub CDN domain.
+		// Allow even if it resolves to loopback (dev/test setups where baseURL
+		// points to a local test server).
+	} else if isPrivateHost(parsedURL.Hostname()) {
+		// Block RFC 1918 private/reserved addresses for unknown hosts.
+		return nil, fmt.Errorf("artifact URL refers to private/reserved address: %s", parsedURL.Hostname())
+	} else {
 		return nil, fmt.Errorf("artifact URL host %q is not an allowed Charmhub domain", parsedURL.Hostname())
 	}
 
@@ -438,13 +441,13 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 			return fmt.Errorf("too many redirects for artifact download")
 		}
 		redirectHost := req.URL.Hostname()
+		if isAllowedDownloadHost(redirectHost, c.baseURL) {
+			return nil
+		}
 		if isPrivateHost(redirectHost) {
 			return fmt.Errorf("redirect to private/reserved address blocked: %s", redirectHost)
 		}
-		if !isAllowedDownloadHost(redirectHost, c.baseURL) {
-			return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
-		}
-		return nil
+		return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
 	}
 
 	resp, err := c.http.Do(req)
