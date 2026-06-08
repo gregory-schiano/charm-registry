@@ -184,19 +184,19 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) SyncPackage(_ context.Context, pkg core.Package) (core.Package, error) {
+func (c *Client) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
 	if pkg.OCIProject == "" {
 		pkg.OCIProject = c.projectName(pkg.Name)
 	}
 	var err error
 	if pkg.OCIPushRobot == nil || pkg.OCIPushRobot.Username == "" || pkg.OCIPushRobot.EncryptedSecret == "" {
-		pkg.OCIPushRobot, err = c.newCredential(c.robotName(c.pushRobotPrefix, pkg.ID))
+		pkg.OCIPushRobot, err = c.newCredential(ctx, c.robotName(c.pushRobotPrefix, pkg.ID))
 		if err != nil {
 			return core.Package{}, err
 		}
 	}
 	if pkg.OCIPullRobot == nil || pkg.OCIPullRobot.Username == "" || pkg.OCIPullRobot.EncryptedSecret == "" {
-		pkg.OCIPullRobot, err = c.newCredential(c.robotName(c.pullRobotPrefix, pkg.ID))
+		pkg.OCIPullRobot, err = c.newCredential(ctx, c.robotName(c.pullRobotPrefix, pkg.ID))
 		if err != nil {
 			return core.Package{}, err
 		}
@@ -378,7 +378,7 @@ func (c *Client) nameOptions() []name.Option {
 	return nil
 }
 
-func (c *Client) newCredential(username string) (*core.RobotCredential, error) {
+func (c *Client) newCredential(_ context.Context, username string) (*core.RobotCredential, error) {
 	secret, id := c.credentialSecret(username)
 	encrypted, err := c.encrypt(secret)
 	if err != nil {

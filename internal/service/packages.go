@@ -70,6 +70,8 @@ func (s *Service) RegisterPackage(
 		"private", pkg.Private,
 		"account_id", identity.Account.ID,
 	)
+	AuditLog(ctx, "package_register", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID, "private", pkg.Private)
 	return pkg, nil
 }
 
@@ -217,6 +219,8 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 		"package_id", pkg.ID,
 		"account_id", identity.Account.ID,
 	)
+	AuditLog(ctx, "package_unregister", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID)
 	return pkg.ID, nil
 }
 

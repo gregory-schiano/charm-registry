@@ -97,6 +97,8 @@ func (s *Service) IssueStoreToken(
 		"channel_scope_count", len(token.Channels),
 		"valid_until", token.ValidUntil,
 	)
+	AuditLog(ctx, "token_issue", identity.Account.ID, token.SessionID, nil,
+		"permission_count", len(token.Permissions))
 	return raw, token, nil
 }
 
@@ -145,6 +147,7 @@ func (s *Service) RevokeStoreToken(ctx context.Context, identity core.Identity, 
 		"account_id", identity.Account.ID,
 		"session_id", sessionID,
 	)
+	AuditLog(ctx, "token_revoke", identity.Account.ID, sessionID, nil)
 	return nil
 }
 

@@ -69,6 +69,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	router.Get("/", api.handleRoot)
 	router.Get("/healthz", api.handleHealthz)
 	router.Get("/readyz", api.handleReadyz)
+	router.Get("/metrics", metricsHandler().ServeHTTP)
 	router.Get("/openapi.yaml", api.handleOpenAPI)
 	router.Get("/docs", api.handleDocs)
 

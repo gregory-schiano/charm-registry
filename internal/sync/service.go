@@ -56,6 +56,13 @@ type Manager struct {
 
 	mu      stdsync.Mutex
 	pending map[string]struct{}
+
+	// Backoff state: tracks consecutive sync failures per package name.
+	// After each failure the next sync interval is multiplied; after a
+	// success the counter resets and the original interval is restored.
+	failMu     stdsync.Mutex
+	failCounts map[string]int // consecutive failures per package
+	failSkip   map[string]int // intervals to skip per package
 }
 
 type upstreamOCIImageBlob struct {
@@ -102,11 +109,13 @@ func (s *Service) StartManager(ctx context.Context) *Manager {
 	}
 	managerCtx, cancel := context.WithCancel(ctx)
 	manager := &Manager{
-		service: s,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		wake:    make(chan struct{}, 1),
-		pending: map[string]struct{}{},
+		service:    s,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		wake:       make(chan struct{}, 1),
+		pending:    map[string]struct{}{},
+		failCounts: map[string]int{},
+		failSkip:   map[string]int{},
 	}
 	s.manager = manager
 	go manager.run(managerCtx)
@@ -162,8 +171,15 @@ func (m *Manager) runPending(ctx context.Context) {
 		slog.DebugContext(ctx, "processing pending charmhub sync queue", "package_count", len(packageNames))
 	}
 	for _, packageName := range packageNames {
+		if m.isBackedOff(packageName) {
+			slog.DebugContext(ctx, "charmhub sync skipped due to backoff", "package", packageName)
+			continue
+		}
 		if err := m.service.reconcilePackage(ctx, packageName); err != nil {
 			slog.ErrorContext(ctx, "charmhub sync failed", "package", packageName, "error", err)
+			m.recordFailure(packageName)
+		} else {
+			m.recordSuccess(packageName)
 		}
 	}
 }
@@ -185,10 +201,61 @@ func (m *Manager) runAll(ctx context.Context) {
 	slices.Sort(packageNames)
 	slog.DebugContext(ctx, "processing scheduled charmhub sync", "package_count", len(packageNames))
 	for _, packageName := range packageNames {
+		if m.isBackedOff(packageName) {
+			slog.DebugContext(ctx, "charmhub sync skipped due to backoff", "package", packageName)
+			continue
+		}
 		if err := m.service.reconcilePackage(ctx, packageName); err != nil {
 			slog.ErrorContext(ctx, "charmhub sync failed", "package", packageName, "error", err)
+			m.recordFailure(packageName)
+		} else {
+			m.recordSuccess(packageName)
 		}
 	}
+}
+
+// isBackedOff returns true if a package should be skipped because its
+// consecutive-failure count is above zero and the backoff cooldown has
+// not elapsed yet. The cooldown is based on the number of consecutive
+// failures: after N failures the package is skipped for N ticker
+// intervals before being retried.
+func (m *Manager) isBackedOff(packageName string) bool {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	skipCount := m.failSkip[packageName]
+	if skipCount <= 0 {
+		return false
+	}
+	// Decrement the skip counter each time we check; when it reaches
+	// zero the package will be eligible for the next sync attempt.
+	m.failSkip[packageName] = skipCount - 1
+	return true
+}
+
+// recordFailure increments the consecutive-failure counter and sets the
+// backoff skip count for a package. After N consecutive failures, the
+// package will be skipped for the next N sync intervals.
+func (m *Manager) recordFailure(packageName string) {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	count := m.failCounts[packageName] + 1
+	m.failCounts[packageName] = count
+	// Map failure count to skip intervals: 1→1, 2→2, 3→4, 4→8, capped at 8.
+	skip := 1
+	for i := 1; i < count && skip < 8; i++ {
+		skip *= 2
+	}
+	m.failSkip[packageName] = skip
+	slog.Debug("charmhub sync backoff", "package", packageName, "consecutive_failures", count, "skip_intervals", skip)
+}
+
+// recordSuccess resets the consecutive-failure counter and clears the
+// backoff wait duration for a package.
+func (m *Manager) recordSuccess(packageName string) {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	m.failCounts[packageName] = 0
+	m.failSkip[packageName] = 0
 }
 
 func (m *Manager) takePending() []string {
