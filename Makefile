@@ -1,7 +1,7 @@
 GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build charm-integration-test snap-integration-test
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build charm-integration-test snap-integration-test functional-test functional-test-build
 
 help:
 	@printf "%s\n" \
@@ -22,6 +22,9 @@ help:
 		"make generate-cert - generate the local embedded OCI TLS certificate" \
 		"make install-cert - install the local embedded OCI certificate into system trust (requires sudo)" \
 		"make install-k8s-cert - install the local embedded OCI certificate into Canonical k8s containerd trust (requires sudo)" \
+		"" \
+		"make functional-test       - run shared functional scenarios against FTEST_API_URL" \
+		"make functional-test-build - compile the functional-test binary" \
 		"" \
 		"make charm-pack   - pack the charm with charmcraft" \
 		"make rock-pack    - pack the OCI rock with rockcraft" \
@@ -145,3 +148,18 @@ charm-integration-test:
 
 snap-integration-test:
 	spread -v tests/spread/...
+
+# ---------- Functional test harness ----------
+# Runs endpoint-driven functional scenarios against any running instance.
+# Configure with FTEST_* environment variables (see tests/functional/README.md).
+
+FTEST_API_URL ?= http://localhost:8080
+
+functional-test-build:
+	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
+
+functional-test: functional-test-build
+	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test
+
+# Run functional scenarios as Go tests (alternative to the compiled binary):
+#   FTEST_API_URL=http://myhost:8080 go test -tags=functional -v ./tests/functional/...
