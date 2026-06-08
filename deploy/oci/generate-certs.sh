@@ -67,7 +67,7 @@ openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
 
 chmod 0644 "${CERT_DIR}/oci.crt"
 # The compose image runs as distroless nonroot (uid/gid 65532), while the
-# generated files are owned by the host user. Keep the local-dev key readable by
-# that container user; production deployments should mount a tighter secret.
-chmod 0644 "${CERT_DIR}/oci.key"
+# generated files are owned by the host user. Restrict the private key to
+# owner + group; production deployments should mount a tighter secret.
+chmod 0640 "${CERT_DIR}/oci.key"
 printf '%s\n' "${unique_hosts}" >"${HOSTS_FILE}"
