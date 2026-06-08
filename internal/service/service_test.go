@@ -2098,6 +2098,23 @@ func TestGetPackagePublicWithInsufficientTokenPermission(t *testing.T) {
 
 }
 
+func TestGetPackagePublicWithEmptyTokenPermissionsIsForbidden(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "public-charm", "charm", false)
+	require.NoError(t, err)
+	// Token with empty permissions slice must NOT bypass requirePermission (C-1 fix)
+	viewer := newIdentity("acc-2", "bob")
+	viewer.Token = &core.StoreToken{
+		Permissions: []string{},
+	}
+	_, err = svc.GetPackage(ctx, viewer, "public-charm", true)
+	assertServiceError(t, err, ErrorKindForbidden)
+
+}
+
 func TestPrivatePackageTokenDoesNotAllowPackage(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

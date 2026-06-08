@@ -35,8 +35,12 @@ func (s *Service) requirePermission(identity core.Identity, permission string) e
 	if identity.Account.IsAdmin {
 		return nil
 	}
-	if identity.Token == nil || len(identity.Token.Permissions) == 0 {
+	if identity.Token == nil {
+		// OIDC direct auth: no scoped token, permissions enforced elsewhere.
 		return nil
+	}
+	if len(identity.Token.Permissions) == 0 {
+		return newError(ErrorKindForbidden, "forbidden", "token has no permissions")
 	}
 	for _, item := range identity.Token.Permissions {
 		if item == permission || item == permPackageManage && strings.HasPrefix(permission, "package-") {
