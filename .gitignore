@@ -52,3 +52,6 @@ Thumbs.db
 *.charm
 *.rock
 *.snap
+
+# Functional test binary
+functional-test

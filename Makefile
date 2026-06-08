@@ -1,7 +1,7 @@
 GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build charm-integration-test snap-integration-test
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build charm-integration-test snap-integration-test functional-test functional-test-build
 
 help:
 	@printf "%s\n" \
@@ -23,13 +23,16 @@ help:
 		"make install-cert - install the local embedded OCI certificate into system trust (requires sudo)" \
 		"make install-k8s-cert - install the local embedded OCI certificate into Canonical k8s containerd trust (requires sudo)" \
 		"" \
-		"make charm-pack   - pack the charm with charmcraft" \
-		"make rock-pack    - pack the OCI rock with rockcraft" \
-		"make rock-smoke-test - inspect and validate a built .rock artifact" \
-		"make snap-pack    - pack the snap with snapcraft" \
-		"make artifact-build - build all artifacts (charm, rock, snap)" \
+		"make functional-test       - run shared functional scenarios against FTEST_API_URL" \
+		"make functional-test-build - compile the functional-test binary" \
+		"" \
+		"make charm-pack            - pack the charm with charmcraft" \
+		"make rock-pack             - pack the OCI rock with rockcraft" \
+		"make rock-smoke-test       - inspect and validate a built .rock artifact" \
+		"make snap-pack             - pack the snap with snapcraft" \
+		"make artifact-build        - build all artifacts (charm, rock, snap)" \
 		"make charm-integration-test - run charm integration tests with Jubilant" \
-		"make snap-integration-test  - run snap integration tests with spread"
+		"make snap-integration-test  - run snap spread tests (requires spread + snapd)"
 
 fmt:
 	$(GO) fmt $(_GO_PKGS)
@@ -131,7 +134,7 @@ rock-pack:
 	rockcraft pack
 
 rock-smoke-test:
-	@bash scripts/rock-smoke-test.sh $(ROCK_FILE)
+	bash scripts/rock-smoke-test.sh $(ROCK_FILE)
 
 snap-pack:
 	snapcraft pack
@@ -144,4 +147,21 @@ charm-integration-test:
 	cd tests/integration/charm && python3 -m pytest -v
 
 snap-integration-test:
-	spread -v tests/spread/...
+	@if command -v spread >/dev/null 2>&1; then \
+		spread -v ./tests/spread/...; \
+	else \
+		echo "ERROR: spread not found — install it (snap install spread --classic) or run in CI."; \
+		exit 1; \
+	fi
+
+# ---------- Functional test harness ----------
+# Runs endpoint-driven functional scenarios against any running instance.
+# Configure with FTEST_* environment variables (see tests/functional/README.md).
+
+FTEST_API_URL ?= http://localhost:8080
+
+functional-test-build:
+	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
+
+functional-test: functional-test-build
+	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test
