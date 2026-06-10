@@ -1,8 +1,8 @@
 # Code Review: `use-harbor` Branch (Production Readiness)
 
-**Reviewer:** kanban worker (automated review)  
-**Branch:** `origin/use-harbor` (commit `5119530`)  
-**Diff scope:** 150 files changed, ~37,949 insertions, ~5,942 deletions  
+**Reviewer:** kanban worker (automated review)
+**Branch:** `origin/use-harbor` (commit `5119530`)
+**Diff scope:** 150 files changed, ~37,949 insertions, ~5,942 deletions
 **Date:** 2026-06-07
 
 ---
@@ -37,7 +37,7 @@ cmd/charm-registry/main.go     → dual HTTP servers (API :8080, OCI :5000)
 
 ### 1. [CRITICAL] Robot credentials stored as encrypted but decryption key management is unclear
 
-**File:** `internal/core/package.go` — `RobotCredential.EncryptedSecret`  
+**File:** `internal/core/package.go` — `RobotCredential.EncryptedSecret`
 **Files:** `internal/service/oci.go`, `internal/sync/oci.go`
 
 `RobotCredential` stores `EncryptedSecret` in the database. The code checks `robotCredentialReady()` by verifying the field is non-empty, but:
@@ -56,7 +56,7 @@ SQLite with `MaxOpenConns(1)` serializes all database access through a single co
 - The sync reconciler performs multiple writes in a single sync cycle — if it holds a transaction open while downloading artifacts from Charmhub (network I/O inside a transaction), it will block the entire API.
 - The WAL mode helps concurrent reads but does NOT help when `MaxOpenConns=1` (only one connection exists).
 
-**Recommendation:** 
+**Recommendation:**
 - Audit all write paths to ensure no network I/O occurs inside transactions.
 - Consider `MaxOpenConns(1)` for writes + a read pool for reads, or document that SQLite is for single-user/dev only and PostgreSQL is required for production.
 - Add connection-pool metrics to detect contention.
