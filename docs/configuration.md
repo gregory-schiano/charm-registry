@@ -97,6 +97,7 @@ The application requires either OIDC configuration or explicit opt-in to insecur
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `CHARM_REGISTRY_REQUEST_TIMEOUT` | `30s` | Per-request router timeout; raise this for large or slow upload/download operations |
 | `CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT` | `10s` | HTTP read header timeout |
 | `CHARM_REGISTRY_SERVER_READ_TIMEOUT` | `30s` | HTTP read timeout |
 | `CHARM_REGISTRY_SERVER_WRITE_TIMEOUT` | `30s` | HTTP write timeout |
