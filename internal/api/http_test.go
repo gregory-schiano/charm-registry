@@ -822,8 +822,11 @@ func TestInfoEndpointNotFound(t *testing.T) {
 	resp := doRequest(t, handler, "GET", "/v2/charms/info/nonexistent", nil, "Bearer dev:alice:alice")
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 	body := decodeJSON(t, resp)
-	assert.Equal(t, "not-found", body["code"])
-	assert.NotEmpty(t, body["message"])
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	apiErr := errorList[0].(map[string]any)
+	assert.Equal(t, "not-found", apiErr["code"])
+	assert.NotEmpty(t, apiErr["message"])
 
 }
 
