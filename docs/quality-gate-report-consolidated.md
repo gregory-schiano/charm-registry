@@ -38,13 +38,13 @@
 
 | Gate | Result |
 |------|--------|
-| `go test ./...` | PASS (10/10 packages; repo tests excluded — need Docker) |
+| `make test` | PASS (10/10 packages; generated repo DB package excluded) |
 | `make test-race` | PASS (0 race conditions) |
 | `make coverage` | 65.3% |
 
 ### Integration tests
 
-**Setup:** `docker compose -f compose.integration.yaml down -v && make integration-test`
+**Setup:** Historical Docker Compose integration test path has been superseded by artifact-native integration targets: `make charm-integration-test` (Jubilant/Juju) and `make snap-integration-test` (spread/snapd).
 **Rate limiter config:** IP_RATE_LIMIT=0 (unlimited), TOKEN_RATE_LIMIT=5 (enforced)
 
 | Category | Result |
@@ -74,13 +74,13 @@
 
 ## Changed files (full list)
 
+Current report adjusted after the no-Docker migration: deleted Docker/Compose assets are omitted from this list.
+
 ```
 .github/workflows/ci.yml
 .github/workflows/integration.yml
 .github/workflows/release.yml
-Dockerfile
 Makefile
-compose.integration.yaml
 docs/quality-gate-report-consolidated.md
 go.mod
 internal/api/http.go
