@@ -8,6 +8,8 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +30,12 @@ type fakeCharmhubClient struct {
 	infos        map[string]charmhubclient.PackageChannel
 	downloads    map[string][]byte
 	downloadErrs map[string]error
+
+	mu                     sync.Mutex
+	downloadStarted        chan string
+	releaseBlockedDownload chan struct{}
+	maxActiveDownloads     int
+	activeDownloads        int
 }
 
 type trackingOCIRegistry struct {
@@ -82,6 +90,24 @@ func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]
 	payload, ok := f.downloads[artifactURL]
 	if !ok {
 		return nil, fmt.Errorf("unknown download URL %s", artifactURL)
+	}
+	if f.downloadStarted != nil && strings.Contains(artifactURL, "/resource-") {
+		f.mu.Lock()
+		f.activeDownloads++
+		if f.activeDownloads > f.maxActiveDownloads {
+			f.maxActiveDownloads = f.activeDownloads
+		}
+		f.mu.Unlock()
+
+		select {
+		case f.downloadStarted <- artifactURL:
+		default:
+		}
+		<-f.releaseBlockedDownload
+
+		f.mu.Lock()
+		f.activeDownloads--
+		f.mu.Unlock()
 	}
 	return append([]byte(nil), payload...), nil
 }
@@ -319,6 +345,50 @@ func TestReconcileCharmhubPackageFallsBackWhenUpstreamTimestampsMissing(t *testi
 	release, err := env.repo.ResolveRelease(ctx, pkg.ID, "latest/stable")
 	require.NoError(t, err)
 	assert.True(t, release.When.Equal(expected))
+}
+
+func TestCharmhubSyncDownloadsResourcesConcurrently(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	fakeClient.downloadStarted = make(chan string, 16)
+	fakeClient.releaseBlockedDownload = make(chan struct{})
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- env.sync.reconcilePackage(context.Background(), "demo")
+	}()
+
+	started := map[string]struct{}{}
+	for len(started) < 2 {
+		select {
+		case url := <-fakeClient.downloadStarted:
+			started[url] = struct{}{}
+		case err := <-done:
+			require.NoError(t, err)
+			require.Fail(t, "sync completed before multiple artifact downloads overlapped")
+		case <-time.After(2 * time.Second):
+			require.Fail(t, "timed out waiting for concurrent artifact downloads")
+		}
+	}
+
+	fakeClient.mu.Lock()
+	maxActive := fakeClient.maxActiveDownloads
+	fakeClient.mu.Unlock()
+	assert.GreaterOrEqual(t, maxActive, 2)
+
+	for range started {
+		fakeClient.releaseBlockedDownload <- struct{}{}
+	}
+	require.NoError(t, <-done)
 }
 
 func TestCharmhubSyncMirrorsAllBaseArchitectureVariantsByDefault(t *testing.T) {
