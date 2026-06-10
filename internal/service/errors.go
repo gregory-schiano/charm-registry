@@ -1,6 +1,11 @@
 package service
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/gschiano/charm-registry/internal/repo"
+)
 
 // Error describes an API error response.
 type Error struct {
@@ -51,10 +56,41 @@ func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-func newError(kind ErrorKind, code, message string) error {
+// NewError creates a typed service error.
+func NewError(kind ErrorKind, code, message string) error {
 	return &Error{Kind: kind, Code: code, Message: message}
 }
 
-func newErrorWithCause(kind ErrorKind, code, message string, cause error) error {
+// NewErrorWithCause creates a typed service error that wraps a lower-level cause.
+func NewErrorWithCause(kind ErrorKind, code, message string, cause error) error {
 	return &Error{Kind: kind, Code: code, Message: message, Cause: cause}
+}
+
+// TranslateRepoError converts a repository-layer error into a typed service
+// error with an appropriate HTTP status code and Charmhub API error code.
+// Unrecognised errors are returned as-is so the API layer can log and return
+// a generic 500.
+func TranslateRepoError(err error, message string) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, repo.ErrNotFound):
+		return NewError(ErrorKindNotFound, "not-found", message)
+	case errors.Is(err, repo.ErrConflict):
+		return NewError(ErrorKindConflict, "already-registered", message)
+	default:
+		return err
+	}
+}
+
+func newError(kind ErrorKind, code, message string) error {
+	return NewError(kind, code, message)
+}
+
+func newErrorWithCause(kind ErrorKind, code, message string, cause error) error {
+	return NewErrorWithCause(kind, code, message, cause)
+}
+
+func translateRepoError(err error, message string) error {
+	return TranslateRepoError(err, message)
 }
