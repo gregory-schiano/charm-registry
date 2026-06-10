@@ -852,7 +852,7 @@ func TestMemoryWithinTransaction(t *testing.T) {
 	assert.True(t, called)
 }
 
-func TestMemoryFindStoreTokenByPrefix(t *testing.T) {
+func TestMemoryFindStoreTokensByPrefix(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	m, acc := memWithAccount(t)
@@ -868,12 +868,13 @@ func TestMemoryFindStoreTokenByPrefix(t *testing.T) {
 	}
 	require.NoError(t, m.CreateStoreToken(ctx, tok))
 
-	got, gotAcc, err := m.FindStoreTokenByPrefix(ctx, "prefix-abc")
+	candidates, err := m.FindStoreTokensByPrefix(ctx, "prefix-abc")
 	require.NoError(t, err)
-	assert.Equal(t, "sess-1", got.SessionID)
-	assert.Equal(t, acc.ID, gotAcc.ID)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, "sess-1", candidates[0].Token.SessionID)
+	assert.Equal(t, acc.ID, candidates[0].Account.ID)
 
-	_, _, err = m.FindStoreTokenByPrefix(ctx, "nope")
+	_, err = m.FindStoreTokensByPrefix(ctx, "nope")
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
