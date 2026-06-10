@@ -44,3 +44,4 @@ parts:
     organize:
       charm-registry-wrapper: bin/charm-registry-wrapper
       charm-registry-snap-helpers: bin/charm-registry-snap-helpers
+      config-env.map: etc/charm-registry/config-env.map

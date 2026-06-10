@@ -115,11 +115,9 @@ snap set charm-registry oci.tls.cert-file=/etc/ssl/certs/oci.crt
 snap set charm-registry oci.tls.key-file=/etc/ssl/private/oci.key
 ```
 
-### Known limitation: API TLS in the Go app
+The snap maps `tls.cert-file` and `tls.key-file` to `CHARM_REGISTRY_API_TLS_CERT_FILE` and `CHARM_REGISTRY_API_TLS_KEY_FILE`; the main API server reads those variables and serves HTTPS when both are set.
 
-The snap wrapper exports `CHARM_REGISTRY_TLS_CERT_FILE` and `CHARM_REGISTRY_TLS_KEY_FILE` when TLS is enabled, but the Go application does not yet read these variables. The main API server always uses `ListenAndServe()` (plain HTTP). Use a reverse proxy (nginx, Caddy, Traefik) in front of the snap for API TLS termination.
-
-The OCI listener does support TLS directly via `CHARM_REGISTRY_OCI_TLS_CERT_FILE` / `CHARM_REGISTRY_OCI_TLS_KEY_FILE`.
+The OCI listener supports TLS directly via `CHARM_REGISTRY_OCI_TLS_CERT_FILE` / `CHARM_REGISTRY_OCI_TLS_KEY_FILE`.
 
 ### Snap grade
 

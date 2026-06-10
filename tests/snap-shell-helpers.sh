@@ -36,6 +36,8 @@ fake_snap="$tmp/snap"
 common="$tmp/common"
 mkdir -p "$fake_bin" "$fake_snap/bin" "$fake_snap/usr/bin" "$common/certs"
 cp "$repo_root/snap/local/charm-registry-snap-helpers" "$fake_snap/bin/charm-registry-snap-helpers"
+mkdir -p "$fake_snap/etc/charm-registry"
+cp "$repo_root/snap/local/config-env.map" "$fake_snap/etc/charm-registry/config-env.map"
 
 cat >"$fake_bin/snapctl" <<'EOF'
 #!/bin/sh

@@ -12,6 +12,8 @@ All configuration is through environment variables. The application validates re
 | `CHARM_REGISTRY_PUBLIC_API_URL` | `http://localhost:8080` | URL handed to clients for API endpoints |
 | `CHARM_REGISTRY_PUBLIC_STORAGE_URL` | `http://localhost:8080` | URL handed to clients for artifact download |
 | `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` | `https://localhost:5000` | URL handed to clients for OCI registry |
+| `CHARM_REGISTRY_API_TLS_CERT_FILE` | — | TLS certificate for API listener (set together with key) |
+| `CHARM_REGISTRY_API_TLS_KEY_FILE` | — | TLS key for API listener (set together with cert) |
 
 ### Database
 
@@ -164,9 +166,9 @@ Snap keys use dotted paths that correspond to the environment variable names. Su
 | `public-api-url` | `CHARM_REGISTRY_PUBLIC_API_URL` | Public API base URL |
 | `public-storage-url` | `CHARM_REGISTRY_PUBLIC_STORAGE_URL` | Public storage base URL |
 | `public-registry-url` | `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` | Public OCI registry base URL |
-| `tls.enabled` | Enables `CHARM_REGISTRY_TLS_CERT_FILE` / `CHARM_REGISTRY_TLS_KEY_FILE` | Boolean (`true` / `false`) |
-| `tls.cert-file` | `CHARM_REGISTRY_TLS_CERT_FILE` | API TLS certificate path |
-| `tls.key-file` | `CHARM_REGISTRY_TLS_KEY_FILE` | API TLS private key path |
+| `tls.enabled` | Enables `CHARM_REGISTRY_API_TLS_CERT_FILE` / `CHARM_REGISTRY_API_TLS_KEY_FILE` | Boolean (`true` / `false`) |
+| `tls.cert-file` | `CHARM_REGISTRY_API_TLS_CERT_FILE` | API TLS certificate path |
+| `tls.key-file` | `CHARM_REGISTRY_API_TLS_KEY_FILE` | API TLS private key path |
 | `oci.internal-url` | `CHARM_REGISTRY_OCI_INTERNAL_URL` | Internal OCI URL used by the API |
 | `database.backend` | `CHARM_REGISTRY_DATABASE_BACKEND` | `sqlite` or `postgres` |
 | `database.url` | `CHARM_REGISTRY_DATABASE_URL` | Postgres connection URL |
@@ -206,3 +208,9 @@ Snap keys use dotted paths that correspond to the environment variable names. Su
 | `rate-limit.token-window` | `CHARM_REGISTRY_TOKEN_RATE_WINDOW` | Positive duration such as `30s`, `1m`, or `2h` |
 
 The configure hook rejects invalid rate-limit values before snapd stores them: limits must be non-negative integers, and windows must be positive durations.
+
+The wrapper keeps the full mapping in `snap/local/config-env.map` and packages
+that file as `$SNAP/etc/charm-registry/config-env.map`. Add or review snap
+configuration keys there instead of appending ad-hoc `snapctl get` calls to the
+wrapper; this keeps mappings centralized and makes key/env typos (including TLS
+certificate variables) visible in one table.
