@@ -69,13 +69,21 @@ test-race:
 coverage:
 	@rm -f coverage.out
 	@printf "mode: count\n" > coverage.out
-	@for pkg in $(_COVER_PKGS); do \
+	@failed=0; \
+	for pkg in $(_COVER_PKGS); do \
 		tmp_cov=$$(mktemp); \
-		$(GO) test $$pkg -coverprofile=$$tmp_cov -covermode=count >/dev/null; \
+		if ! $(GO) test $$pkg -coverprofile=$$tmp_cov -covermode=count 2>&1; then \
+			failed=$$((failed + 1)); \
+			printf 'FAIL: %s\n' "$$pkg"; \
+		fi; \
 		if [ -s "$$tmp_cov" ]; then tail -n +2 "$$tmp_cov" >> coverage.out; fi; \
 		rm -f "$$tmp_cov"; \
-	done
-	$(GO) tool cover -func=coverage.out
+	done; \
+	$(GO) tool cover -func=coverage.out; \
+	if [ "$$failed" -ne 0 ]; then \
+		printf '\nERROR: %d package(s) failed tests.\n' "$$failed"; \
+		exit 1; \
+	fi
 
 vet:
 	$(GO) vet $(_GO_PKGS)
