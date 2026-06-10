@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,6 +467,107 @@ func TestCharmhubManagedPackagesBlockPublisherMutations(t *testing.T) {
 	assertServiceError(t, err, registryservice.ErrorKindConflict)
 }
 
+func TestCharmhubSyncRejectsInvalidTrackBeforePersistence(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
+	pkg, lookupErr := env.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, lookupErr)
+	tracks, listErr := env.repo.ListTracks(context.Background(), pkg.ID)
+	require.NoError(t, listErr)
+	require.Len(t, tracks, 1)
+
+	err = env.repo.CreateCharmhubSyncRule(context.Background(), core.CharmhubSyncRule{
+		PackageName:        "demo",
+		Track:              " ",
+		CreatedByAccountID: admin.Account.ID,
+		CreatedAt:          time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:          time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC),
+		LastSyncStatus:     charmhubSyncStatusPending,
+	})
+	require.NoError(t, err)
+	blankTrack := fakeClient.channels["demo|latest/stable"]
+	blankTrack.DefaultRelease.Channel.Name = "stable"
+	blankTrack.DefaultRelease.Channel.Track = " "
+	blankTrack.DefaultRelease.Revision.Revision = 8
+	blankTrack.DefaultRelease.Revision.Version = "8"
+	blankTrack.DefaultRelease.Revision.Download.URL = "https://charmhub.test/demo/stable/revision-8.charm"
+	fakeClient.downloads[blankTrack.DefaultRelease.Revision.Download.URL] = buildSyncCharmArchive(t, "demo")
+	fakeClient.channels["demo| /stable"] = blankTrack
+	fakeClient.channels["demo| /stable|ubuntu@24.04|amd64"] = blankTrack
+	fakeClient.infos["demo"] = charmhubclient.PackageChannel{
+		ID:     "upstream-demo",
+		Name:   "demo",
+		Result: blankTrack.Result,
+		ChannelMap: []charmhubclient.ChannelMap{{
+			Channel:  blankTrack.DefaultRelease.Channel,
+			Revision: blankTrack.DefaultRelease.Revision,
+		}},
+	}
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "charmhub sync track")
+	assert.Contains(t, err.Error(), "track name is required")
+
+	tracks, listErr = env.repo.ListTracks(context.Background(), pkg.ID)
+	require.NoError(t, listErr)
+	for _, track := range tracks {
+		assert.NotEmpty(t, strings.TrimSpace(track.Name))
+	}
+}
+
+func TestCharmhubSyncRejectsInvalidResourceDefinitionBeforePersistence(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	fakeClient.downloads = map[string][]byte{}
+	stable := fakeClient.channels["demo|latest/stable"]
+	stable.DefaultRelease.Revision.Download.URL = "https://charmhub.test/demo/latest/stable/revision-invalid-resource.charm"
+	stable.DefaultRelease.Resources = nil
+	fakeClient.channels["demo|latest/stable"] = stable
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"] = stable
+	fakeClient.infos["demo"] = charmhubclient.PackageChannel{
+		ID:     "upstream-demo",
+		Name:   "demo",
+		Result: stable.Result,
+		ChannelMap: []charmhubclient.ChannelMap{{
+			Channel:  stable.DefaultRelease.Channel,
+			Revision: stable.DefaultRelease.Revision,
+		}},
+	}
+	fakeClient.downloads[stable.DefaultRelease.Revision.Download.URL] = buildInvalidResourceArchive(t, "demo")
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resource definition config")
+	assert.Contains(t, err.Error(), "resource definition type is required")
+
+	pkg, lookupErr := env.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, lookupErr)
+	defs, listErr := env.repo.ListResourceDefinitions(context.Background(), pkg.ID)
+	require.NoError(t, listErr)
+	assert.Empty(t, defs)
+}
+
 func TestCharmhubSyncMirrorFailureMarksRuleErrorAndRetries(t *testing.T) {
 	t.Parallel()
 
@@ -867,6 +969,33 @@ func buildSyncCharmArchive(t *testing.T, name string) []byte {
 			"    resource: app-image\n",
 		"config.txt": "value=true\n",
 		"README.md":  "# Synced Demo\n",
+	}
+
+	for fileName, content := range files {
+		entry, err := writer.Create(fileName)
+		require.NoError(t, err)
+		_, err = entry.Write([]byte(content))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, writer.Close())
+	return payload.Bytes()
+}
+
+func buildInvalidResourceArchive(t *testing.T, name string) []byte {
+	t.Helper()
+
+	var payload bytes.Buffer
+	writer := zip.NewWriter(&payload)
+	files := map[string]string{
+		"metadata.yaml": "name: " + name + "\n" +
+			"display-name: Synced Demo\n" +
+			"summary: Synced summary\n" +
+			"description: Synced description\n" +
+			"resources:\n" +
+			"  config:\n" +
+			"    description: Missing type should be rejected\n",
+		"config.txt": "value=true\n",
 	}
 
 	for fileName, content := range files {

@@ -88,6 +88,40 @@ func NewRelease(release Release) (Release, error) {
 	return release, nil
 }
 
+// NewTrack validates and returns a track value.
+func NewTrack(track Track) (Track, error) {
+	track.Name = strings.TrimSpace(track.Name)
+	if track.Name == "" {
+		return Track{}, fmt.Errorf("track name is required")
+	}
+	if track.CreatedAt.IsZero() {
+		return Track{}, fmt.Errorf("track creation time is required")
+	}
+	return track, nil
+}
+
+// NewResourceDefinition validates and returns a resource definition value.
+func NewResourceDefinition(resource ResourceDefinition) (ResourceDefinition, error) {
+	resource.Name = strings.TrimSpace(resource.Name)
+	resource.Type = strings.TrimSpace(resource.Type)
+	if resource.ID == "" {
+		return ResourceDefinition{}, fmt.Errorf("resource definition id is required")
+	}
+	if resource.PackageID == "" {
+		return ResourceDefinition{}, fmt.Errorf("resource definition package id is required")
+	}
+	if resource.Name == "" {
+		return ResourceDefinition{}, fmt.Errorf("resource definition name is required")
+	}
+	if resource.Type == "" {
+		return ResourceDefinition{}, fmt.Errorf("resource definition type is required")
+	}
+	if resource.CreatedAt.IsZero() {
+		return ResourceDefinition{}, fmt.Errorf("resource definition creation time is required")
+	}
+	return resource, nil
+}
+
 // NewStoreToken validates and returns a store token value.
 func NewStoreToken(token StoreToken) (StoreToken, error) {
 	if token.SessionID == "" {

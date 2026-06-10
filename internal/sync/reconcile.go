@@ -461,10 +461,14 @@ func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, tra
 			return nil
 		}
 	}
-	_, err = s.repo.CreateTracks(ctx, pkg.ID, []core.Track{{
+	createdTrack, err := core.NewTrack(core.Track{
 		Name:      track,
 		CreatedAt: s.now(),
-	}})
+	})
+	if err != nil {
+		return fmt.Errorf("charmhub sync track %s: %w", track, err)
+	}
+	_, err = s.repo.CreateTracks(ctx, pkg.ID, []core.Track{createdTrack})
 	if err == nil {
 		slog.InfoContext(ctx, "charmhub track created",
 			"package", pkg.Name,
@@ -795,7 +799,7 @@ func (s *Service) createRevisionRecord(
 
 func (s *Service) upsertManifestResourceDefinitions(ctx context.Context, packageID string, manifest core.CharmManifest) error {
 	for resourceName, resource := range manifest.Resources {
-		_, err := s.repo.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		definition, err := core.NewResourceDefinition(core.ResourceDefinition{
 			ID:          uuid.NewString(),
 			PackageID:   packageID,
 			Name:        resourceName,
@@ -805,6 +809,10 @@ func (s *Service) upsertManifestResourceDefinitions(ctx context.Context, package
 			Optional:    false,
 			CreatedAt:   s.now(),
 		})
+		if err != nil {
+			return fmt.Errorf("resource definition %s: %w", resourceName, err)
+		}
+		_, err = s.repo.UpsertResourceDefinition(ctx, definition)
 		if err != nil {
 			return err
 		}
