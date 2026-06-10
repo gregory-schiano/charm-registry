@@ -359,10 +359,17 @@ jobs:
         id: upload
         run: |
           CHARM_FILE=$(ls charm/*.charm | head -1)
+          BUILT_SHA=${{ github.sha }}
           echo "Uploading: ${CHARM_FILE}"
+          echo "Built from commit: ${BUILT_SHA}"
+          echo "built_sha=${BUILT_SHA}" >> "$GITHUB_OUTPUT"
           REVISION=$(charmcraft upload "$CHARM_FILE" --format=json | jq -r '.revision')
+          if [ -z "$REVISION" ] || [ "$REVISION" = "null" ]; then
+            echo "::error::Failed to parse charm revision from upload output"
+            exit 1
+          fi
           echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
-          echo "Charm uploaded as revision ${REVISION}"
+          echo "Charm uploaded as revision ${REVISION} (commit ${BUILT_SHA})"
 
       - name: Release charm on Charmhub
         run: |
@@ -439,7 +446,10 @@ jobs:
         run: |
           IMAGE="${{ needs.release-metadata.outputs.rock_image }}"
           TAG="${{ needs.release-metadata.outputs.tag }}"
-          skopeo inspect "docker://${IMAGE}:${TAG}" --format='{{.Digest}}' | tee /dev/stderr
+          DIGEST=$(skopeo inspect "docker://${IMAGE}:${TAG}" --format='{{.Digest}}')
+          echo "Rock pushed: ${IMAGE}:${TAG}"
+          echo "  Digest: ${DIGEST}"
+          echo "  Built from commit: ${{ github.sha }}"
 
   publish-snap:
     name: Publish snap to Snap Store
@@ -471,15 +481,22 @@ jobs:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
           SNAP_FILE=$(ls *.snap | head -1)
+          BUILT_SHA=${{ github.sha }}
           echo "Uploading: ${SNAP_FILE}"
-          OUTPUT=$(snapcraft upload "$SNAP_FILE" 2>&1) || true
+          echo "Built from commit: ${BUILT_SHA}"
+          echo "built_sha=${BUILT_SHA}" >> "$GITHUB_OUTPUT"
+
+          OUTPUT=$(snapcraft upload "$SNAP_FILE" 2>&1)
+          echo "Upload output:"
+          echo "$OUTPUT"
+
           REVISION=$(echo "$OUTPUT" | grep -oP 'Revision \K[0-9]+' || echo "")
           if [ -z "$REVISION" ]; then
-            # Try alternate output format
-            REVISION=$(snapcraft list-revisions charm-registry 2>/dev/null | head -1 | awk '{print $1}')
+            echo "::error::Failed to parse snap revision from upload output"
+            exit 1
           fi
           echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
-          echo "Snap uploaded: revision ${REVISION}"
+          echo "Snap uploaded: revision ${REVISION} (commit ${BUILT_SHA})"
 
       - name: Release snap on Snap Store
         env:
