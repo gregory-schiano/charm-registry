@@ -35,7 +35,7 @@ type Querier interface {
 	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)
 	FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error)
-	FindStoreTokenByPrefix(ctx context.Context, tokenPrefix *string) (FindStoreTokenByPrefixRow, error)
+	FindStoreTokensByPrefix(ctx context.Context, tokenPrefix *string) ([]FindStoreTokensByPrefixRow, error)
 	GetAccountByID(ctx context.Context, id string) (Account, error)
 	GetLatestRevision(ctx context.Context, packageID string) (Revision, error)
 	GetPackageByID(ctx context.Context, id string) (GetPackageByIDRow, error)

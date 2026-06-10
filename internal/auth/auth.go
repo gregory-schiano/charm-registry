@@ -26,7 +26,7 @@ const (
 
 type TokenRepository interface {
 	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
-	FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error)
+	FindStoreTokensByPrefix(ctx context.Context, prefix string) ([]core.StoreTokenCandidate, error)
 	UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error
 }
 
@@ -210,9 +210,13 @@ func (a *Authenticator) findAndVerifyToken(ctx context.Context, raw string) (cor
 	// Try prefix-based lookup first (bcrypt tokens).
 	prefix := TokenPrefixFromRaw(raw)
 	if len(prefix) >= 4 {
-		token, account, err := a.tokenStore.FindStoreTokenByPrefix(ctx, prefix)
-		if err == nil && VerifyTokenHash(raw, token.TokenHash, token.HashScheme) {
-			return token, account, nil
+		candidates, err := a.tokenStore.FindStoreTokensByPrefix(ctx, prefix)
+		if err == nil {
+			for _, candidate := range candidates {
+				if VerifyTokenHash(raw, candidate.Token.TokenHash, candidate.Token.HashScheme) {
+					return candidate.Token, candidate.Account, nil
+				}
+			}
 		}
 	}
 	// Fall back to SHA-256 hash lookup (legacy tokens).

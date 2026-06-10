@@ -38,6 +38,15 @@ type StoreToken struct {
 	RevokedBy   *string           `json:"revoked-by,omitempty"`
 }
 
+// StoreTokenCandidate pairs a token lookup candidate with the account that
+// owns it. Prefix lookups can return multiple candidates, and collisions may
+// cross account boundaries, so callers must keep each token attached to its
+// account while verifying hashes.
+type StoreTokenCandidate struct {
+	Token   StoreToken
+	Account Account
+}
+
 // Identity carries the authenticated account and optional store token.
 type Identity struct {
 	Account       Account
