@@ -62,6 +62,7 @@ type PackageRepo interface {
 	ReplaceRelease(ctx context.Context, packageID string, release core.Release) error
 	DeleteRelease(ctx context.Context, packageID, channel string) error
 	DeleteReleaseForBase(ctx context.Context, packageID, channel string, base *core.Base) error
+	DeleteStaleTrackReleases(ctx context.Context, packageID, track string, keep []ReleaseVariant) (int64, error)
 	ListReleases(ctx context.Context, packageID string) ([]core.Release, error)
 	ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error)
 	ResolveReleaseForBase(ctx context.Context, packageID string, channel string, base core.Base) (core.Release, error)

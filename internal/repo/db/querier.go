@@ -31,6 +31,7 @@ type Querier interface {
 	DeleteResourceDefinition(ctx context.Context, id string) (int64, error)
 	DeleteResourceRevision(ctx context.Context, arg DeleteResourceRevisionParams) (int64, error)
 	DeleteRevision(ctx context.Context, arg DeleteRevisionParams) (int64, error)
+	DeleteStaleTrackReleases(ctx context.Context, arg DeleteStaleTrackReleasesParams) (int64, error)
 	DeleteStaleUploads(ctx context.Context, dollar_1 pgtype.Interval) (int64, error)
 	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)

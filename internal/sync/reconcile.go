@@ -412,32 +412,23 @@ func (s *Service) removeStaleTrackReleases(
 	packageID, track string,
 	present []channelState,
 ) error {
-	presentVariants := map[string]struct{}{}
+	presentVariants := make([]repo.ReleaseVariant, 0, len(present))
 	for _, state := range present {
-		presentVariants[releaseVariantID(state.channel, state.info.DefaultRelease.Channel.Base)] = struct{}{}
+		presentVariants = append(presentVariants, repo.ReleaseVariant{
+			Channel: state.channel,
+			Base:    state.info.DefaultRelease.Channel.Base,
+		})
 	}
 
-	releases, err := s.repo.ListReleases(ctx, packageID)
+	deleted, err := s.repo.DeleteStaleTrackReleases(ctx, packageID, track, presentVariants)
 	if err != nil {
 		return err
 	}
-	for _, release := range releases {
-		if splitChannel(release.Channel).track != track {
-			continue
-		}
-		if _, ok := presentVariants[releaseVariantID(release.Channel, release.Base)]; ok {
-			continue
-		}
-		if err := s.repo.DeleteReleaseForBase(ctx, packageID, release.Channel, release.Base); err != nil &&
-			!errors.Is(err, repo.ErrNotFound) {
-			return err
-		}
-		slog.InfoContext(ctx, "stale charmhub release pruned",
+	if deleted > 0 {
+		slog.InfoContext(ctx, "stale charmhub releases pruned",
 			"package_id", packageID,
 			"track", track,
-			"channel", release.Channel,
-			"revision", release.Revision,
-			"base", release.Base,
+			"release_count", deleted,
 		)
 	}
 	return nil

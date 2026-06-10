@@ -53,6 +53,36 @@ func (q *Queries) DeleteReleaseForBase(ctx context.Context, arg DeleteReleaseFor
 	return result.RowsAffected(), nil
 }
 
+const deleteStaleTrackReleases = `-- name: DeleteStaleTrackReleases :execrows
+WITH keep_variants AS (
+    SELECT item->>'channel' AS channel, item->>'base_key' AS base_key
+    FROM jsonb_array_elements($3::jsonb) AS item
+)
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel LIKE $2
+  AND NOT EXISTS (
+      SELECT 1
+      FROM keep_variants keep
+      WHERE keep.channel = releases.channel
+        AND keep.base_key = releases.base_key
+  )
+`
+
+type DeleteStaleTrackReleasesParams struct {
+	PackageID    string
+	TrackPrefix  string
+	KeepVariants json.RawMessage
+}
+
+func (q *Queries) DeleteStaleTrackReleases(ctx context.Context, arg DeleteStaleTrackReleasesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleTrackReleases, arg.PackageID, arg.TrackPrefix, arg.KeepVariants)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listReleases = `-- name: ListReleases :many
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive
