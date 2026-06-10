@@ -157,16 +157,21 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 Store tokens have a `valid_until` timestamp. Expired tokens are rejected at validation time. The default TTL depends on how the token was issued. When creating tokens, set a reasonable TTL and rotate them regularly.
 
-### OCI credential rotation
+### OCI credential encryption and key rotation
 
-OCI push/pull credentials are deterministic HMAC-derived from `CHARM_REGISTRY_OCI_SECRET_KEY`. There is no per-credential rotation mechanism. Changing `CHARM_REGISTRY_OCI_SECRET_KEY` invalidates all existing OCI credentials with no migration path — every package's OCI robot accounts must be re-provisioned.
+OCI push/pull robot credentials are encrypted at rest with AES-GCM. The encryption key is derived from `CHARM_REGISTRY_OCI_SECRET_KEY` and each stored ciphertext is currently tagged with the `v1` key format.
 
-To rotate:
+Treat `CHARM_REGISTRY_OCI_SECRET_KEY` as immutable for a live deployment. The service does not keep previous keys and does not currently implement a versioned re-encryption workflow. Changing the key makes all existing encrypted OCI robot secrets undecryptable, so package OCI authentication will fail until those credentials are regenerated.
 
-1. Pick a maintenance window (OCI operations will fail during transition)
-2. Change `CHARM_REGISTRY_OCI_SECRET_KEY`
-3. Restart the service
-4. Re-provision OCI projects by triggering a re-sync or re-upload for each package
+If the key must be replaced:
+
+1. Schedule a maintenance window; OCI push/pull operations that depend on existing robot credentials can fail during the transition.
+2. Back up the database and OCI/blob storage before changing the key.
+3. Change `CHARM_REGISTRY_OCI_SECRET_KEY` and restart the service.
+4. Regenerate each package's OCI robot credentials by clearing/re-provisioning the package OCI robot fields or by recreating the affected packages through the supported import/upload flow.
+5. Verify every package can return OCI credentials and complete a pull/push against the embedded registry.
+
+A future safe rotation path should store a key version alongside each encrypted robot secret, keep the previous key available during rollout, and re-encrypt stored secrets from the old key version to the new one before retiring the old key.
 
 ## Charmhub sync operations
 

@@ -58,7 +58,7 @@ In `auto` mode, the registry uses S3 when `CHARM_REGISTRY_S3_ENDPOINT` or creden
 | `CHARM_REGISTRY_OCI_S3_ACCESS_KEY` | (same as S3 access key) | S3 access key for OCI blobs |
 | `CHARM_REGISTRY_OCI_S3_SECRET_KEY` | (same as S3 secret key) | S3 secret key for OCI blobs |
 | `CHARM_REGISTRY_OCI_S3_USE_PATH_STYLE` | (same as `S3_USE_PATH_STYLE`) | Use path-style S3 URLs for OCI blobs |
-| `CHARM_REGISTRY_OCI_SECRET_KEY` | — | **Required.** Encryption key for OCI credentials at rest. |
+| `CHARM_REGISTRY_OCI_SECRET_KEY` | — | **Required.** Encryption key for OCI credentials at rest; treat as immutable after credentials are created. Changing it makes existing encrypted OCI robot secrets undecryptable until regenerated. |
 | `CHARM_REGISTRY_OCI_PROJECT_PREFIX` | `charm` | OCI project name prefix |
 | `CHARM_REGISTRY_OCI_PULL_ROBOT_PREFIX` | `pull` | OCI pull robot account prefix |
 | `CHARM_REGISTRY_OCI_PUSH_ROBOT_PREFIX` | `push` | OCI push robot account prefix |
