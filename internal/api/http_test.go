@@ -203,7 +203,7 @@ func TestIssueTokenRateLimitedPerAccount(t *testing.T) {
 
 func TestIPRateLimiterZeroMeansUnlimited(t *testing.T) {
 	t.Parallel()
-	limiter := newIPRateLimiter(0, time.Minute)
+	limiter := newSlidingWindowLimiter(0, time.Minute)
 	for i := 0; i < 1000; i++ {
 		assert.True(t, limiter.Allow("1.2.3.4"), "limit=0 should allow all requests")
 	}
@@ -211,7 +211,7 @@ func TestIPRateLimiterZeroMeansUnlimited(t *testing.T) {
 
 func TestIPRateLimiterPositiveEnforcesLimit(t *testing.T) {
 	t.Parallel()
-	limiter := newIPRateLimiter(3, time.Minute)
+	limiter := newSlidingWindowLimiter(3, time.Minute)
 	assert.True(t, limiter.Allow("1.2.3.4"))
 	assert.True(t, limiter.Allow("1.2.3.4"))
 	assert.True(t, limiter.Allow("1.2.3.4"))
@@ -222,7 +222,7 @@ func TestIPRateLimiterPositiveEnforcesLimit(t *testing.T) {
 
 func TestTokenIssueLimiterZeroMeansUnlimited(t *testing.T) {
 	t.Parallel()
-	limiter := newTokenIssueLimiter(0, time.Minute)
+	limiter := newSlidingWindowLimiter(0, time.Minute)
 	for i := 0; i < 1000; i++ {
 		assert.True(t, limiter.Allow("alice"), "limit=0 should allow all requests")
 	}
@@ -230,13 +230,131 @@ func TestTokenIssueLimiterZeroMeansUnlimited(t *testing.T) {
 
 func TestTokenIssueLimiterPositiveEnforcesLimit(t *testing.T) {
 	t.Parallel()
-	limiter := newTokenIssueLimiter(3, time.Minute)
+	limiter := newSlidingWindowLimiter(3, time.Minute)
 	assert.True(t, limiter.Allow("alice"))
 	assert.True(t, limiter.Allow("alice"))
 	assert.True(t, limiter.Allow("alice"))
 	assert.False(t, limiter.Allow("alice"), "should reject after exceeding limit")
 	// Different account should still be allowed.
 	assert.True(t, limiter.Allow("bob"))
+}
+
+// TestSlidingWindowLimiterPrunesEmptyKeys verifies that expired entries
+// are cleaned up inline, preventing unbounded map growth.
+func TestSlidingWindowLimiterPrunesEmptyKeys(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	limiter := newSlidingWindowLimiter(10, 100*time.Millisecond)
+	limiter.now = func() time.Time { return now }
+
+	// Add entries for several keys.
+	for _, key := range []string{"a", "b", "c"} {
+		require.True(t, limiter.Allow(key))
+	}
+
+	// Advance clock past the window.
+	limiter.now = func() time.Time { return now.Add(200 * time.Millisecond) }
+
+	// Trigger cleanup by calling Allow on a new key (cleanup happens at window interval).
+	limiter.cleanupInterval = 200 * time.Millisecond
+	assert.True(t, limiter.Allow("d"))
+
+	// All old keys (a, b, c) should have been cleaned up.
+	limiter.mu.Lock()
+	mapLen := len(limiter.entries)
+	limiter.mu.Unlock()
+	// "d" is the only key that should remain (plus the one we just allowed).
+	assert.Equal(t, 1, mapLen, "expired keys should be pruned from the map")
+}
+
+// TestSlidingWindowLimiterDeletesEmptyKeys verifies that when all timestamps
+// for a key expire, the key is deleted (not left as an empty slice).
+func TestSlidingWindowLimiterDeletesEmptyKeys(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	limiter := newSlidingWindowLimiter(5, 100*time.Millisecond)
+	limiter.now = func() time.Time { return now }
+
+	require.True(t, limiter.Allow("ephemeral"))
+
+	// Advance clock past the window and trigger prune on that key.
+	limiter.now = func() time.Time { return now.Add(200 * time.Millisecond) }
+	assert.True(t, limiter.Allow("ephemeral"), "should allow after window expires")
+
+	limiter.mu.Lock()
+	_, exists := limiter.entries["ephemeral"]
+	// After Allow with a clean slate (all old timestamps expired, one new one added),
+	// the key should exist with exactly one timestamp.
+	limiter.mu.Unlock()
+	require.True(t, exists, "key should exist after re-allow")
+	limiter.mu.Lock()
+	tsLen := len(limiter.entries["ephemeral"])
+	limiter.mu.Unlock()
+	assert.Equal(t, 1, tsLen, "should have exactly one timestamp from the fresh Allow call")
+}
+
+// TestRateLimitUsesRemoteAddrNotSpoofedHeader verifies the middleware uses
+// r.RemoteAddr (set by chimiddleware.RealIP) instead of X-Forwarded-For,
+// preventing spoofed bypass of rate limits.
+func TestRateLimitUsesRemoteAddrNotSpoofedHeader(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           2,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0, // disable token limiter for this test
+	}
+	handler := newTestHandler(t, cfg)
+
+	// Send 2 requests from 192.0.2.1 (the remote addr) with spoofed
+	// X-Forwarded-For headers. The middleware should ignore X-Forwarded-For
+	// and key on RemoteAddr.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("spoofed-%d.example.com", i))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "request %d should pass", i)
+	}
+
+	// Third request from the same RemoteAddr should be rate-limited regardless
+	// of the spoofed X-Forwarded-For.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "totally-different-spoofer.example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "should reject despite spoofed header")
+}
+
+// TestRateLimitTrimsWhitespace verifies that whitespace in RemoteAddr
+// is trimmed before use as a rate-limit key.
+func TestRateLimitTrimsWhitespace(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           1,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0,
+	}
+	handler := newTestHandler(t, cfg)
+
+	// First request with whitespace around remote addr.
+	req1 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req1.RemoteAddr = " 10.0.0.1:9999 "
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	// Second request with same IP (whitespace-normalized) should be limited.
+	req2 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req2.RemoteAddr = "10.0.0.1:9999"
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, rec2.Code, "whitespace-trimmed key should collide")
 }
 
 func TestExchangeToken(t *testing.T) {

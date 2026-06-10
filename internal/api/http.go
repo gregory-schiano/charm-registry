@@ -41,8 +41,8 @@ type API struct {
 	svc          *service.Service
 	sync         syncAdminService
 	auth         *auth.Authenticator
-	tokenLimiter *tokenIssueLimiter
-	ipLimiter    *ipRateLimiter
+	tokenLimiter *slidingWindowLimiter
+	ipLimiter    *slidingWindowLimiter
 }
 
 // New builds the HTTP handler for the registry API.
@@ -52,8 +52,8 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 		svc:          svc,
 		sync:         syncSvc,
 		auth:         authenticator,
-		tokenLimiter: newTokenIssueLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
-		ipLimiter:    newIPRateLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
+		tokenLimiter: newSlidingWindowLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
+		ipLimiter:    newSlidingWindowLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
 	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
@@ -122,7 +122,10 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	return router
 }
 
-type tokenIssueLimiter struct {
+// slidingWindowLimiter provides per-key request rate limiting using a sliding
+// window. Stale entries are pruned inline on each Allow call and deleted when
+// empty, preventing unbounded map growth.
+type slidingWindowLimiter struct {
 	mu              sync.Mutex
 	entries         map[string][]time.Time
 	limit           int
@@ -132,8 +135,8 @@ type tokenIssueLimiter struct {
 	now             func() time.Time
 }
 
-func newTokenIssueLimiter(limit int, window time.Duration) *tokenIssueLimiter {
-	return &tokenIssueLimiter{
+func newSlidingWindowLimiter(limit int, window time.Duration) *slidingWindowLimiter {
+	return &slidingWindowLimiter{
 		entries:         make(map[string][]time.Time),
 		limit:           limit,
 		window:          window,
@@ -142,7 +145,7 @@ func newTokenIssueLimiter(limit int, window time.Duration) *tokenIssueLimiter {
 	}
 }
 
-func (l *tokenIssueLimiter) Allow(key string) bool {
+func (l *slidingWindowLimiter) Allow(key string) bool {
 	if l == nil || key == "" {
 		return true
 	}
@@ -170,22 +173,23 @@ func (l *tokenIssueLimiter) Allow(key string) bool {
 	return true
 }
 
-func (l *tokenIssueLimiter) pruneKey(key string, cutoff time.Time) []time.Time {
-	timestamps := l.entries[key][:0]
-	for _, ts := range l.entries[key] {
-		if ts.After(cutoff) {
-			timestamps = append(timestamps, ts)
-		}
+func (l *slidingWindowLimiter) pruneKey(key string, cutoff time.Time) []time.Time {
+	ts := l.entries[key]
+	i := 0
+	for i < len(ts) && !ts[i].After(cutoff) {
+		i++
 	}
-	if len(timestamps) == 0 {
+	if i == len(ts) {
+		// All timestamps expired — delete the key to free memory.
 		delete(l.entries, key)
 		return nil
 	}
-	l.entries[key] = timestamps
-	return timestamps
+	ts = ts[i:]
+	l.entries[key] = ts
+	return ts
 }
 
-func (l *tokenIssueLimiter) cleanup(cutoff time.Time) {
+func (l *slidingWindowLimiter) cleanup(cutoff time.Time) {
 	for key := range l.entries {
 		l.pruneKey(key, cutoff)
 	}
@@ -417,78 +421,16 @@ func parseResourceDownloadFilename(filename string) (string, string, int, error)
 	return packageID, resourcePart[:lastUnderscore], revision, nil
 }
 
-// ipRateLimiter provides per-IP request rate limiting using a sliding window.
-// Note: this is in-memory only; in a multi-instance deployment, use a shared
-// store (Redis, etc.) instead.
-type ipRateLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	entries map[string]*ipWindow
-}
 
-type ipWindow struct {
-	timestamps []time.Time
-}
-
-func newIPRateLimiter(limit int, window time.Duration) *ipRateLimiter {
-	return &ipRateLimiter{
-		limit:   limit,
-		window:  window,
-		entries: make(map[string]*ipWindow),
-	}
-}
-
-func (l *ipRateLimiter) Allow(ip string) bool {
-	// A limit of 0 means rate limiting is disabled (unlimited requests).
-	// Negative limits are rejected by config validation.
-	if l.limit == 0 {
-		return true
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	cutoff := now.Add(-l.window)
-	w, ok := l.entries[ip]
-	if !ok {
-		w = &ipWindow{}
-		l.entries[ip] = w
-	}
-	// Prune old entries.
-	i := 0
-	for i < len(w.timestamps) && w.timestamps[i].Before(cutoff) {
-		i++
-	}
-	w.timestamps = w.timestamps[i:]
-	if len(w.timestamps) >= l.limit {
-		return false
-	}
-	w.timestamps = append(w.timestamps, now)
-	return true
-}
-
-// Cleanup removes stale entries. Call periodically.
-func (l *ipRateLimiter) Cleanup() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cutoff := time.Now().Add(-l.window)
-	for ip, w := range l.entries {
-		i := 0
-		for i < len(w.timestamps) && w.timestamps[i].Before(cutoff) {
-			i++
-		}
-		w.timestamps = w.timestamps[i:]
-		if len(w.timestamps) == 0 {
-			delete(l.entries, ip)
-		}
-	}
-}
 
 func (api *API) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			ip = strings.SplitN(forwarded, ",", 2)[0]
+		// Use r.RemoteAddr which has already been populated by
+		// chimiddleware.RealIP from trusted proxy headers. Reading
+		// X-Forwarded-For directly would allow spoofing.
+		ip := strings.TrimSpace(r.RemoteAddr)
+		if ip == "" {
+			ip = "unknown"
 		}
 		if !api.ipLimiter.Allow(ip) {
 			writeJSON(w, http.StatusTooManyRequests, newErrorListResponse("too-many-requests", "rate limit exceeded"))
