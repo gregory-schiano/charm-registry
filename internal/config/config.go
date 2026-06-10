@@ -67,6 +67,7 @@ type Config struct {
 	OCITLSKeyFile           string
 	CharmhubURL             string
 	CharmhubSyncInterval    time.Duration
+	RequestTimeout          time.Duration
 	ServerReadHeaderTimeout time.Duration
 	ServerReadTimeout       time.Duration
 	ServerWriteTimeout      time.Duration
@@ -97,6 +98,7 @@ type parsedConfig struct {
 	ociStorageUsePathStyle  bool
 	enableInsecureDevAuth   bool
 	charmhubSyncInterval    time.Duration
+	requestTimeout          time.Duration
 	serverReadHeaderTimeout time.Duration
 	serverReadTimeout       time.Duration
 	serverWriteTimeout      time.Duration
@@ -199,6 +201,7 @@ func Load() (Config, error) {
 		OCITLSKeyFile:           os.Getenv("CHARM_REGISTRY_OCI_TLS_KEY_FILE"),
 		CharmhubURL:             strings.TrimRight(envFallback("CHARM_REGISTRY_CHARMHUB_URL", "APP_CHARMHUB_URL", "https://api.charmhub.io"), "/"),
 		CharmhubSyncInterval:    parsed.charmhubSyncInterval,
+		RequestTimeout:          parsed.requestTimeout,
 		ServerReadHeaderTimeout: parsed.serverReadHeaderTimeout,
 		ServerReadTimeout:       parsed.serverReadTimeout,
 		ServerWriteTimeout:      parsed.serverWriteTimeout,
@@ -248,6 +251,10 @@ func loadParsedConfig() (parsedConfig, error) {
 		return parsedConfig{}, err
 	}
 	charmhubSyncInterval, err := envDurationFallback("CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL", "APP_CHARMHUB_SYNC_INTERVAL", 15*time.Minute)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	requestTimeout, err := envDuration("CHARM_REGISTRY_REQUEST_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -308,6 +315,7 @@ func loadParsedConfig() (parsedConfig, error) {
 		ociStorageUsePathStyle:  ociStorageUsePathStyle,
 		enableInsecureDevAuth:   enableInsecureDevAuth,
 		charmhubSyncInterval:    charmhubSyncInterval,
+		requestTimeout:          requestTimeout,
 		serverReadHeaderTimeout: serverReadHeaderTimeout,
 		serverReadTimeout:       serverReadTimeout,
 		serverWriteTimeout:      serverWriteTimeout,
@@ -427,6 +435,9 @@ func validateConfig(cfg Config) (Config, error) {
 	}
 	if cfg.OCIMaxManifestBytes <= 0 {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES must be greater than zero")
+	}
+	if cfg.RequestTimeout <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_REQUEST_TIMEOUT must be greater than zero")
 	}
 
 	if cfg.IPRateLimit < 0 {

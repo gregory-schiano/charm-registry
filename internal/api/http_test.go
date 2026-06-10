@@ -70,6 +70,15 @@ func TestRootReturnsJSON(t *testing.T) {
 
 }
 
+func TestRouterTimeoutUsesConfig(t *testing.T) {
+	t.Parallel()
+
+	handler := New(config.Config{RequestTimeout: time.Minute}, nil, nil, nil)
+	resp := doRequest(t, handler, "GET", "/healthz", nil, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
 func TestNotFoundRequestsAreLogged(t *testing.T) {
 	var logBuf bytes.Buffer
 	prev := slog.Default()

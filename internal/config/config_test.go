@@ -46,6 +46,7 @@ type configSnapshot struct {
 	CharmhubMaxResponse     int64
 	CharmhubMaxArtifact     int64
 	OCIMaxManifestBytes     int64
+	RequestTimeout          time.Duration
 	ServerReadHeaderTimeout time.Duration
 	ServerReadTimeout       time.Duration
 	ServerWriteTimeout      time.Duration
@@ -97,6 +98,7 @@ func snapshotConfig(cfg Config) configSnapshot {
 		CharmhubMaxResponse:     cfg.CharmhubMaxResponseBytes,
 		CharmhubMaxArtifact:     cfg.CharmhubMaxArtifactBytes,
 		OCIMaxManifestBytes:     cfg.OCIMaxManifestBytes,
+		RequestTimeout:          cfg.RequestTimeout,
 		ServerReadHeaderTimeout: cfg.ServerReadHeaderTimeout,
 		ServerReadTimeout:       cfg.ServerReadTimeout,
 		ServerWriteTimeout:      cfg.ServerWriteTimeout,
@@ -271,6 +273,7 @@ func TestLoadDefaults(t *testing.T) {
 		CharmhubMaxResponse:     4 << 20,
 		CharmhubMaxArtifact:     64 << 20,
 		OCIMaxManifestBytes:     16 << 20,
+		RequestTimeout:          30 * time.Second,
 		ServerReadHeaderTimeout: 10 * time.Second,
 		ServerReadTimeout:       30 * time.Second,
 		ServerWriteTimeout:      30 * time.Second,
@@ -306,6 +309,7 @@ func TestLoadCustomValues(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES", "512")
 	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES", "768")
 	t.Setenv("CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES", "1536")
+	t.Setenv("CHARM_REGISTRY_REQUEST_TIMEOUT", "75s")
 	t.Setenv("CHARM_REGISTRY_SERVER_READ_TIMEOUT", "5s")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
@@ -350,6 +354,7 @@ func TestLoadCustomValues(t *testing.T) {
 		CharmhubMaxResponse:     512,
 		CharmhubMaxArtifact:     768,
 		OCIMaxManifestBytes:     1536,
+		RequestTimeout:          75 * time.Second,
 		ServerReadHeaderTimeout: 10 * time.Second,
 		ServerReadTimeout:       5 * time.Second,
 		ServerWriteTimeout:      30 * time.Second,
@@ -722,6 +727,15 @@ func TestValidateConfigRejectsZeroRateWindow(t *testing.T) {
 	assert.ErrorContains(t, err, "CHARM_REGISTRY_TOKEN_RATE_WINDOW must be greater than zero")
 }
 
+func TestValidateConfigRejectsZeroRequestTimeout(t *testing.T) {
+	t.Parallel()
+	cfg := validMinConfig()
+	cfg.RequestTimeout = 0
+	_, err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_REQUEST_TIMEOUT must be greater than zero")
+}
+
 func validMinConfig() Config {
 	return Config{
 		DatabaseBackend:          DatabaseBackendSQLite,
@@ -738,6 +752,7 @@ func validMinConfig() Config {
 		OCIMaxManifestBytes:      16 << 20,
 		MaxJSONBodyBytes:         1 << 20,
 		MaxUploadBytes:           64 << 20,
+		RequestTimeout:           30 * time.Second,
 		IPRateLimit:              30,
 		IPRateWindow:             time.Minute,
 		TokenRateLimit:           5,

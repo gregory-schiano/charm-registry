@@ -59,7 +59,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	router.Use(chimiddleware.RequestID)
 	router.Use(chimiddleware.RealIP)
 	router.Use(api.logRequests)
-	router.Use(chimiddleware.Timeout(30 * time.Second))
+	router.Use(chimiddleware.Timeout(cfg.RequestTimeout))
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
 	router.Use(api.rateLimit)
