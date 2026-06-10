@@ -193,6 +193,49 @@ func TestMemoryMaintenanceAndDeleteOperations(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestMemoryNilBaseReleaseIsChannelSingleton(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	m, owner := memWithAccount(t)
+	now := time.Unix(0, 0).UTC()
+	pkg := core.Package{
+		ID:             "pkg-nil-base",
+		Name:           "nil-base",
+		Type:           "charm",
+		Status:         "registered",
+		OwnerAccountID: owner.ID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	require.NoError(t, m.CreatePackage(ctx, pkg))
+	require.NoError(t, m.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-nil-older",
+		Channel:  "latest/stable",
+		Revision: 1,
+		Base:     nil,
+		When:     now,
+	}))
+	require.NoError(t, m.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-nil-newer",
+		Channel:  "latest/stable",
+		Revision: 2,
+		Base:     nil,
+		When:     now.Add(time.Minute),
+	}))
+
+	releases, err := m.ListReleases(ctx, pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	assert.Nil(t, releases[0].Base)
+	assert.Equal(t, 2, releases[0].Revision)
+
+	latestRelease, err := m.ResolveRelease(ctx, pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.Nil(t, latestRelease.Base)
+	assert.Equal(t, 2, latestRelease.Revision)
+}
+
 func TestMemoryEnsureAccountUpdatesExistingFields(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

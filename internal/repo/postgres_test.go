@@ -374,7 +374,41 @@ func TestRepositoryReleaseVariantsByBase(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, releases, 1)
 	assert.Equal(t, 2, releases[0].Revision)
+}
 
+func TestRepositoryNilBaseReleaseIsChannelSingleton(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
+	ctx := context.Background()
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-nil-base", "owner-nil-base")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-nil-base",
+		Name: "nil-base",
+	})
+	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-nil-older",
+		Channel:  "latest/stable",
+		Revision: 1,
+		Base:     nil,
+		When:     time.Now().UTC(),
+	}))
+	require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, core.Release{
+		ID:       "rel-nil-newer",
+		Channel:  "latest/stable",
+		Revision: 2,
+		Base:     nil,
+		When:     time.Now().UTC().Add(time.Minute),
+	}))
+
+	releases, err := repository.ListReleases(ctx, pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	assert.Nil(t, releases[0].Base)
+	assert.Equal(t, 2, releases[0].Revision)
+
+	latestRelease, err := repository.ResolveRelease(ctx, pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.Nil(t, latestRelease.Base)
+	assert.Equal(t, 2, latestRelease.Revision)
 }
 
 func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
