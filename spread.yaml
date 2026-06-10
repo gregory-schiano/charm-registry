@@ -24,7 +24,9 @@ prepare: |
   snap install go --classic --channel=1.26/stable
 
 restore: |
-  snap remove --purse charm-registry || true
+  if snap list charm-registry 2>/dev/null; then
+    snap remove --purge charm-registry
+  fi
 
 suites:
   tests/spread/charm-registry:
