@@ -272,6 +272,35 @@ func TestRefreshSelectsReleaseVariantByArchitecture(t *testing.T) {
 	assert.Equal(t, 1, result.Results[0].Charm.Revision)
 }
 
+func TestOCIImageUploadCredentialsHidesProvisioningCauseFromMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	expectedErr := errors.New("harbor backend: robot account quota exceeded")
+	svc, _ := newTestServiceWithOCI(failingOCIRegistry{
+		syncErr: expectedErr,
+	})
+	owner := newIdentity("owner-provision", "owner-provision")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "provision-charm", "charm", true)
+	require.NoError(t, err)
+
+	upload, err := svc.CreateUpload(ctx, "provision-charm.charm", buildCharmArchive(t, "provision-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, pkg.Name, "workload-image")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
+
+	var svcErr *Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, "oci-provisioning-unavailable", svcErr.Code)
+	assert.Equal(t, "OCI package provisioning is temporarily unavailable", svcErr.Message)
+	assert.NotContains(t, svcErr.Error(), "robot account quota")
+}
+
 func TestOCIImageUploadCredentialsPropagatesCredentialFailure(t *testing.T) {
 	t.Parallel()
 

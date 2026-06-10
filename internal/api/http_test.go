@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,7 @@ import (
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
 	registrysync "github.com/gschiano/charm-registry/internal/sync"
@@ -1430,6 +1432,41 @@ func TestEndpointsRejectInvalidJSONBody(t *testing.T) {
 	}
 }
 
+func TestOCIUploadCredentialsFailureHidesBackendCauseFromResponse(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	handler := newTestHandlerWithOCI(t, testCfg, serviceFailingOCIRegistry{
+		syncErr: errors.New("harbor backend: robot account quota exceeded"),
+	})
+	authHeader := "Bearer dev:alice:alice"
+
+	doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "failed-oci-charm"}, authHeader)
+	charmArchive := buildTestCharmArchiveWithContainers(t, "failed-oci-charm")
+	resp := doMultipartUpload(t, handler, charmArchive, "failed-oci-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/failed-oci-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, "GET",
+		"/v1/charm/failed-oci-charm/resources/workload-image/oci-image/upload-credentials", nil, authHeader)
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	body := decodeJSON(t, resp)
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	errorBody := errorList[0].(map[string]any)
+	assert.Equal(t, "oci-provisioning-unavailable", errorBody["code"])
+	assert.Equal(t, "OCI package provisioning is temporarily unavailable", errorBody["message"])
+	assert.NotContains(t, resp.Body.String(), "robot account quota")
+	assert.Contains(t, logBuf.String(), "robot account quota")
+}
+
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	t.Helper()
 
@@ -1439,6 +1476,31 @@ func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 
 	storage := blob.NewMemoryStore()
 	ociRegistry := testutil.OCIRegistry{RegistryHost: "oci.test"}
+	svc := service.New(cfg, repository, storage, ociRegistry)
+	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
+	return New(cfg, svc, syncSvc, authenticator)
+}
+
+type serviceFailingOCIRegistry struct {
+	testutil.OCIRegistry
+	syncErr error
+}
+
+func (o serviceFailingOCIRegistry) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
+	if o.syncErr != nil {
+		return core.Package{}, o.syncErr
+	}
+	return o.OCIRegistry.SyncPackage(ctx, pkg)
+}
+
+func newTestHandlerWithOCI(t *testing.T, cfg config.Config, ociRegistry service.OCIRegistry) http.Handler {
+	t.Helper()
+
+	repository := repo.NewMemory()
+	authenticator, err := auth.New(context.Background(), cfg, repository)
+	require.NoError(t, err)
+
+	storage := blob.NewMemoryStore()
 	svc := service.New(cfg, repository, storage, ociRegistry)
 	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
 	return New(cfg, svc, syncSvc, authenticator)

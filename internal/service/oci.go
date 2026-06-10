@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/gschiano/charm-registry/internal/core"
@@ -63,7 +62,7 @@ func (s *Service) ensureOCIProvisioned(ctx context.Context, pkg core.Package) (c
 		return core.Package{}, newErrorWithCause(
 			ErrorKindConflict,
 			"oci-provisioning-unavailable",
-			fmt.Sprintf("OCI package provisioning unavailable: %s", err),
+			"OCI package provisioning is temporarily unavailable",
 			err,
 		)
 	}
