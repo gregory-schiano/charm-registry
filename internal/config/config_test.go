@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -674,6 +675,58 @@ func TestValidateConfigRejectsNonPositiveJSONAndUploadLimits(t *testing.T) {
 			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestLoadRequiresCompleteAPITLSConfig(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+	t.Setenv("CHARM_REGISTRY_API_TLS_CERT_FILE", "cert.pem")
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_API_TLS_CERT_FILE")
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_API_TLS_KEY_FILE")
+}
+
+func TestLoadRejectsAPITLSCertFileNotFound(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+	t.Setenv("CHARM_REGISTRY_API_TLS_CERT_FILE", "/tmp/nonexistent-cert.pem")
+	t.Setenv("CHARM_REGISTRY_API_TLS_KEY_FILE", "/tmp/nonexistent-key.pem")
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_API_TLS_CERT_FILE")
+	assert.ErrorContains(t, err, "does not exist")
+}
+
+func TestLoadRejectsOCITLSCertFileNotFound(t *testing.T) {
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+	t.Setenv("CHARM_REGISTRY_OCI_TLS_CERT_FILE", "/tmp/nonexistent-oci-cert.pem")
+	t.Setenv("CHARM_REGISTRY_OCI_TLS_KEY_FILE", "/tmp/nonexistent-oci-key.pem")
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CHARM_REGISTRY_OCI_TLS_CERT_FILE")
+	assert.ErrorContains(t, err, "does not exist")
+}
+
+func TestLoadAcceptsAPITLSWithExistingFiles(t *testing.T) {
+	certFile := t.TempDir() + "/cert.pem"
+	keyFile := t.TempDir() + "/key.pem"
+	require.NoError(t, os.WriteFile(certFile, []byte("cert"), 0644))
+	require.NoError(t, os.WriteFile(keyFile, []byte("key"), 0600))
+
+	t.Setenv("CHARM_REGISTRY_DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
+	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
+	t.Setenv("CHARM_REGISTRY_API_TLS_CERT_FILE", certFile)
+	t.Setenv("CHARM_REGISTRY_API_TLS_KEY_FILE", keyFile)
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, certFile, cfg.APITLSCertFile)
+	assert.Equal(t, keyFile, cfg.APITLSKeyFile)
 }
 
 func TestValidateConfigRejectsNegativeIPRateLimit(t *testing.T) {

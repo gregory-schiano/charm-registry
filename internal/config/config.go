@@ -521,6 +521,26 @@ func validateOCIConfig(cfg Config) error {
 			"cannot load config: CHARM_REGISTRY_API_TLS_CERT_FILE and CHARM_REGISTRY_API_TLS_KEY_FILE must be set together",
 		)
 	}
+	if err := validateTLSFilesExist(cfg.APITLSCertFile, cfg.APITLSKeyFile, "CHARM_REGISTRY_API_TLS"); err != nil {
+		return err
+	}
+	if err := validateTLSFilesExist(cfg.OCITLSCertFile, cfg.OCITLSKeyFile, "CHARM_REGISTRY_OCI_TLS"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTLSFilesExist(certFile, keyFile, prefix string) error {
+	if certFile != "" {
+		if _, err := os.Stat(certFile); err != nil {
+			return fmt.Errorf("cannot load config: %s_CERT_FILE %q does not exist: %w", prefix, certFile, err)
+		}
+	}
+	if keyFile != "" {
+		if _, err := os.Stat(keyFile); err != nil {
+			return fmt.Errorf("cannot load config: %s_KEY_FILE %q does not exist: %w", prefix, keyFile, err)
+		}
+	}
 	return nil
 }
 

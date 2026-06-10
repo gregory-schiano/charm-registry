@@ -47,10 +47,10 @@ set_env_from_config CHARM_REGISTRY_PUBLIC_API_URL public-api-url
 set_env_from_config CHARM_REGISTRY_PUBLIC_STORAGE_URL public-storage-url
 set_env_from_config CHARM_REGISTRY_PUBLIC_REGISTRY_URL public-registry-url
 if config_bool tls.enabled false; then
-	export CHARM_REGISTRY_TLS_CERT_FILE="$SNAP_COMMON/certs/registry.crt"
-	export CHARM_REGISTRY_TLS_KEY_FILE="$SNAP_COMMON/certs/registry.key"
-	set_env_from_config CHARM_REGISTRY_TLS_CERT_FILE tls.cert-file
-	set_env_from_config CHARM_REGISTRY_TLS_KEY_FILE tls.key-file
+	export CHARM_REGISTRY_API_TLS_CERT_FILE="$SNAP_COMMON/certs/registry.crt"
+	export CHARM_REGISTRY_API_TLS_KEY_FILE="$SNAP_COMMON/certs/registry.key"
+	set_env_from_config CHARM_REGISTRY_API_TLS_CERT_FILE tls.cert-file
+	set_env_from_config CHARM_REGISTRY_API_TLS_KEY_FILE tls.key-file
 fi
 set_env_from_config CHARM_REGISTRY_OCI_INTERNAL_URL oci.internal-url
 set_env_from_config CHARM_REGISTRY_DATABASE_URL database.url
