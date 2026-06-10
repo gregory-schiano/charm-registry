@@ -2,6 +2,57 @@
 
 Operational procedures for Charm Registry.
 
+## Database prerequisites (PostgreSQL)
+
+When using a PostgreSQL backend, certain migrations require extensions or
+privileges beyond what the application's database role typically holds.
+
+### pg_trgm extension (migration 0008)
+
+The trigram index on `packages.name` requires the `pg_trgm` extension.
+`CREATE EXTENSION` needs one of:
+
+- A superuser connection (common on managed services like RDS, Cloud SQL).
+- A role with `pg_database_owner` membership (PostgreSQL ≥ 13, trusted
+  extension path — `pg_trgm` is trusted by default).
+
+If neither applies, the migration fails with:
+
+```
+ERROR: permission denied to create extension "pg_trgm"
+```
+
+**Pre-provisioning (recommended):** run as a superuser before deploying
+the version that includes migration 0008:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+```
+
+The subsequent `CREATE INDEX` only requires table-owner privileges and will
+be a safe no-op (via `IF NOT EXISTS`) if the extension is already present.
+
+### Index locking
+
+Migration 0008 creates a GIN index on the `packages` table with a
+non-concurrent `CREATE INDEX`. This acquires a `SHARE` lock that blocks
+writes for the duration of the build. The migration runner wraps each
+migration in a transaction, which is incompatible with `CREATE INDEX
+CONCURRENTLY`.
+
+For small-to-medium tables (< 100 k rows) the build is fast and the lock
+duration is negligible. For very large tables:
+
+1. Build the index manually with `CONCURRENTLY` during low traffic:
+
+   ```sql
+   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_packages_name_trgm
+       ON packages USING gin (name gin_trgm_ops);
+   ```
+
+2. Deploy as normal — the migration's `IF NOT EXISTS` clause makes the
+   index creation a safe no-op.
+
 ## Health checks
 
 | Endpoint | Purpose | What it checks |
