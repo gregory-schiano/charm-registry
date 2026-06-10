@@ -44,7 +44,7 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 	} else if err != nil {
 		return err
 	} else if !isCharmhubManagedPackage(pkg) {
-		return newError(
+		return service.NewError(
 			service.ErrorKindConflict,
 			"package-exists",
 			"cannot synchronize a package that already exists outside Charmhub synchronization",
@@ -638,7 +638,7 @@ func (s *Service) ensureCharmhubResourceRevision(
 ) error {
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resource.Name)
 	if err != nil {
-		return translateRepoError(err, messageResourceNotDeclared)
+		return service.TranslateRepoError(err, messageResourceNotDeclared)
 	}
 
 	_, err = s.repo.GetResourceRevision(ctx, resourceDef.ID, resource.Revision)

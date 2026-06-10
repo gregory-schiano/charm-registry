@@ -2442,14 +2442,31 @@ func TestFirstNonEmpty(t *testing.T) {
 	assert.Equal(t, "first", core.FirstNonEmpty("first"))
 }
 
+func TestServiceErrorHelpers(t *testing.T) {
+	t.Parallel()
+
+	err := NewError(ErrorKindInvalidRequest, "invalid-request", "invalid input")
+	assertServiceError(t, err, ErrorKindInvalidRequest)
+	var svcErr *Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, "invalid-request", svcErr.Code)
+	assert.Equal(t, "invalid input", svcErr.Message)
+
+	cause := fmt.Errorf("root cause")
+	err = NewErrorWithCause(ErrorKindConflict, "conflict", "conflicting state", cause)
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, cause, svcErr.Cause)
+	assert.ErrorIs(t, err, cause)
+}
+
 func TestTranslateRepoError(t *testing.T) {
 	t.Parallel()
 
 	// Nil error returns nil
-	assert.NoError(t, translateRepoError(nil, "msg"))
+	assert.NoError(t, TranslateRepoError(nil, "msg"))
 
 	// ErrNotFound becomes 404 not-found
-	err := translateRepoError(repo.ErrNotFound, "not found message")
+	err := TranslateRepoError(repo.ErrNotFound, "not found message")
 	assertServiceError(t, err, ErrorKindNotFound)
 	var notFound *Error
 	require.ErrorAs(t, err, &notFound)
@@ -2457,7 +2474,7 @@ func TestTranslateRepoError(t *testing.T) {
 
 	// ErrConflict (wrapped) becomes 409 already-registered
 	wrapped := fmt.Errorf("dup: %w", repo.ErrConflict)
-	err = translateRepoError(wrapped, "already registered")
+	err = TranslateRepoError(wrapped, "already registered")
 	assertServiceError(t, err, ErrorKindConflict)
 	var conflict *Error
 	require.ErrorAs(t, err, &conflict)
@@ -2465,7 +2482,7 @@ func TestTranslateRepoError(t *testing.T) {
 
 	// Other errors pass through unchanged
 	other := fmt.Errorf("some other error")
-	assert.Equal(t, other, translateRepoError(other, "msg"))
+	assert.Equal(t, other, TranslateRepoError(other, "msg"))
 }
 
 func TestSplitChannel(t *testing.T) {

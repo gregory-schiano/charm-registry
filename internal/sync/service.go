@@ -298,12 +298,12 @@ func (s *Service) AddCharmhubSyncRule(
 	}
 	architectures = normalizeSyncArchitectures(architectures)
 	if packageName == "" {
-		return core.CharmhubSyncRule{}, newError(service.ErrorKindInvalidRequest, "invalid-request", "package name is required")
+		return core.CharmhubSyncRule{}, service.NewError(service.ErrorKindInvalidRequest, "invalid-request", "package name is required")
 	}
 
 	if pkg, err := s.repo.GetPackageByName(ctx, packageName); err == nil {
 		if !isCharmhubManagedPackage(pkg) {
-			return core.CharmhubSyncRule{}, newError(
+			return core.CharmhubSyncRule{}, service.NewError(
 				service.ErrorKindConflict,
 				"package-exists",
 				"cannot synchronize a package that already exists outside Charmhub synchronization",
@@ -325,7 +325,7 @@ func (s *Service) AddCharmhubSyncRule(
 		LastSyncStatus:     charmhubSyncStatusPending,
 	}
 	if err := s.syncRules.CreateCharmhubSyncRule(ctx, rule); err != nil {
-		return core.CharmhubSyncRule{}, translateRepoError(err, messageSyncRuleAlreadyExists)
+		return core.CharmhubSyncRule{}, service.TranslateRepoError(err, messageSyncRuleAlreadyExists)
 	}
 	slog.InfoContext(ctx, "charmhub sync rule added",
 		"package", rule.PackageName,
@@ -361,7 +361,7 @@ func (s *Service) RemoveCharmhubSyncRule(ctx context.Context, identity core.Iden
 		rule.LastSyncError = nil
 		rule.UpdatedAt = s.now()
 		if err := s.syncRules.UpdateCharmhubSyncRule(ctx, rule); err != nil {
-			return translateRepoError(err, messageSyncRuleNotFound)
+			return service.TranslateRepoError(err, messageSyncRuleNotFound)
 		}
 		slog.InfoContext(ctx, "charmhub sync rule marked for deletion",
 			"package", rule.PackageName,
@@ -371,7 +371,7 @@ func (s *Service) RemoveCharmhubSyncRule(ctx context.Context, identity core.Iden
 		s.enqueue(packageName)
 		return nil
 	}
-	return newError(service.ErrorKindNotFound, "not-found", messageSyncRuleNotFound)
+	return service.NewError(service.ErrorKindNotFound, "not-found", messageSyncRuleNotFound)
 }
 
 func (s *Service) TriggerCharmhubSync(ctx context.Context, identity core.Identity, packageName string) error {
@@ -380,14 +380,14 @@ func (s *Service) TriggerCharmhubSync(ctx context.Context, identity core.Identit
 	}
 	packageName = strings.TrimSpace(packageName)
 	if packageName == "" {
-		return newError(service.ErrorKindInvalidRequest, "invalid-request", "package name is required")
+		return service.NewError(service.ErrorKindInvalidRequest, "invalid-request", "package name is required")
 	}
 	rules, err := s.syncRules.ListCharmhubSyncRulesByPackageName(ctx, packageName)
 	if err != nil {
 		return err
 	}
 	if len(rules) == 0 {
-		return newError(service.ErrorKindNotFound, "not-found", "package is not configured for Charmhub synchronization")
+		return service.NewError(service.ErrorKindNotFound, "not-found", "package is not configured for Charmhub synchronization")
 	}
 	slog.InfoContext(ctx, "charmhub sync manually triggered",
 		"package", packageName,
@@ -409,21 +409,21 @@ func requireAdmin(identity core.Identity) error {
 		return nil
 	}
 	if !identity.Authenticated {
-		return newError(service.ErrorKindUnauthorized, "unauthorized", "authentication required")
+		return service.NewError(service.ErrorKindUnauthorized, "unauthorized", "authentication required")
 	}
 	if identity.Account.IsAdmin {
 		return nil
 	}
-	return newError(service.ErrorKindForbidden, "forbidden", "admin access is required")
+	return service.NewError(service.ErrorKindForbidden, "forbidden", "admin access is required")
 }
 
 func normalizeSyncTrack(track string) (string, error) {
 	track = strings.TrimSpace(track)
 	if track == "" {
-		return "", newError(service.ErrorKindInvalidRequest, "invalid-request", "track is required")
+		return "", service.NewError(service.ErrorKindInvalidRequest, "invalid-request", "track is required")
 	}
 	if strings.Contains(track, "/") {
-		return "", newError(service.ErrorKindInvalidRequest, "invalid-request", "track must not include a risk")
+		return "", service.NewError(service.ErrorKindInvalidRequest, "invalid-request", "track must not include a risk")
 	}
 	return track, nil
 }
@@ -470,7 +470,7 @@ func normalizeSyncArchitectures(values []string) []string {
 func parseSyncBaseSelector(value string) (core.Base, error) {
 	name, channel, ok := strings.Cut(value, "@")
 	if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(channel) == "" {
-		return core.Base{}, newError(
+		return core.Base{}, service.NewError(
 			service.ErrorKindInvalidRequest,
 			"invalid-request",
 			"base filters must use name@channel syntax, for example ubuntu@22.04",
@@ -598,25 +598,4 @@ func toCoreRelations(value map[string]core.Relation) map[string]core.Relation {
 
 func intPointer(value int) *int {
 	return &value
-}
-
-func newError(kind service.ErrorKind, code, message string) error {
-	return &service.Error{Kind: kind, Code: code, Message: message}
-}
-
-func newErrorWithCause(kind service.ErrorKind, code, message string, cause error) error {
-	return &service.Error{Kind: kind, Code: code, Message: message, Cause: cause}
-}
-
-func translateRepoError(err error, message string) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, repo.ErrNotFound):
-		return newError(service.ErrorKindNotFound, "not-found", message)
-	case errors.Is(err, repo.ErrConflict):
-		return newError(service.ErrorKindConflict, "already-registered", message)
-	default:
-		return err
-	}
 }

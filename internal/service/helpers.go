@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gschiano/charm-registry/internal/core"
-	"github.com/gschiano/charm-registry/internal/repo"
 )
 
 // --- Authorization guards ---
@@ -293,25 +291,6 @@ func emptySliceIfNil[T any](values []T) []T {
 		return []T{}
 	}
 	return values
-}
-
-// --- Error helpers ---
-
-// translateRepoError converts a repository-layer error into a typed service
-// error with an appropriate HTTP status code and Charmhub API error code.
-// Unrecognised errors are returned as-is so the API layer can log and return
-// a generic 500.
-func translateRepoError(err error, message string) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, repo.ErrNotFound):
-		return newError(ErrorKindNotFound, "not-found", message)
-	case errors.Is(err, repo.ErrConflict):
-		return newError(ErrorKindConflict, "already-registered", message)
-	default:
-		return err
-	}
 }
 
 func detectUploadKind(filename string) string {
