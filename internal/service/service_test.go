@@ -3009,3 +3009,16 @@ func buildCharmArchive(t *testing.T, name string) []byte {
 func intPtr(value int) *int {
 	return &value
 }
+
+func TestErrorUnwrap(t *testing.T) {
+	t.Parallel()
+	cause := fmt.Errorf("db timeout")
+	err := &Error{Kind: ErrorKindNotFound, Code: "not-found", Message: "charm missing", Cause: cause}
+
+	// Unwrap returns the cause
+	assert.ErrorIs(t, err, cause)
+
+	// nil cause returns nil
+	noErr := &Error{Kind: ErrorKindNotFound, Code: "not-found", Message: "x"}
+	assert.NoError(t, noErr.Unwrap())
+}

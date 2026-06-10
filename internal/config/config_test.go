@@ -674,3 +674,19 @@ func validMinConfig() Config {
 		TokenRateWindow:          time.Minute,
 	}
 }
+
+func TestHasOIDC(t *testing.T) {
+	t.Parallel()
+	// Both set → true
+	c := Config{OIDCIssuerURL: "https://issuer.example.com", OIDCClientID: "client-id"}
+	assert.True(t, c.HasOIDC())
+
+	// Missing issuer → false
+	c.OIDCIssuerURL = ""
+	assert.False(t, c.HasOIDC())
+
+	// Missing client ID → false
+	c.OIDCIssuerURL = "https://issuer.example.com"
+	c.OIDCClientID = ""
+	assert.False(t, c.HasOIDC())
+}
