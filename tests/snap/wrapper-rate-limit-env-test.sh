@@ -8,6 +8,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
 mkdir -p "$work_dir/bin" "$work_dir/snap/bin" "$work_dir/common" "$work_dir/config"
+cp "$ROOT_DIR/snap/local/charm-registry-snap-helpers" "$work_dir/snap/bin/charm-registry-snap-helpers"
 
 cat >"$work_dir/bin/snapctl" <<'SNAPCTL'
 #!/bin/sh

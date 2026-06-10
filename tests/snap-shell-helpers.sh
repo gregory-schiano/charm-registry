@@ -109,8 +109,8 @@ SNAPCTL_TLS_KEY_FILE="/custom/key.pem" \
 sh "$repo_root/snap/local/charm-registry-wrapper"
 assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_LISTEN=:9090'
 assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_PUBLIC_API_URL=https://registry.example:8443/api'
-assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_TLS_CERT_FILE=/custom/cert.pem'
-assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_TLS_KEY_FILE=/custom/key.pem'
+assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_API_TLS_CERT_FILE=/custom/cert.pem'
+assert_file_contains "$tmp/wrapper.env" 'CHARM_REGISTRY_API_TLS_KEY_FILE=/custom/key.pem'
 assert_file_contains "$tmp/wrapper.env" "CHARM_REGISTRY_SQLITE_PATH=$common/data/registry.sqlite"
 
 # Verify the configure hook still removes registry TLS files when disabled and always prepares OCI TLS files.

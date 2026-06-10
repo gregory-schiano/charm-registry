@@ -6,11 +6,6 @@ set -eu
 
 . "$SNAP/bin/charm-registry-snap-helpers"
 
-config_get() {
-	key="$1"
-	snapctl get "$key" 2>/dev/null || true
-}
-
 validate_non_negative_integer() {
 	key="$1"
 	value="$(config_get "$key")"
