@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -81,11 +80,6 @@ func (a *API) handleInfo(w http.ResponseWriter, r *http.Request, identity core.I
 		payload, err = a.svc.GetPackageInfo(r.Context(), identity, name)
 	}
 	if err != nil {
-		var serviceErr *service.Error
-		if errors.As(err, &serviceErr) && serviceErr.Kind == service.ErrorKindNotFound {
-			writeJSON(w, http.StatusNotFound, codeMessageResponse{Code: serviceErr.Code, Message: serviceErr.Message})
-			return
-		}
 		writeError(w, r, err)
 		return
 	}
