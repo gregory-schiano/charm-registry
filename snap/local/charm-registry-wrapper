@@ -1,13 +1,7 @@
 #!/bin/sh
 set -eu
 
-config_get() {
-	key="$1"
-	value="$(snapctl get "$key" 2>/dev/null || true)"
-	if [ -n "$value" ]; then
-		printf '%s' "$value"
-	fi
-}
+. "$SNAP/bin/charm-registry-snap-helpers"
 
 set_env_from_config() {
 	env_key="$1"
@@ -16,19 +10,6 @@ set_env_from_config() {
 	if [ -n "$value" ]; then
 		export "$env_key=$value"
 	fi
-}
-
-config_bool() {
-	key="$1"
-	default="$2"
-	value="$(config_get "$key")"
-	case "$value" in
-		"") value="$default" ;;
-	esac
-	case "$value" in
-		true | True | TRUE | 1 | yes | Yes | YES) return 0 ;;
-		*) return 1 ;;
-	esac
 }
 
 export CHARM_REGISTRY_DATA_DIR="${CHARM_REGISTRY_DATA_DIR:-$SNAP_COMMON/data}"
