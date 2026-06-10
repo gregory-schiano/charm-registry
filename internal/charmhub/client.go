@@ -1,6 +1,7 @@
 package charmhub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -409,6 +410,31 @@ func (c *Client) RefreshChannel(ctx context.Context, name, channel string, base 
 }
 
 func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, error) {
+	var payload bytes.Buffer
+	if _, err := c.DownloadTo(ctx, artifactURL, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Bytes(), nil
+}
+
+func (c *Client) DownloadTo(ctx context.Context, artifactURL string, dst io.Writer) (int64, error) {
+	resp, err := c.openArtifact(ctx, artifactURL)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		body, err := readAllLimited(resp.Body, c.maxAPIResponseBytes, "Charmhub artifact error response")
+		if err != nil {
+			return 0, err
+		}
+		return 0, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	return copyLimited(dst, resp.Body, c.maxArtifactBytes, "Charmhub artifact")
+}
+
+func (c *Client) openArtifact(ctx context.Context, artifactURL string) (*http.Response, error) {
 	parsedURL, err := url.Parse(artifactURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid artifact URL: %w", err)
@@ -450,20 +476,7 @@ func (c *Client) Download(ctx context.Context, artifactURL string) ([]byte, erro
 		return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
 	}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := readAllLimited(resp.Body, c.maxArtifactBytes, "Charmhub artifact")
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
-	}
-	return body, nil
+	return c.http.Do(req)
 }
 
 // isPrivateHost checks whether a hostname resolves to an RFC 1918 or
@@ -523,6 +536,20 @@ func readAllLimited(reader io.Reader, maxBytes int64, label string) ([]byte, err
 		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
 	}
 	return body, nil
+}
+
+func copyLimited(dst io.Writer, src io.Reader, maxBytes int64, label string) (int64, error) {
+	if maxBytes <= 0 {
+		return io.Copy(dst, src)
+	}
+	written, err := io.Copy(dst, io.LimitReader(src, maxBytes+1))
+	if err != nil {
+		return written, err
+	}
+	if written > maxBytes {
+		return written, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
+	}
+	return written, nil
 }
 
 type refreshResponseEnvelope struct {

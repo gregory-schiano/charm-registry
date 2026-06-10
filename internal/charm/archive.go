@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -28,12 +29,35 @@ func ParseArchive(payload []byte) (core.CharmArchive, error) {
 // ParseArchiveWithMaxFileSize extracts charm metadata from a charm archive
 // payload while enforcing a per-entry decompressed size limit.
 func ParseArchiveWithMaxFileSize(payload []byte, maxFileSize int64) (core.CharmArchive, error) {
-	if maxFileSize <= 0 {
-		maxFileSize = defaultMaxArchiveFileSize
-	}
 	reader, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
 	if err != nil {
 		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	return parseZipArchive(reader, maxFileSize)
+}
+
+// ParseArchiveFile extracts charm metadata from a charm archive file on disk
+// while enforcing a per-entry decompressed size limit.
+func ParseArchiveFile(path string, size int64, maxFileSize int64) (core.CharmArchive, error) {
+	if size <= 0 {
+		return core.CharmArchive{}, fmt.Errorf("invalid charm archive size %d", size)
+	}
+	// #nosec G304 -- callers pass temp file paths or already validated blob paths.
+	file, err := os.Open(path)
+	if err != nil {
+		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	defer file.Close()
+	reader, err := zip.NewReader(file, size)
+	if err != nil {
+		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	return parseZipArchive(reader, maxFileSize)
+}
+
+func parseZipArchive(reader *zip.Reader, maxFileSize int64) (core.CharmArchive, error) {
+	if maxFileSize <= 0 {
+		maxFileSize = defaultMaxArchiveFileSize
 	}
 
 	var archive core.CharmArchive

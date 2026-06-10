@@ -3,6 +3,7 @@ package registrysync
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -77,6 +78,7 @@ type charmhubClient interface {
 	GetInfo(ctx context.Context, name string) (charmhubclient.PackageChannel, error)
 	RefreshChannel(ctx context.Context, name, channel string, base core.Base) (charmhubclient.PackageChannel, error)
 	Download(ctx context.Context, artifactURL string) ([]byte, error)
+	DownloadTo(ctx context.Context, artifactURL string, dst io.Writer) (int64, error)
 }
 
 func New(cfg config.Config, repository repo.Backend, blobs blob.Store, oci service.OCIRegistry) *Service {

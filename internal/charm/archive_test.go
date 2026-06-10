@@ -3,6 +3,7 @@ package charm
 import (
 	"archive/zip"
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -70,6 +71,36 @@ func TestParseArchiveRejectsOversizedZipEntry(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `read charm archive entry: archive entry "metadata.yaml" exceeds the 10 MiB per-file safety limit`)
 
+}
+
+func TestParseArchiveFileReadsArchiveFromDisk(t *testing.T) {
+	t.Parallel()
+
+	payload := buildZip(t, map[string]string{
+		"metadata.yaml": "name: disk-charm\nsummary: Disk\ndescription: Disk-backed parse\n",
+	})
+	path := t.TempDir() + "/disk-charm.charm"
+	require.NoError(t, os.WriteFile(path, payload, 0o600))
+
+	archive, err := ParseArchiveFile(path, int64(len(payload)), defaultMaxArchiveFileSize)
+
+	require.NoError(t, err)
+	assert.Equal(t, "disk-charm", archive.Manifest.Name)
+	assert.Equal(t, "Disk", archive.Manifest.Summary)
+}
+
+func TestParseArchiveFileRejectsInvalidSize(t *testing.T) {
+	t.Parallel()
+
+	payload := buildZip(t, map[string]string{
+		"metadata.yaml": "name: disk-charm\n",
+	})
+	path := t.TempDir() + "/disk-charm.charm"
+	require.NoError(t, os.WriteFile(path, payload, 0o600))
+
+	_, err := ParseArchiveFile(path, 0, defaultMaxArchiveFileSize)
+
+	require.ErrorContains(t, err, "invalid charm archive size")
 }
 
 func TestParseArchiveWithCustomMaxFileSize(t *testing.T) {

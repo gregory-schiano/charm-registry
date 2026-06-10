@@ -1,7 +1,6 @@
 package registrysync
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -9,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -629,32 +630,33 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 		return core.Package{}, err
 	}
 
-	revisionPayload, archive, err := s.downloadAndParseRevision(ctx, info.DefaultRelease.Revision.Download.URL)
+	revisionArtifact, err := s.downloadAndParseRevision(ctx, info.DefaultRelease.Revision.Download.URL)
 	if err != nil {
 		return core.Package{}, err
 	}
+	defer revisionArtifact.Close()
 
 	revisionKey := filepath.ToSlash(filepath.Join("charms", pkg.ID, fmt.Sprintf("%d.charm", revisionNumber)))
-	if err := s.putRevisionBlob(ctx, revisionKey, revisionPayload); err != nil {
+	if err := s.putRevisionBlob(ctx, revisionKey, revisionArtifact); err != nil {
 		return core.Package{}, err
 	}
 
-	updatedPkg, err := s.updatePackageFromUpstream(ctx, pkg, info, archive.Manifest, trackCache)
+	updatedPkg, err := s.updatePackageFromUpstream(ctx, pkg, info, revisionArtifact.Archive.Manifest, trackCache)
 	if err != nil {
 		return core.Package{}, err
 	}
-	if err := s.createRevisionRecord(ctx, updatedPkg, createdBy, info, revisionNumber, revisionKey, revisionPayload, archive); err != nil {
+	if err := s.createRevisionRecord(ctx, updatedPkg, createdBy, info, revisionNumber, revisionKey, revisionArtifact); err != nil {
 		return core.Package{}, err
 	}
-	if err := s.upsertManifestResourceDefinitions(ctx, updatedPkg.ID, archive.Manifest); err != nil {
+	if err := s.upsertManifestResourceDefinitions(ctx, updatedPkg.ID, revisionArtifact.Archive.Manifest); err != nil {
 		return core.Package{}, err
 	}
 	slog.InfoContext(ctx, "charmhub revision imported",
 		"package", updatedPkg.Name,
 		"package_id", updatedPkg.ID,
 		"revision", revisionNumber,
-		"size", len(revisionPayload),
-		"resource_definition_count", len(archive.Manifest.Resources),
+		"size", revisionArtifact.Size,
+		"resource_definition_count", len(revisionArtifact.Archive.Manifest.Resources),
 	)
 	return updatedPkg, nil
 }
@@ -703,16 +705,17 @@ func (s *Service) ensureCharmhubResourceRevision(
 		return err
 	}
 
-	resourcePayload, item, err := s.prepareResourceRevision(ctx, *pkg, resourceDef, resource, revisionNumber)
+	resourceArtifact, item, err := s.prepareResourceRevision(ctx, *pkg, resourceDef, resource, revisionNumber)
 	if err != nil {
 		return err
 	}
+	defer resourceArtifact.Close()
 
 	// OCI image resources are the only synced resource type with an out-of-band artifact lifecycle:
 	// Charmhub publishes a descriptor blob, but the registry stores the mirrored image digest.
 	// Keep this explicit branch until another resource type needs distinct import behavior.
 	if item.Type == "oci-image" {
-		updatedPkg, updatedItem, err := s.populateOCIResourceRevision(ctx, *pkg, resource, resourcePayload, item)
+		updatedPkg, updatedItem, err := s.populateOCIResourceRevision(ctx, *pkg, resource, resourceArtifact, item)
 		if err != nil {
 			return err
 		}
@@ -720,15 +723,15 @@ func (s *Service) ensureCharmhubResourceRevision(
 		item = updatedItem
 	} else {
 		resourceKey := filepath.ToSlash(filepath.Join("resources", pkg.ID, resource.Name, fmt.Sprintf("%d", resource.Revision)))
-		if err := s.putResourceBlob(ctx, resourceKey, resourcePayload); err != nil {
+		if err := s.putArtifactBlob(ctx, resourceKey, resourceArtifact); err != nil {
 			return err
 		}
 		item.ObjectKey = resourceKey
-		s.populateResourceHashes(&item, resourcePayload)
+		s.populateResourceHashes(&item, resourceArtifact)
 	}
 
 	if item.Size == 0 {
-		item.Size = int64(len(resourcePayload))
+		item.Size = resourceArtifact.Size
 	}
 	if err := s.repo.CreateResourceRevision(ctx, item); err != nil {
 		return err
@@ -746,26 +749,113 @@ func (s *Service) ensureCharmhubResourceRevision(
 	return nil
 }
 
-func (s *Service) downloadAndParseRevision(ctx context.Context, downloadURL string) ([]byte, core.CharmArchive, error) {
-	if err := checkContext(ctx); err != nil {
-		return nil, core.CharmArchive{}, err
-	}
-	payload, err := s.charmhub.Download(ctx, downloadURL)
-	if err != nil {
-		return nil, core.CharmArchive{}, err
-	}
-	archive, err := charm.ParseArchiveWithMaxFileSize(payload, s.cfg.MaxArchiveFileBytes)
-	if err != nil {
-		return nil, core.CharmArchive{}, err
-	}
-	return payload, archive, nil
+type downloadedArtifact struct {
+	Path    string
+	Size    int64
+	SHA256  [sha256.Size]byte
+	SHA384  [sha512.Size384]byte
+	SHA512  [sha512.Size]byte
+	Archive core.CharmArchive
 }
 
-func (s *Service) putRevisionBlob(ctx context.Context, key string, payload []byte) error {
+func (a *downloadedArtifact) Close() error {
+	if a == nil || a.Path == "" {
+		return nil
+	}
+	return os.Remove(a.Path)
+}
+
+func (a *downloadedArtifact) Open() (*os.File, error) {
+	// #nosec G304 -- path is a service-created temp file.
+	return os.Open(a.Path)
+}
+
+func (a *downloadedArtifact) CopyTo(ctx context.Context, dst io.Writer) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	return s.blobs.Put(ctx, key, bytes.NewReader(payload), "application/octet-stream")
+	file, err := a.Open()
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = io.Copy(dst, file)
+	return err
+}
+
+func (a *downloadedArtifact) ReadAll(ctx context.Context) ([]byte, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	file, err := a.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
+func (s *Service) downloadAndParseRevision(ctx context.Context, downloadURL string) (*downloadedArtifact, error) {
+	artifact, err := s.downloadArtifactToTemp(ctx, downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	archive, err := charm.ParseArchiveFile(artifact.Path, artifact.Size, s.cfg.MaxArchiveFileBytes)
+	if err != nil {
+		_ = artifact.Close()
+		return nil, err
+	}
+	artifact.Archive = archive
+	return artifact, nil
+}
+
+func (s *Service) downloadArtifactToTemp(ctx context.Context, downloadURL string) (*downloadedArtifact, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp("", "charmhub-artifact-*")
+	if err != nil {
+		return nil, err
+	}
+	artifact := &downloadedArtifact{Path: tmp.Name()}
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = artifact.Close()
+		}
+	}()
+
+	hash256 := sha256.New()
+	hash384 := sha512.New384()
+	hash512 := sha512.New()
+	writer := io.MultiWriter(tmp, hash256, hash384, hash512)
+	artifact.Size, err = s.charmhub.DownloadTo(ctx, downloadURL, writer)
+	if err != nil {
+		return nil, err
+	}
+	if err = tmp.Close(); err != nil {
+		return nil, err
+	}
+	copy(artifact.SHA256[:], hash256.Sum(nil))
+	copy(artifact.SHA384[:], hash384.Sum(nil))
+	copy(artifact.SHA512[:], hash512.Sum(nil))
+	return artifact, nil
+}
+
+func (s *Service) putRevisionBlob(ctx context.Context, key string, artifact *downloadedArtifact) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	return s.putArtifactBlob(ctx, key, artifact)
+}
+
+func (s *Service) putArtifactBlob(ctx context.Context, key string, artifact *downloadedArtifact) error {
+	file, err := artifact.Open()
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return s.blobs.Put(ctx, key, file, "application/octet-stream")
 }
 
 func (s *Service) updatePackageFromUpstream(
@@ -796,15 +886,11 @@ func (s *Service) updatePackageFromUpstream(
 func (s *Service) createRevisionRecord(
 	ctx context.Context,
 	pkg core.Package,
-	createdBy string,
-	info charmhubclient.PackageChannel,
+	createdBy string, info charmhubclient.PackageChannel,
 	revisionNumber int,
 	revisionKey string,
-	revisionPayload []byte,
-	archive core.CharmArchive,
+	artifact *downloadedArtifact,
 ) error {
-	sum256 := sha256.Sum256(revisionPayload)
-	sum384 := sha512.Sum384(revisionPayload)
 	revisionCreatedAt := info.DefaultRelease.Revision.CreatedAt
 	if revisionCreatedAt.IsZero() {
 		revisionCreatedAt = s.now()
@@ -817,23 +903,23 @@ func (s *Service) createRevisionRecord(
 		Status:       "approved",
 		CreatedAt:    revisionCreatedAt,
 		CreatedBy:    createdBy,
-		Size:         int64(len(revisionPayload)),
-		SHA256:       hex.EncodeToString(sum256[:]),
-		SHA384:       hex.EncodeToString(sum384[:]),
+		Size:         artifact.Size,
+		SHA256:       hex.EncodeToString(artifact.SHA256[:]),
+		SHA384:       hex.EncodeToString(artifact.SHA384[:]),
 		ObjectKey:    revisionKey,
-		MetadataYAML: archive.MetadataYAML,
-		ConfigYAML:   archive.ConfigYAML,
-		ActionsYAML:  archive.ActionsYAML,
-		BundleYAML:   archive.BundleYAML,
-		ReadmeMD:     archive.ReadmeMD,
-		Bases:        extractBases(archive.Manifest),
+		MetadataYAML: artifact.Archive.MetadataYAML,
+		ConfigYAML:   artifact.Archive.ConfigYAML,
+		ActionsYAML:  artifact.Archive.ActionsYAML,
+		BundleYAML:   artifact.Archive.BundleYAML,
+		ReadmeMD:     artifact.Archive.ReadmeMD,
+		Bases:        extractBases(artifact.Archive.Manifest),
 		Attributes:   mapOrDefault(info.DefaultRelease.Revision.Attributes, map[string]string{"framework": "operator", "language": "unknown"}),
 		Relations: map[string]map[string]core.Relation{
-			"provides": toCoreRelations(archive.Manifest.Provides),
-			"requires": toCoreRelations(archive.Manifest.Requires),
-			"peers":    toCoreRelations(archive.Manifest.Peers),
+			"provides": toCoreRelations(artifact.Archive.Manifest.Provides),
+			"requires": toCoreRelations(artifact.Archive.Manifest.Requires),
+			"peers":    toCoreRelations(artifact.Archive.Manifest.Peers),
 		},
-		Subordinate: archive.Manifest.Subordinate,
+		Subordinate: artifact.Archive.Manifest.Subordinate,
 	})
 	if err != nil {
 		return err
@@ -880,11 +966,8 @@ func (s *Service) prepareResourceRevision(
 	resourceDef core.ResourceDefinition,
 	resource charmhubclient.ReleaseResource,
 	revisionNumber int,
-) ([]byte, core.ResourceRevision, error) {
-	if err := checkContext(ctx); err != nil {
-		return nil, core.ResourceRevision{}, err
-	}
-	payload, err := s.charmhub.Download(ctx, resource.Download.URL)
+) (*downloadedArtifact, core.ResourceRevision, error) {
+	artifact, err := s.downloadArtifactToTemp(ctx, resource.Download.URL)
 	if err != nil {
 		return nil, core.ResourceRevision{}, err
 	}
@@ -907,17 +990,21 @@ func (s *Service) prepareResourceRevision(
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = s.now()
 	}
-	return payload, item, nil
+	return artifact, item, nil
 }
 
 func (s *Service) populateOCIResourceRevision(
 	ctx context.Context,
 	pkg core.Package,
 	resource charmhubclient.ReleaseResource,
-	payload []byte,
+	artifact *downloadedArtifact,
 	item core.ResourceRevision,
 ) (core.Package, core.ResourceRevision, error) {
 	updatedPkg, err := s.ensureOCIProvisioned(ctx, pkg)
+	if err != nil {
+		return core.Package{}, core.ResourceRevision{}, err
+	}
+	payload, err := artifact.ReadAll(ctx)
 	if err != nil {
 		return core.Package{}, core.ResourceRevision{}, err
 	}
@@ -953,23 +1040,13 @@ func (s *Service) populateOCIResourceRevision(
 	return updatedPkg, item, nil
 }
 
-func (s *Service) putResourceBlob(ctx context.Context, key string, payload []byte) error {
-	if err := checkContext(ctx); err != nil {
-		return err
-	}
-	return s.blobs.Put(ctx, key, bytes.NewReader(payload), "application/octet-stream")
-}
-
-func (s *Service) populateResourceHashes(item *core.ResourceRevision, payload []byte) {
+func (s *Service) populateResourceHashes(item *core.ResourceRevision, artifact *downloadedArtifact) {
 	if item.SHA256 != "" && item.SHA384 != "" && item.SHA512 != "" && item.SHA3384 != "" {
 		return
 	}
-	sum256 := sha256.Sum256(payload)
-	sum384 := sha512.Sum384(payload)
-	sum512 := sha512.Sum512(payload)
-	item.SHA256 = hex.EncodeToString(sum256[:])
-	item.SHA384 = hex.EncodeToString(sum384[:])
-	item.SHA512 = hex.EncodeToString(sum512[:])
+	item.SHA256 = hex.EncodeToString(artifact.SHA256[:])
+	item.SHA384 = hex.EncodeToString(artifact.SHA384[:])
+	item.SHA512 = hex.EncodeToString(artifact.SHA512[:])
 	item.SHA3384 = item.SHA384
 }
 
