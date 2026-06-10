@@ -1,7 +1,12 @@
 name: Integration Tests
 
 on:
-  # Allow manual dispatch for any branch
+  # Run smoke subset on PR and merge to main
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual dispatch for any branch (runs full suite)
   workflow_dispatch:
   # Run on schedule for catching regressions (Monday 06:00 UTC)
   schedule:
@@ -14,6 +19,63 @@ env:
   GO_VERSION: "1.26.4"
 
 jobs:
+  # ── Lightweight integration smoke (PR + push + manual + schedule) ──
+  #
+  # Builds the Go binary, starts it against a local SQLite backend with
+  # insecure dev auth, waits for /healthz, then runs the BOOT-level
+  # integration tests. Fast enough for every PR (~3 min).
+
+  integration-smoke:
+    name: Integration Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build server binary
+        run: CGO_ENABLED=0 go build -o .bin/charm-registry ./cmd/charm-registry
+
+      - name: Start server (SQLite + dev auth)
+        env:
+          CHARM_REGISTRY_DATABASE_BACKEND: sqlite
+          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+          CHARM_REGISTRY_LISTEN: ":8080"
+        run: |
+          .bin/charm-registry &
+          echo $! > /tmp/charm-registry.pid
+          # Wait for health endpoint (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::Server did not become healthy within 30s"
+              kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run BOOT integration tests
+        env:
+          ITEST_API_URL: http://localhost:8080
+        run: go test -tags=integration -run TestBOOT -v -count=1 ./tests/integration/
+
+      - name: Stop server
+        if: always()
+        run: kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+
+  # ── Heavy integration tests (schedule / manual only) ────────────────
+  #
+  # The jobs below deploy real infrastructure (Juju, microk8s, LXD)
+  # and are too expensive for every PR. They run on schedule and on
+  # manual workflow_dispatch.
+
   # ── Charm integration tests (Jubilant + Juju) ──────────────────────
   #
   # Deploys postgresql-k8s, traefik-k8s, and the local charm via Juju on
@@ -37,6 +99,7 @@ jobs:
     name: Charm Integration (Jubilant)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -102,6 +165,7 @@ jobs:
     name: Snap Integration (Spread)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@34e114876b0c011c390a56381ad16ebd13914f8d5 # v4.3.1
 
