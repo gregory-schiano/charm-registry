@@ -651,6 +651,9 @@ func (s *Service) ensureCharmhubResourceRevision(
 		return err
 	}
 
+	// OCI image resources are the only synced resource type with an out-of-band artifact lifecycle:
+	// Charmhub publishes a descriptor blob, but the registry stores the mirrored image digest.
+	// Keep this explicit branch until another resource type needs distinct import behavior.
 	if item.Type == "oci-image" {
 		updatedPkg, updatedItem, err := s.populateOCIResourceRevision(ctx, *pkg, resource, resourcePayload, item)
 		if err != nil {

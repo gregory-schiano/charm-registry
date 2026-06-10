@@ -122,6 +122,9 @@ func (s *Service) PushResource(
 		Architectures:   req.Architectures,
 		PackageRevision: req.PackageRevision,
 	}
+	// OCI image resources are the only resource type whose upload payload is a descriptor
+	// for an OCI registry artifact rather than the downloadable artifact itself. Keep the
+	// special case local until another resource type needs distinct publish semantics.
 	if resourceRevision.Type == "oci-image" {
 		var descriptor struct {
 			Digest string `json:"Digest"`
@@ -378,6 +381,8 @@ func (s *Service) DownloadResourceStream(
 		return nil, 0, translateRepoError(err, messageResourceRevisionNotFound)
 	}
 	if revision.ObjectKey == "" {
+		// An empty object key denotes an OCI image resource revision: downloads are rendered
+		// from the stored image digest and current pull credentials rather than blob storage.
 		if err := s.requireOCIPackageReady(pkg, true); err != nil {
 			return nil, 0, err
 		}
