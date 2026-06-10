@@ -66,5 +66,9 @@ set_env_from_config CHARM_REGISTRY_ADMIN_USERNAMES admin.usernames
 set_env_from_config CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH insecure-dev-auth
 set_env_from_config CHARM_REGISTRY_CHARMHUB_URL charmhub.url
 set_env_from_config CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL charmhub.sync-interval
+set_env_from_config CHARM_REGISTRY_IP_RATE_LIMIT rate-limit.ip-limit
+set_env_from_config CHARM_REGISTRY_IP_RATE_WINDOW rate-limit.ip-window
+set_env_from_config CHARM_REGISTRY_TOKEN_RATE_LIMIT rate-limit.token-limit
+set_env_from_config CHARM_REGISTRY_TOKEN_RATE_WINDOW rate-limit.token-window
 
 exec "$SNAP/bin/charm-registry"

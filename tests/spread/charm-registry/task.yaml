@@ -44,7 +44,10 @@ prepare: |
     insecure-dev-auth=true \
     public-api-url="http://localhost:8080" \
     public-registry-url="https://127.0.0.1:5000" \
-    public-storage-url="http://localhost:8080"
+    public-storage-url="http://localhost:8080" \
+    rate-limit.ip-limit=0 \
+    rate-limit.token-limit=5 \
+    rate-limit.token-window=1m
 
   # Start the snap service.
   snap start charm-registry.charm-registry

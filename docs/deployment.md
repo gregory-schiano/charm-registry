@@ -75,6 +75,12 @@ snap set charm-registry admin.emails=admin@example.com
 # OCI secret key (required)
 snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
 
+# Token and IP rate limits
+snap set charm-registry rate-limit.ip-limit=120
+snap set charm-registry rate-limit.ip-window=1m
+snap set charm-registry rate-limit.token-limit=5
+snap set charm-registry rate-limit.token-window=1m
+
 # Switch to Postgres
 snap set charm-registry database.backend=postgres
 snap set charm-registry database.url=postgres://user:***@host:5432/charm_registry?sslmode=require

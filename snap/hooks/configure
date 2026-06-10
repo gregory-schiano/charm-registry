@@ -6,6 +6,47 @@ set -eu
 
 . "$SNAP/bin/charm-registry-snap-helpers"
 
+config_get() {
+	key="$1"
+	snapctl get "$key" 2>/dev/null || true
+}
+
+validate_non_negative_integer() {
+	key="$1"
+	value="$(config_get "$key")"
+	case "$value" in
+		"") return 0 ;;
+		*[!0-9]*)
+			echo "invalid $key: must be a non-negative integer" >&2
+			exit 1
+			;;
+	esac
+}
+
+validate_positive_duration() {
+	key="$1"
+	value="$(config_get "$key")"
+	case "$value" in
+		"") return 0 ;;
+		0 | 0s | 0m | 0h | -* | *[!0-9smh]*)
+			echo "invalid $key: must be a positive duration such as 30s, 1m, or 2h" >&2
+			exit 1
+			;;
+		*[0-9][smh]) return 0 ;;
+		*)
+			echo "invalid $key: must be a positive duration such as 30s, 1m, or 2h" >&2
+			exit 1
+			;;
+	esac
+}
+
+validate_rate_limit_config() {
+	validate_non_negative_integer rate-limit.ip-limit
+	validate_non_negative_integer rate-limit.token-limit
+	validate_positive_duration rate-limit.ip-window
+	validate_positive_duration rate-limit.token-window
+}
+
 generate_cert() {
 	name="$1"
 	default_url="$2"
@@ -51,6 +92,8 @@ public_api_url="$(snapctl get public-api-url 2>/dev/null || true)"
 public_storage_url="$(snapctl get public-storage-url 2>/dev/null || true)"
 public_registry_url="$(snapctl get public-registry-url 2>/dev/null || true)"
 internal_oci_url="$(snapctl get oci.internal-url 2>/dev/null || true)"
+
+validate_rate_limit_config
 
 api_default_url="${public_api_url:-https://localhost:8080}"
 oci_default_url="${public_registry_url:-https://localhost:5000}"
