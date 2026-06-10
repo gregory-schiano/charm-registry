@@ -53,6 +53,23 @@ func NewRevision(revision Revision) (Revision, error) {
 	return revision, nil
 }
 
+// NewBase validates and returns a base value.
+func NewBase(base Base) (Base, error) {
+	base.Name = strings.TrimSpace(base.Name)
+	base.Channel = strings.TrimSpace(base.Channel)
+	base.Architecture = strings.TrimSpace(base.Architecture)
+	if base.Name == "" {
+		return Base{}, fmt.Errorf("base name is required")
+	}
+	if base.Channel == "" {
+		return Base{}, fmt.Errorf("base channel is required")
+	}
+	if base.Architecture == "" {
+		return Base{}, fmt.Errorf("base architecture is required")
+	}
+	return base, nil
+}
+
 // NewRelease validates and returns a release value.
 func NewRelease(release Release) (Release, error) {
 	release.Channel = strings.TrimSpace(release.Channel)
