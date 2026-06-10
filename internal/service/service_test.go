@@ -858,6 +858,79 @@ func TestReleaseEmptyChannelFails(t *testing.T) {
 
 }
 
+func TestCreateReleaseRejectsIncompleteBase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		base        core.Base
+		errContains string
+	}{
+		{
+			name:        "missing name",
+			base:        core.Base{Channel: "24.04", Architecture: "amd64"},
+			errContains: "base name is required",
+		},
+		{
+			name:        "missing channel",
+			base:        core.Base{Name: "ubuntu", Architecture: "amd64"},
+			errContains: "base channel is required",
+		},
+		{
+			name:        "missing architecture",
+			base:        core.Base{Name: "ubuntu", Channel: "24.04"},
+			errContains: "base architecture is required",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			svc, _ := newTestService()
+			owner := newIdentity("acc-1", "alice")
+			_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+			require.NoError(t, err)
+			upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+			require.NoError(t, err)
+			_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+			require.NoError(t, err)
+
+			_, err = svc.CreateRelease(ctx, owner, "my-charm", []core.Release{{
+				Channel: "latest/stable", Revision: 1, Base: &tt.base,
+			}})
+
+			svcErr := serviceError(t, err)
+			assert.Equal(t, ErrorKindInvalidRequest, svcErr.Kind)
+			assert.Contains(t, svcErr.Message, tt.errContains)
+		})
+	}
+}
+
+func TestCreateReleaseAcceptsValidBase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+	base := core.Base{Name: " ubuntu ", Channel: " 24.04 ", Architecture: " amd64 "}
+
+	released, err := svc.CreateRelease(ctx, owner, "my-charm", []core.Release{{
+		Channel: "latest/stable", Revision: 1, Base: &base,
+	}})
+
+	require.NoError(t, err)
+	require.Len(t, released, 1)
+	require.NotNil(t, released[0].Base)
+	assert.Equal(t, core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"}, *released[0].Base)
+}
+
 func TestReleaseNonExistentRevisionFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

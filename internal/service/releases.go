@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,38 +39,13 @@ func (s *Service) CreateRelease(
 		return nil, err
 	}
 	now := s.now()
-	var released []core.Release
+	released := make([]core.Release, 0, len(requests))
 	for _, request := range requests {
-		if request.Channel == "" {
-			return nil, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
-		}
-		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, request.Revision); err != nil {
-			return nil, translateRepoError(err, messageRevisionNotFound)
-		}
-		if err := s.validateReleaseResources(ctx, pkg.ID, request.Revision, request.Resources); err != nil {
+		created, err := s.createRelease(ctx, identity, pkg.ID, request, now)
+		if err != nil {
 			return nil, err
 		}
-		if request.When.IsZero() {
-			request.When = now
-		}
-		if request.ID == "" {
-			request.ID = uuid.NewString()
-		}
-		if err := s.enforceChannelRestriction(identity, request.Channel); err != nil {
-			return nil, err
-		}
-		if err := s.repo.ReplaceRelease(ctx, pkg.ID, request); err != nil {
-			return nil, err
-		}
-		slog.InfoContext(ctx, "release published",
-			"package", pkg.Name,
-			"package_id", pkg.ID,
-			"channel", request.Channel,
-			"revision", request.Revision,
-			"resource_count", len(request.Resources),
-			"account_id", identity.Account.ID,
-		)
-		released = append(released, request)
+		released = append(released, created)
 	}
 	pkg.Status = "published"
 	pkg.UpdatedAt = now
@@ -77,6 +53,59 @@ func (s *Service) CreateRelease(
 		return nil, err
 	}
 	return released, nil
+}
+
+func (s *Service) createRelease(
+	ctx context.Context,
+	identity core.Identity,
+	packageID string,
+	request core.Release,
+	now time.Time,
+) (core.Release, error) {
+	if request.Channel == "" {
+		return core.Release{}, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
+	}
+	if err := validateReleaseBase(&request); err != nil {
+		return core.Release{}, err
+	}
+	if _, err := s.repo.GetRevisionByNumber(ctx, packageID, request.Revision); err != nil {
+		return core.Release{}, translateRepoError(err, messageRevisionNotFound)
+	}
+	if err := s.validateReleaseResources(ctx, packageID, request.Revision, request.Resources); err != nil {
+		return core.Release{}, err
+	}
+	if request.When.IsZero() {
+		request.When = now
+	}
+	if request.ID == "" {
+		request.ID = uuid.NewString()
+	}
+	if err := s.enforceChannelRestriction(identity, request.Channel); err != nil {
+		return core.Release{}, err
+	}
+	if err := s.repo.ReplaceRelease(ctx, packageID, request); err != nil {
+		return core.Release{}, err
+	}
+	slog.InfoContext(ctx, "release published",
+		"package_id", packageID,
+		"channel", request.Channel,
+		"revision", request.Revision,
+		"resource_count", len(request.Resources),
+		"account_id", identity.Account.ID,
+	)
+	return request, nil
+}
+
+func validateReleaseBase(release *core.Release) error {
+	if release.Base == nil {
+		return nil
+	}
+	validated, err := core.NewBase(*release.Base)
+	if err != nil {
+		return newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
+	}
+	release.Base = &validated
+	return nil
 }
 
 func (s *Service) validateReleaseResources(
