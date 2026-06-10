@@ -4,33 +4,7 @@ set -eu
 # Snapd requires a configure hook before `snap set` can store snap options.
 # The service wrapper reads those options at startup and exports app env vars.
 
-url_host() {
-	raw="$1"
-	raw="${raw#*://}"
-	raw="${raw%%/*}"
-	raw="${raw%%:*}"
-	printf '%s\n' "$raw"
-}
-
-is_ip() {
-	case "$1" in
-		*:* | [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 0 ;;
-		*) return 1 ;;
-	esac
-}
-
-config_bool() {
-	key="$1"
-	default="$2"
-	value="$(snapctl get "$key" 2>/dev/null || true)"
-	case "$value" in
-		"") value="$default" ;;
-	esac
-	case "$value" in
-		true | True | TRUE | 1 | yes | Yes | YES) return 0 ;;
-		*) return 1 ;;
-	esac
-}
+. "$SNAP/bin/charm-registry-snap-helpers"
 
 generate_cert() {
 	name="$1"

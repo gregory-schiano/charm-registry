@@ -1,7 +1,7 @@
 GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build functional-test functional-test-build charm-integration-test snap-integration-test
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
 
 help:
 	@printf "%s\n" \
@@ -30,6 +30,7 @@ help:
 		"make rock-pack             - pack the OCI rock with rockcraft" \
 		"make rock-smoke-test       - inspect and validate a built .rock artifact" \
 		"make snap-pack             - pack the snap with snapcraft" \
+		"make snap-shell-test       - run snap shell helper regression tests" \
 		"make artifact-build        - build all artifacts (charm, rock, snap)" \
 		"make charm-integration-test - run charm integration tests with Jubilant" \
 		"make snap-integration-test  - run snap spread tests (requires spread + snapd)"
@@ -150,6 +151,10 @@ rock-pack:
 
 rock-smoke-test:
 	bash scripts/rock-smoke-test.sh $(ROCK_FILE)
+
+snap-shell-test:
+	sh -n snap/hooks/configure snap/local/charm-registry-wrapper snap/local/charm-registry-snap-helpers tests/snap-shell-helpers.sh
+	sh tests/snap-shell-helpers.sh
 
 snap-pack:
 	snapcraft pack

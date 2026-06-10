@@ -43,3 +43,4 @@ parts:
       - openssl
     organize:
       charm-registry-wrapper: bin/charm-registry-wrapper
+      charm-registry-snap-helpers: bin/charm-registry-snap-helpers
