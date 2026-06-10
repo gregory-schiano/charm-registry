@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	stdsync "sync"
 
 	"github.com/google/uuid"
 
@@ -23,6 +24,10 @@ import (
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
 )
+
+// charmhubResourceSyncConcurrency bounds how many resource artifacts are
+// downloaded and uploaded in parallel during a package sync.
+const charmhubResourceSyncConcurrency = 4
 
 func (s *Service) reconcilePackage(ctx context.Context, packageName string) error {
 	slog.InfoContext(ctx, "charmhub sync reconciliation started", "package", packageName)
@@ -601,12 +606,12 @@ func (s *Service) ensureCharmhubArtifacts(
 	}
 	pkg = updatedPkg
 
-	resourceRefs, err := s.ensureCharmhubResourceArtifacts(ctx, pkg, info, revisionNumber)
+	resourceRefs, updatedPkg, err := s.ensureCharmhubResourceArtifacts(ctx, pkg, info, revisionNumber)
 	if err != nil {
 		return core.Package{}, nil, err
 	}
 
-	return pkg, resourceRefs, nil
+	return updatedPkg, resourceRefs, nil
 }
 
 func (s *Service) ensureCharmhubRevisionArtifacts(
@@ -661,34 +666,110 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 	return updatedPkg, nil
 }
 
+// preparedResourceRevision carries the outcome of the parallel preparation
+// phase for one resource. The artifact is retained only for oci-image
+// resources, whose descriptor payload is consumed during the sequential
+// persistence phase; for other types the blob is uploaded during preparation
+// and the temp file is already removed.
+type preparedResourceRevision struct {
+	resource charmhubclient.ReleaseResource
+	revision core.ResourceRevision
+	artifact *downloadedArtifact
+}
+
 func (s *Service) ensureCharmhubResourceArtifacts(
 	ctx context.Context,
 	pkg core.Package,
 	info charmhubclient.PackageChannel,
 	revisionNumber int,
-) ([]core.ReleaseResourceRef, error) {
-	refs := make([]core.ReleaseResourceRef, 0, len(info.DefaultRelease.Resources))
-	for _, resource := range info.DefaultRelease.Resources {
-		if err := checkContext(ctx); err != nil {
-			return nil, err
-		}
-		if err := s.ensureCharmhubResourceRevision(ctx, &pkg, resource, revisionNumber); err != nil {
-			return nil, err
-		}
-		refs = append(refs, core.ReleaseResourceRef{Name: resource.Name, Revision: intPointer(resource.Revision)})
+) ([]core.ReleaseResourceRef, core.Package, error) {
+	refs := make([]core.ReleaseResourceRef, len(info.DefaultRelease.Resources))
+	results := make([]preparedResourceRevision, len(info.DefaultRelease.Resources))
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tokens := make(chan struct{}, charmhubResourceSyncConcurrency)
+	errCh := make(chan error, 1)
+	var wg stdsync.WaitGroup
+	for i, resource := range info.DefaultRelease.Resources {
+		refs[i] = core.ReleaseResourceRef{Name: resource.Name, Revision: intPointer(resource.Revision)}
+		wg.Add(1)
+		go func(index int, item charmhubclient.ReleaseResource) {
+			defer wg.Done()
+			select {
+			case tokens <- struct{}{}:
+				defer func() { <-tokens }()
+			case <-ctx.Done():
+				sendResourceSyncError(errCh, ctx.Err(), cancel)
+				return
+			}
+			result, err := s.prepareCharmhubResourceRevision(ctx, pkg, item, revisionNumber)
+			if err != nil {
+				sendResourceSyncError(errCh, err, cancel)
+				return
+			}
+			results[index] = result
+		}(i, resource)
 	}
-	return refs, nil
+	wg.Wait()
+	defer func() {
+		for _, prepared := range results {
+			_ = prepared.artifact.Close()
+		}
+	}()
+	select {
+	case err := <-errCh:
+		return nil, core.Package{}, err
+	default:
+	}
+
+	updatedPkg := pkg
+	for _, prepared := range results {
+		item := prepared.revision
+		if item.ID == "" {
+			continue
+		}
+		// OCI image resources are the only synced resource type with an out-of-band artifact lifecycle:
+		// Charmhub publishes a descriptor blob, but the registry stores the mirrored image digest.
+		// Keep this explicit branch until another resource type needs distinct import behavior.
+		if item.Type == "oci-image" {
+			provisioned, updatedItem, err := s.populateOCIResourceRevision(ctx, updatedPkg, prepared.resource, prepared.artifact, item)
+			if err != nil {
+				return nil, core.Package{}, err
+			}
+			updatedPkg = provisioned
+			item = updatedItem
+		}
+		if err := s.repo.CreateResourceRevision(ctx, item); err != nil {
+			return nil, core.Package{}, err
+		}
+		slog.InfoContext(ctx, "charmhub resource revision imported",
+			"package", updatedPkg.Name,
+			"package_id", updatedPkg.ID,
+			"resource", item.Name,
+			"resource_type", item.Type,
+			"revision", item.Revision,
+			"package_revision", revisionNumber,
+			"size", item.Size,
+			"oci_digest", item.OCIImageDigest,
+		)
+	}
+	return refs, updatedPkg, nil
 }
 
-func (s *Service) ensureCharmhubResourceRevision(
+// prepareCharmhubResourceRevision performs the network- and disk-bound part of
+// resource import (download, hash, blob upload) and is safe to call
+// concurrently; persistence happens sequentially in the caller. A zero-ID
+// result means the revision already exists and nothing needs persisting.
+func (s *Service) prepareCharmhubResourceRevision(
 	ctx context.Context,
-	pkg *core.Package,
+	pkg core.Package,
 	resource charmhubclient.ReleaseResource,
 	revisionNumber int,
-) error {
+) (preparedResourceRevision, error) {
 	resourceDef, err := s.repo.GetResourceDefinition(ctx, pkg.ID, resource.Name)
 	if err != nil {
-		return service.TranslateRepoError(err, messageResourceNotDeclared)
+		return preparedResourceRevision{}, service.TranslateRepoError(err, messageResourceNotDeclared)
 	}
 
 	_, err = s.repo.GetResourceRevision(ctx, resourceDef.ID, resource.Revision)
@@ -700,53 +781,45 @@ func (s *Service) ensureCharmhubResourceRevision(
 			"resource", resource.Name,
 			"revision", resource.Revision,
 		)
-		return nil
+		return preparedResourceRevision{}, nil
 	case !errors.Is(err, repo.ErrNotFound):
-		return err
+		return preparedResourceRevision{}, err
 	}
 
-	resourceArtifact, item, err := s.prepareResourceRevision(ctx, *pkg, resourceDef, resource, revisionNumber)
+	resourceArtifact, item, err := s.prepareResourceRevision(ctx, pkg, resourceDef, resource, revisionNumber)
 	if err != nil {
-		return err
+		return preparedResourceRevision{}, err
 	}
-	defer resourceArtifact.Close()
 
-	// OCI image resources are the only synced resource type with an out-of-band artifact lifecycle:
-	// Charmhub publishes a descriptor blob, but the registry stores the mirrored image digest.
-	// Keep this explicit branch until another resource type needs distinct import behavior.
 	if item.Type == "oci-image" {
-		updatedPkg, updatedItem, err := s.populateOCIResourceRevision(ctx, *pkg, resource, resourceArtifact, item)
-		if err != nil {
-			return err
+		if item.Size == 0 {
+			item.Size = resourceArtifact.Size
 		}
-		*pkg = updatedPkg
-		item = updatedItem
-	} else {
-		resourceKey := filepath.ToSlash(filepath.Join("resources", pkg.ID, resource.Name, fmt.Sprintf("%d", resource.Revision)))
-		if err := s.putArtifactBlob(ctx, resourceKey, resourceArtifact); err != nil {
-			return err
-		}
-		item.ObjectKey = resourceKey
-		s.populateResourceHashes(&item, resourceArtifact)
+		return preparedResourceRevision{resource: resource, revision: item, artifact: resourceArtifact}, nil
 	}
 
+	defer resourceArtifact.Close()
+	resourceKey := filepath.ToSlash(filepath.Join("resources", pkg.ID, resource.Name, fmt.Sprintf("%d", resource.Revision)))
+	if err := s.putArtifactBlob(ctx, resourceKey, resourceArtifact); err != nil {
+		return preparedResourceRevision{}, err
+	}
+	item.ObjectKey = resourceKey
+	s.populateResourceHashes(&item, resourceArtifact)
 	if item.Size == 0 {
 		item.Size = resourceArtifact.Size
 	}
-	if err := s.repo.CreateResourceRevision(ctx, item); err != nil {
-		return err
+	return preparedResourceRevision{resource: resource, revision: item}, nil
+}
+
+func sendResourceSyncError(errCh chan<- error, err error, cancel context.CancelFunc) {
+	if err == nil {
+		return
 	}
-	slog.InfoContext(ctx, "charmhub resource revision imported",
-		"package", pkg.Name,
-		"package_id", pkg.ID,
-		"resource", item.Name,
-		"resource_type", item.Type,
-		"revision", item.Revision,
-		"package_revision", revisionNumber,
-		"size", item.Size,
-		"oci_digest", item.OCIImageDigest,
-	)
-	return nil
+	select {
+	case errCh <- err:
+		cancel()
+	default:
+	}
 }
 
 type downloadedArtifact struct {

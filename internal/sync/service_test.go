@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,12 @@ type fakeCharmhubClient struct {
 	downloadErrs    map[string]error
 	downloadCalls   map[string]int
 	downloadToCalls map[string]int
+
+	mu                     sync.Mutex
+	downloadStarted        chan string
+	releaseBlockedDownload chan struct{}
+	maxActiveDownloads     int
+	activeDownloads        int
 }
 
 type trackingOCIRegistry struct {
@@ -81,7 +88,9 @@ func (f *fakeCharmhubClient) RefreshChannel(
 }
 
 func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]byte, error) {
+	f.mu.Lock()
 	f.downloadCalls[artifactURL]++
+	f.mu.Unlock()
 	if err, ok := f.downloadErrs[artifactURL]; ok {
 		return nil, err
 	}
@@ -93,10 +102,34 @@ func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]
 }
 
 func (f *fakeCharmhubClient) DownloadTo(ctx context.Context, artifactURL string, dst io.Writer) (int64, error) {
+	f.mu.Lock()
 	f.downloadToCalls[artifactURL]++
+	f.mu.Unlock()
 	payload, err := f.downloadPayload(artifactURL)
 	if err != nil {
 		return 0, err
+	}
+	if f.downloadStarted != nil && strings.Contains(artifactURL, "/resource-") {
+		f.mu.Lock()
+		f.activeDownloads++
+		if f.activeDownloads > f.maxActiveDownloads {
+			f.maxActiveDownloads = f.activeDownloads
+		}
+		f.mu.Unlock()
+
+		select {
+		case f.downloadStarted <- artifactURL:
+		default:
+		}
+		select {
+		case <-f.releaseBlockedDownload:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+
+		f.mu.Lock()
+		f.activeDownloads--
+		f.mu.Unlock()
 	}
 	return io.Copy(dst, bytes.NewReader(payload))
 }
@@ -1254,4 +1287,48 @@ func TestManagerBackoffCap(t *testing.T) {
 	// 5 failures → still capped at 8
 	m.recordFailure("pkg")
 	assert.Equal(t, 8, m.failSkip["pkg"])
+}
+
+func TestCharmhubSyncDownloadsResourcesConcurrently(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	fakeClient.downloadStarted = make(chan string, 16)
+	fakeClient.releaseBlockedDownload = make(chan struct{})
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- env.sync.reconcilePackage(context.Background(), "demo")
+	}()
+
+	started := map[string]struct{}{}
+	for len(started) < 2 {
+		select {
+		case url := <-fakeClient.downloadStarted:
+			started[url] = struct{}{}
+		case err := <-done:
+			require.NoError(t, err)
+			require.Fail(t, "sync completed before multiple artifact downloads overlapped")
+		case <-time.After(2 * time.Second):
+			require.Fail(t, "timed out waiting for concurrent artifact downloads")
+		}
+	}
+
+	fakeClient.mu.Lock()
+	maxActive := fakeClient.maxActiveDownloads
+	fakeClient.mu.Unlock()
+	assert.GreaterOrEqual(t, maxActive, 2)
+
+	for range started {
+		fakeClient.releaseBlockedDownload <- struct{}{}
+	}
+	require.NoError(t, <-done)
 }
