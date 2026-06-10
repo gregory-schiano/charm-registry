@@ -21,11 +21,6 @@ type statusResponse struct {
 	Status string `json:"status"`
 }
 
-type codeMessageResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
 type packageMetadataResponse struct {
 	Authority       *string               `json:"authority"`
 	Contact         *string               `json:"contact"`

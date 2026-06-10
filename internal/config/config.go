@@ -254,47 +254,7 @@ func loadParsedConfig() (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	requestTimeout, err := envDuration("CHARM_REGISTRY_REQUEST_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverReadTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverWriteTimeout, err := envDuration("CHARM_REGISTRY_SERVER_WRITE_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverIdleTimeout, err := envDuration("CHARM_REGISTRY_SERVER_IDLE_TIMEOUT", 120*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverShutdownTimeout, err := envDuration("CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT", 30*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	serverMaxHeaderBytes, err := envInt("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	ociReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	ociReadTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_TIMEOUT", 0)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	ociWriteTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_WRITE_TIMEOUT", 0)
-	if err != nil {
-		return parsedConfig{}, err
-	}
-	ociIdleTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_IDLE_TIMEOUT", 300*time.Second)
+	timeouts, err := loadParsedServerTimeouts()
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -315,17 +275,17 @@ func loadParsedConfig() (parsedConfig, error) {
 		ociStorageUsePathStyle:  ociStorageUsePathStyle,
 		enableInsecureDevAuth:   enableInsecureDevAuth,
 		charmhubSyncInterval:    charmhubSyncInterval,
-		requestTimeout:          requestTimeout,
-		serverReadHeaderTimeout: serverReadHeaderTimeout,
-		serverReadTimeout:       serverReadTimeout,
-		serverWriteTimeout:      serverWriteTimeout,
-		serverIdleTimeout:       serverIdleTimeout,
-		serverShutdownTimeout:   serverShutdownTimeout,
-		serverMaxHeaderBytes:    serverMaxHeaderBytes,
-		ociReadHeaderTimeout:    ociReadHeaderTimeout,
-		ociReadTimeout:          ociReadTimeout,
-		ociWriteTimeout:         ociWriteTimeout,
-		ociIdleTimeout:          ociIdleTimeout,
+		requestTimeout:          timeouts.requestTimeout,
+		serverReadHeaderTimeout: timeouts.serverReadHeaderTimeout,
+		serverReadTimeout:       timeouts.serverReadTimeout,
+		serverWriteTimeout:      timeouts.serverWriteTimeout,
+		serverIdleTimeout:       timeouts.serverIdleTimeout,
+		serverShutdownTimeout:   timeouts.serverShutdownTimeout,
+		serverMaxHeaderBytes:    timeouts.serverMaxHeaderBytes,
+		ociReadHeaderTimeout:    timeouts.ociReadHeaderTimeout,
+		ociReadTimeout:          timeouts.ociReadTimeout,
+		ociWriteTimeout:         timeouts.ociWriteTimeout,
+		ociIdleTimeout:          timeouts.ociIdleTimeout,
 		maxJSONBodyBytes:        byteLimits.maxJSONBodyBytes,
 		maxArchiveFileBytes:     byteLimits.maxArchiveFileBytes,
 		maxUploadBytes:          byteLimits.maxUploadBytes,
@@ -338,6 +298,80 @@ func loadParsedConfig() (parsedConfig, error) {
 		ipRateWindow:    rateLimits.ipRateWindow,
 		tokenRateLimit:  rateLimits.tokenRateLimit,
 		tokenRateWindow: rateLimits.tokenRateWindow,
+	}, nil
+}
+
+type parsedServerTimeouts struct {
+	requestTimeout          time.Duration
+	serverReadHeaderTimeout time.Duration
+	serverReadTimeout       time.Duration
+	serverWriteTimeout      time.Duration
+	serverIdleTimeout       time.Duration
+	serverShutdownTimeout   time.Duration
+	serverMaxHeaderBytes    int
+	ociReadHeaderTimeout    time.Duration
+	ociReadTimeout          time.Duration
+	ociWriteTimeout         time.Duration
+	ociIdleTimeout          time.Duration
+}
+
+func loadParsedServerTimeouts() (parsedServerTimeouts, error) {
+	requestTimeout, err := envDuration("CHARM_REGISTRY_REQUEST_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverReadTimeout, err := envDuration("CHARM_REGISTRY_SERVER_READ_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverWriteTimeout, err := envDuration("CHARM_REGISTRY_SERVER_WRITE_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverIdleTimeout, err := envDuration("CHARM_REGISTRY_SERVER_IDLE_TIMEOUT", 120*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverShutdownTimeout, err := envDuration("CHARM_REGISTRY_SERVER_SHUTDOWN_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	serverMaxHeaderBytes, err := envInt("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	ociReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	ociReadTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_TIMEOUT", 0)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	ociWriteTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_WRITE_TIMEOUT", 0)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	ociIdleTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_IDLE_TIMEOUT", 300*time.Second)
+	if err != nil {
+		return parsedServerTimeouts{}, err
+	}
+	return parsedServerTimeouts{
+		requestTimeout:          requestTimeout,
+		serverReadHeaderTimeout: serverReadHeaderTimeout,
+		serverReadTimeout:       serverReadTimeout,
+		serverWriteTimeout:      serverWriteTimeout,
+		serverIdleTimeout:       serverIdleTimeout,
+		serverShutdownTimeout:   serverShutdownTimeout,
+		serverMaxHeaderBytes:    serverMaxHeaderBytes,
+		ociReadHeaderTimeout:    ociReadHeaderTimeout,
+		ociReadTimeout:          ociReadTimeout,
+		ociWriteTimeout:         ociWriteTimeout,
+		ociIdleTimeout:          ociIdleTimeout,
 	}, nil
 }
 

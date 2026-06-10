@@ -5,11 +5,10 @@ import (
 	"testing"
 	"time"
 
-	sqlite "modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/gschiano/charm-registry/internal/core"
 )

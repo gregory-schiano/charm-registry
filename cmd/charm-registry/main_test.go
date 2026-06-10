@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gschiano/charm-registry/internal/config"
 )
 
 func TestNewAPIServerUsesConfiguredWriteTimeout(t *testing.T) {
