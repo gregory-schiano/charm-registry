@@ -63,7 +63,7 @@ FROM store_tokens t
 JOIN accounts a ON a.id = t.account_id
 WHERE t.token_hash = $1;
 
--- name: FindStoreTokenByPrefix :one
+-- name: FindStoreTokensByPrefix :many
 SELECT
     t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description,
     t.packages, t.channels, t.permissions,

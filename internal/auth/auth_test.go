@@ -223,6 +223,65 @@ func TestAuthenticateValidStoreToken(t *testing.T) {
 	assert.Equal(t, "sess-1", storeToken.SessionID)
 }
 
+func TestAuthenticateTokenChecksAllPrefixCollisionCandidates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	prefix := "cr_same_"
+	rawWrong := prefix + "wrong-token"
+	rawRight := prefix + "right-token"
+	wrongHash, err := bcryptHashToken(rawWrong)
+	require.NoError(t, err)
+	rightHash, err := bcryptHashToken(rawRight)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	repository := &collidingTokenRepository{
+		prefix: prefix,
+		candidates: []core.StoreTokenCandidate{
+			{
+				Token: core.StoreToken{
+					SessionID:   "sess-wrong",
+					TokenHash:   wrongHash,
+					TokenPrefix: prefix,
+					HashScheme:  TokenHashSchemeBcrypt,
+					AccountID:   "acc-wrong",
+					ValidSince:  now.Add(-time.Hour),
+					ValidUntil:  now.Add(time.Hour),
+				},
+				Account: core.Account{
+					ID: "acc-wrong", Subject: "sub-wrong", Username: "wrong-collision-user",
+					DisplayName: "Wrong Collision User", Email: "wrong-collision@test.com",
+				},
+			},
+			{
+				Token: core.StoreToken{
+					SessionID:   "sess-right",
+					TokenHash:   rightHash,
+					TokenPrefix: prefix,
+					HashScheme:  TokenHashSchemeBcrypt,
+					AccountID:   "acc-right",
+					ValidSince:  now.Add(-time.Hour),
+					ValidUntil:  now.Add(time.Hour),
+				},
+				Account: core.Account{
+					ID: "acc-right", Subject: "sub-right", Username: "right-collision-user",
+					DisplayName: "Right Collision User", Email: "right-collision@test.com",
+				},
+			},
+		},
+	}
+
+	a := &Authenticator{config: config.Config{}, tokenStore: repository}
+	claims, storeToken, err := a.AuthenticateToken(ctx, rawRight)
+
+	require.NoError(t, err)
+	assert.Equal(t, "right-collision-user", claims.Username)
+	assert.Equal(t, "Right Collision User", claims.DisplayName)
+	require.NotNil(t, storeToken)
+	assert.Equal(t, "sess-right", storeToken.SessionID)
+	assert.Equal(t, 0, repository.legacyPrefixLookups, "auth should use candidate-set lookup, not first-row prefix lookup")
+}
+
 func TestAuthenticateRevokedToken(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -449,4 +508,33 @@ func TestNewAuthenticatorWithInvalidOIDC(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot configure OIDC provider")
 
+}
+
+type collidingTokenRepository struct {
+	prefix              string
+	candidates          []core.StoreTokenCandidate
+	legacyPrefixLookups int
+}
+
+func (r *collidingTokenRepository) FindStoreTokenByHash(_ context.Context, _ string) (core.StoreToken, core.Account, error) {
+	return core.StoreToken{}, core.Account{}, repo.ErrNotFound
+}
+
+func (r *collidingTokenRepository) FindStoreTokensByPrefix(_ context.Context, prefix string) ([]core.StoreTokenCandidate, error) {
+	if prefix != r.prefix {
+		return nil, repo.ErrNotFound
+	}
+	return append([]core.StoreTokenCandidate(nil), r.candidates...), nil
+}
+
+func (r *collidingTokenRepository) FindStoreTokenByPrefix(_ context.Context, prefix string) (core.StoreToken, core.Account, error) {
+	r.legacyPrefixLookups++
+	if prefix != r.prefix || len(r.candidates) == 0 {
+		return core.StoreToken{}, core.Account{}, repo.ErrNotFound
+	}
+	return r.candidates[0].Token, r.candidates[0].Account, nil
+}
+
+func (r *collidingTokenRepository) UpdateTokenHashScheme(_ context.Context, _, _, _, _ string) error {
+	return nil
 }

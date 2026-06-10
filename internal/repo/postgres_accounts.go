@@ -147,19 +147,26 @@ func (p *Postgres) FindStoreTokenByHash(ctx context.Context, hash string) (core.
 	return token, account, nil
 }
 
-func (p *Postgres) FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error) {
-	row, err := p.queries().FindStoreTokenByPrefix(ctx, &prefix)
+func (p *Postgres) FindStoreTokensByPrefix(ctx context.Context, prefix string) ([]core.StoreTokenCandidate, error) {
+	rows, err := p.queries().FindStoreTokensByPrefix(ctx, &prefix)
 	if pgxNotFound(err) {
-		return core.StoreToken{}, core.Account{}, ErrNotFound
+		return nil, ErrNotFound
 	}
 	if err != nil {
-		return core.StoreToken{}, core.Account{}, err
+		return nil, err
 	}
-	token, account, err := tokenAndAccountFromPrefixRow(row)
-	if err != nil {
-		return core.StoreToken{}, core.Account{}, fmt.Errorf("decode store token row: %w", err)
+	if len(rows) == 0 {
+		return nil, ErrNotFound
 	}
-	return token, account, nil
+	candidates := make([]core.StoreTokenCandidate, 0, len(rows))
+	for _, row := range rows {
+		token, account, err := tokenAndAccountFromPrefixRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("decode store token row: %w", err)
+		}
+		candidates = append(candidates, core.StoreTokenCandidate{Token: token, Account: account})
+	}
+	return candidates, nil
 }
 
 func (p *Postgres) UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error {

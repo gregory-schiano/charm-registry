@@ -317,7 +317,7 @@ func tokenAndAccountFromSQLC(item sqlcdb.FindStoreTokenByHashRow) (core.StoreTok
 	return token, account, nil
 }
 
-func tokenAndAccountFromPrefixRow(item sqlcdb.FindStoreTokenByPrefixRow) (core.StoreToken, core.Account, error) {
+func tokenAndAccountFromPrefixRow(item sqlcdb.FindStoreTokensByPrefixRow) (core.StoreToken, core.Account, error) {
 	token, err := tokenFromSQLC(sqlcdb.StoreToken{
 		SessionID:       item.SessionID,
 		TokenHash:       item.TokenHash,

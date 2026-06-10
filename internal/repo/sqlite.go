@@ -222,16 +222,33 @@ WHERE t.token_hash = ?`, hash)
 	return token, account, err
 }
 
-func (s *SQLite) FindStoreTokenByPrefix(ctx context.Context, prefix string) (core.StoreToken, core.Account, error) {
-	row := s.db.QueryRowContext(ctx, `
+func (s *SQLite) FindStoreTokensByPrefix(ctx context.Context, prefix string) ([]core.StoreTokenCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
 SELECT t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description, t.packages, t.channels, t.permissions,
        t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
        a.id, a.subject, a.username, a.display_name, a.email, a.validation, a.is_admin, a.created_at
 FROM store_tokens t
 JOIN accounts a ON a.id = t.account_id
 WHERE t.token_prefix = ?`, prefix)
-	token, account, err := scanTokenAndAccount(row)
-	return token, account, err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []core.StoreTokenCandidate
+	for rows.Next() {
+		token, account, err := scanTokenAndAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, core.StoreTokenCandidate{Token: token, Account: account})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, ErrNotFound
+	}
+	return candidates, nil
 }
 
 func (s *SQLite) UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error {

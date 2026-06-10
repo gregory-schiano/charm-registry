@@ -175,7 +175,7 @@ func (q *Queries) FindStoreTokenByHash(ctx context.Context, tokenHash string) (F
 	return i, err
 }
 
-const findStoreTokenByPrefix = `-- name: FindStoreTokenByPrefix :one
+const findStoreTokensByPrefix = `-- name: FindStoreTokensByPrefix :many
 SELECT
     t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description,
     t.packages, t.channels, t.permissions,
@@ -193,7 +193,7 @@ JOIN accounts a ON a.id = t.account_id
 WHERE t.token_prefix = $1
 `
 
-type FindStoreTokenByPrefixRow struct {
+type FindStoreTokensByPrefixRow struct {
 	SessionID       string
 	TokenHash       string
 	TokenPrefix     *string
@@ -217,33 +217,46 @@ type FindStoreTokenByPrefixRow struct {
 	AccCreatedAt    time.Time
 }
 
-func (q *Queries) FindStoreTokenByPrefix(ctx context.Context, tokenPrefix *string) (FindStoreTokenByPrefixRow, error) {
-	row := q.db.QueryRow(ctx, findStoreTokenByPrefix, tokenPrefix)
-	var i FindStoreTokenByPrefixRow
-	err := row.Scan(
-		&i.SessionID,
-		&i.TokenHash,
-		&i.TokenPrefix,
-		&i.TokenHashScheme,
-		&i.AccountID,
-		&i.Description,
-		&i.Packages,
-		&i.Channels,
-		&i.Permissions,
-		&i.ValidSince,
-		&i.ValidUntil,
-		&i.RevokedAt,
-		&i.RevokedBy,
-		&i.AccID,
-		&i.AccSubject,
-		&i.AccUsername,
-		&i.AccDisplayName,
-		&i.AccEmail,
-		&i.AccValidation,
-		&i.AccIsAdmin,
-		&i.AccCreatedAt,
-	)
-	return i, err
+func (q *Queries) FindStoreTokensByPrefix(ctx context.Context, tokenPrefix *string) ([]FindStoreTokensByPrefixRow, error) {
+	rows, err := q.db.Query(ctx, findStoreTokensByPrefix, tokenPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindStoreTokensByPrefixRow{}
+	for rows.Next() {
+		var i FindStoreTokensByPrefixRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TokenHash,
+			&i.TokenPrefix,
+			&i.TokenHashScheme,
+			&i.AccountID,
+			&i.Description,
+			&i.Packages,
+			&i.Channels,
+			&i.Permissions,
+			&i.ValidSince,
+			&i.ValidUntil,
+			&i.RevokedAt,
+			&i.RevokedBy,
+			&i.AccID,
+			&i.AccSubject,
+			&i.AccUsername,
+			&i.AccDisplayName,
+			&i.AccEmail,
+			&i.AccValidation,
+			&i.AccIsAdmin,
+			&i.AccCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAccountByID = `-- name: GetAccountByID :one

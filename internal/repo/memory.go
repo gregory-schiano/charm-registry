@@ -165,20 +165,24 @@ func (m *Memory) FindStoreTokenByHash(_ context.Context, hash string) (core.Stor
 	return token, account, nil
 }
 
-// FindStoreTokenByPrefix is part of the [Repository] interface.
-func (m *Memory) FindStoreTokenByPrefix(_ context.Context, prefix string) (core.StoreToken, core.Account, error) {
+// FindStoreTokensByPrefix is part of the [Repository] interface.
+func (m *Memory) FindStoreTokensByPrefix(_ context.Context, prefix string) ([]core.StoreTokenCandidate, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	var candidates []core.StoreTokenCandidate
 	for _, token := range m.tokens {
 		if token.TokenPrefix == prefix {
 			account, ok := m.accountsByID[token.AccountID]
 			if !ok {
-				return core.StoreToken{}, core.Account{}, ErrNotFound
+				return nil, ErrNotFound
 			}
-			return token, account, nil
+			candidates = append(candidates, core.StoreTokenCandidate{Token: token, Account: account})
 		}
 	}
-	return core.StoreToken{}, core.Account{}, ErrNotFound
+	if len(candidates) == 0 {
+		return nil, ErrNotFound
+	}
+	return candidates, nil
 }
 
 // UpdateTokenHashScheme is part of the [Repository] interface.
