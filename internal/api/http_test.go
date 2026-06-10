@@ -1198,6 +1198,22 @@ func TestLibrariesBulkWithPayload(t *testing.T) {
 
 }
 
+func TestLibrariesBulkRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, config.Config{
+		EnableInsecureDevAuth: true,
+		MaxJSONBodyBytes:      8,
+		MaxUploadBytes:        1024,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/charm/libraries/bulk", strings.NewReader(`[{"library-id":"too-large"}]`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "request-too-large")
+}
+
 func TestFullPublishAndDownloadWithResources(t *testing.T) {
 	t.Parallel()
 	handler := newTestHandler(t, testCfg)
