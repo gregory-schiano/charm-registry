@@ -12,6 +12,8 @@ All configuration is through environment variables. The application validates re
 | `CHARM_REGISTRY_PUBLIC_API_URL` | `http://localhost:8080` | URL handed to clients for API endpoints |
 | `CHARM_REGISTRY_PUBLIC_STORAGE_URL` | `http://localhost:8080` | URL handed to clients for artifact download |
 | `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` | `https://localhost:5000` | URL handed to clients for OCI registry |
+| `CHARM_REGISTRY_API_TLS_CERT_FILE` | — | TLS certificate for API listener (set together with key) |
+| `CHARM_REGISTRY_API_TLS_KEY_FILE` | — | TLS key for API listener (set together with cert) |
 
 ### Database
 
@@ -154,4 +156,9 @@ snap set charm-registry oidc.client-id=charm-registry
 snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
 ```
 
-Snap keys use dotted paths that correspond to the environment variable names. See the wrapper script for the full mapping.
+Snap keys use dotted paths that correspond to the environment variable names.
+The wrapper keeps the full mapping in `snap/local/config-env.map` and packages
+that file as `$SNAP/etc/charm-registry/config-env.map`. Add or review snap
+configuration keys there instead of appending ad-hoc `snapctl get` calls to the
+wrapper; this keeps mappings centralized and makes key/env typos (including TLS
+certificate variables) visible in one table.

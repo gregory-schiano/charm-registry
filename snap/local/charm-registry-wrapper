@@ -18,6 +18,37 @@ set_env_from_config() {
 	fi
 }
 
+apply_config_env_map() {
+	map_file="$1"
+	tls_enabled=false
+	if config_bool tls.enabled false; then
+		tls_enabled=true
+	fi
+
+	while read -r env_key config_key condition extra || [ -n "${env_key:-}" ]; do
+		case "$env_key" in
+			"" | \#*) continue ;;
+		esac
+		if [ -n "${extra:-}" ]; then
+			printf 'invalid snap config env map row for %s: too many fields\n' "$env_key" >&2
+			exit 1
+		fi
+		case "$condition" in
+			always) ;;
+			tls-enabled)
+				if [ "$tls_enabled" != true ]; then
+					continue
+				fi
+				;;
+			*)
+				printf 'invalid snap config env map condition for %s: %s\n' "$env_key" "$condition" >&2
+				exit 1
+				;;
+		esac
+		set_env_from_config "$env_key" "$config_key"
+	done <"$map_file"
+}
+
 config_bool() {
 	key="$1"
 	default="$2"
@@ -41,49 +72,11 @@ export CHARM_REGISTRY_OCI_STORAGE_DIR="${CHARM_REGISTRY_OCI_STORAGE_DIR:-$SNAP_C
 export CHARM_REGISTRY_OCI_TLS_CERT_FILE="${CHARM_REGISTRY_OCI_TLS_CERT_FILE:-$SNAP_COMMON/certs/oci.crt}"
 export CHARM_REGISTRY_OCI_TLS_KEY_FILE="${CHARM_REGISTRY_OCI_TLS_KEY_FILE:-$SNAP_COMMON/certs/oci.key}"
 
-set_env_from_config CHARM_REGISTRY_LISTEN listen
-set_env_from_config CHARM_REGISTRY_OCI_LISTEN oci.listen
-set_env_from_config CHARM_REGISTRY_PUBLIC_API_URL public-api-url
-set_env_from_config CHARM_REGISTRY_PUBLIC_STORAGE_URL public-storage-url
-set_env_from_config CHARM_REGISTRY_PUBLIC_REGISTRY_URL public-registry-url
 if config_bool tls.enabled false; then
-	export CHARM_REGISTRY_TLS_CERT_FILE="$SNAP_COMMON/certs/registry.crt"
-	export CHARM_REGISTRY_TLS_KEY_FILE="$SNAP_COMMON/certs/registry.key"
-	set_env_from_config CHARM_REGISTRY_TLS_CERT_FILE tls.cert-file
-	set_env_from_config CHARM_REGISTRY_TLS_KEY_FILE tls.key-file
+	export CHARM_REGISTRY_API_TLS_CERT_FILE="$SNAP_COMMON/certs/registry.crt"
+	export CHARM_REGISTRY_API_TLS_KEY_FILE="$SNAP_COMMON/certs/registry.key"
 fi
-set_env_from_config CHARM_REGISTRY_OCI_INTERNAL_URL oci.internal-url
-set_env_from_config CHARM_REGISTRY_DATABASE_URL database.url
-set_env_from_config CHARM_REGISTRY_DATABASE_BACKEND database.backend
-set_env_from_config CHARM_REGISTRY_STORAGE_BACKEND storage.backend
-set_env_from_config CHARM_REGISTRY_OCI_STORAGE_BACKEND oci.storage.backend
-set_env_from_config CHARM_REGISTRY_S3_ENDPOINT storage.s3.endpoint
-set_env_from_config CHARM_REGISTRY_S3_BUCKET storage.s3.bucket
-set_env_from_config CHARM_REGISTRY_S3_REGION storage.s3.region
-set_env_from_config CHARM_REGISTRY_S3_ACCESS_KEY_ID storage.s3.access-key-id
-set_env_from_config CHARM_REGISTRY_S3_SECRET_ACCESS_KEY storage.s3.secret-access-key
-set_env_from_config CHARM_REGISTRY_S3_USE_PATH_STYLE storage.s3.use-path-style
-set_env_from_config CHARM_REGISTRY_S3_DISABLE_TLS storage.s3.disable-tls
-set_env_from_config CHARM_REGISTRY_OCI_S3_ENDPOINT oci.storage.s3.endpoint
-set_env_from_config CHARM_REGISTRY_OCI_S3_BUCKET oci.storage.s3.bucket
-set_env_from_config CHARM_REGISTRY_OCI_S3_PREFIX oci.storage.s3.prefix
-set_env_from_config CHARM_REGISTRY_OCI_S3_REGION oci.storage.s3.region
-set_env_from_config CHARM_REGISTRY_OCI_S3_ACCESS_KEY oci.storage.s3.access-key
-set_env_from_config CHARM_REGISTRY_OCI_S3_SECRET_KEY oci.storage.s3.secret-key
-set_env_from_config CHARM_REGISTRY_OCI_S3_USE_PATH_STYLE oci.storage.s3.use-path-style
-set_env_from_config CHARM_REGISTRY_OCI_SECRET_KEY oci.secret-key
-set_env_from_config CHARM_REGISTRY_OCI_TLS_CERT_FILE oci.tls.cert-file
-set_env_from_config CHARM_REGISTRY_OCI_TLS_KEY_FILE oci.tls.key-file
-set_env_from_config CHARM_REGISTRY_OIDC_ISSUER_URL oidc.issuer-url
-set_env_from_config CHARM_REGISTRY_OIDC_CLIENT_ID oidc.client-id
-set_env_from_config CHARM_REGISTRY_OIDC_USERNAME_CLAIM oidc.username-claim
-set_env_from_config CHARM_REGISTRY_OIDC_DISPLAY_NAME_CLAIM oidc.display-name-claim
-set_env_from_config CHARM_REGISTRY_OIDC_EMAIL_CLAIM oidc.email-claim
-set_env_from_config CHARM_REGISTRY_ADMIN_SUBJECTS admin.subjects
-set_env_from_config CHARM_REGISTRY_ADMIN_EMAILS admin.emails
-set_env_from_config CHARM_REGISTRY_ADMIN_USERNAMES admin.usernames
-set_env_from_config CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH insecure-dev-auth
-set_env_from_config CHARM_REGISTRY_CHARMHUB_URL charmhub.url
-set_env_from_config CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL charmhub.sync-interval
+
+apply_config_env_map "$SNAP/etc/charm-registry/config-env.map"
 
 exec "$SNAP/bin/charm-registry"

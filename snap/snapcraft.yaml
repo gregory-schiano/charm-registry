@@ -43,3 +43,4 @@ parts:
       - openssl
     organize:
       charm-registry-wrapper: bin/charm-registry-wrapper
+      config-env.map: etc/charm-registry/config-env.map
