@@ -603,6 +603,58 @@ func TestLoadRequiresCompleteOCITLSConfig(t *testing.T) {
 
 }
 
+func TestValidateConfigRejectsNonPositiveJSONAndUploadLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "zero JSON body limit",
+			mutate: func(cfg *Config) {
+				cfg.MaxJSONBodyBytes = 0
+			},
+			wantErr: "CHARM_REGISTRY_MAX_JSON_BODY_BYTES must be greater than zero",
+		},
+		{
+			name: "negative JSON body limit",
+			mutate: func(cfg *Config) {
+				cfg.MaxJSONBodyBytes = -1
+			},
+			wantErr: "CHARM_REGISTRY_MAX_JSON_BODY_BYTES must be greater than zero",
+		},
+		{
+			name: "zero upload limit",
+			mutate: func(cfg *Config) {
+				cfg.MaxUploadBytes = 0
+			},
+			wantErr: "CHARM_REGISTRY_MAX_UPLOAD_BYTES must be greater than zero",
+		},
+		{
+			name: "negative upload limit",
+			mutate: func(cfg *Config) {
+				cfg.MaxUploadBytes = -1
+			},
+			wantErr: "CHARM_REGISTRY_MAX_UPLOAD_BYTES must be greater than zero",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validMinConfig()
+			tt.mutate(&cfg)
+
+			_, err := validateConfig(cfg)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestValidateConfigRejectsNegativeIPRateLimit(t *testing.T) {
 	t.Parallel()
 	cfg := validMinConfig()
@@ -668,6 +720,8 @@ func validMinConfig() Config {
 		CharmhubMaxResponseBytes: 4 << 20,
 		CharmhubMaxArtifactBytes: 4 << 20,
 		OCIMaxManifestBytes:      16 << 20,
+		MaxJSONBodyBytes:         1 << 20,
+		MaxUploadBytes:           64 << 20,
 		IPRateLimit:              30,
 		IPRateWindow:             time.Minute,
 		TokenRateLimit:           5,

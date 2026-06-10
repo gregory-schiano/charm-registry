@@ -377,8 +377,14 @@ func validateConfig(cfg Config) (Config, error) {
 	if err := validateOCIConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	if cfg.MaxJSONBodyBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_JSON_BODY_BYTES must be greater than zero")
+	}
 	if cfg.MaxArchiveFileBytes <= 0 {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
+	}
+	if cfg.MaxUploadBytes <= 0 {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_UPLOAD_BYTES must be greater than zero")
 	}
 	if cfg.CharmhubMaxResponseBytes <= 0 {
 		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES must be greater than zero")
