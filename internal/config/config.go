@@ -73,6 +73,10 @@ type Config struct {
 	ServerIdleTimeout       time.Duration
 	ServerShutdownTimeout   time.Duration
 	ServerMaxHeaderBytes    int
+	OCIReadTimeout          time.Duration
+	OCIReadHeaderTimeout    time.Duration
+	OCIWriteTimeout         time.Duration
+	OCIIdleTimeout          time.Duration
 	MaxJSONBodyBytes        int64
 	MaxArchiveFileBytes     int64
 	MaxUploadBytes          int64
@@ -99,6 +103,10 @@ type parsedConfig struct {
 	serverIdleTimeout       time.Duration
 	serverShutdownTimeout   time.Duration
 	serverMaxHeaderBytes    int
+	ociReadTimeout          time.Duration
+	ociReadHeaderTimeout    time.Duration
+	ociWriteTimeout         time.Duration
+	ociIdleTimeout          time.Duration
 	maxJSONBodyBytes        int64
 	maxArchiveFileBytes     int64
 	maxUploadBytes          int64
@@ -197,6 +205,10 @@ func Load() (Config, error) {
 		ServerIdleTimeout:       parsed.serverIdleTimeout,
 		ServerShutdownTimeout:   parsed.serverShutdownTimeout,
 		ServerMaxHeaderBytes:    parsed.serverMaxHeaderBytes,
+		OCIReadHeaderTimeout:    parsed.ociReadHeaderTimeout,
+		OCIReadTimeout:          parsed.ociReadTimeout,
+		OCIWriteTimeout:         parsed.ociWriteTimeout,
+		OCIIdleTimeout:          parsed.ociIdleTimeout,
 		MaxJSONBodyBytes:        parsed.maxJSONBodyBytes,
 		MaxArchiveFileBytes:     parsed.maxArchiveFileBytes,
 		MaxUploadBytes:          parsed.maxUploadBytes,
@@ -263,6 +275,23 @@ func loadParsedConfig() (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
+	ociReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	ociReadTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_TIMEOUT", 0)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	ociWriteTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_WRITE_TIMEOUT", 0)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	ociIdleTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_IDLE_TIMEOUT", 300*time.Second)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+
 	byteLimits, err := loadParsedByteLimits()
 	if err != nil {
 		return parsedConfig{}, err
@@ -285,6 +314,10 @@ func loadParsedConfig() (parsedConfig, error) {
 		serverIdleTimeout:       serverIdleTimeout,
 		serverShutdownTimeout:   serverShutdownTimeout,
 		serverMaxHeaderBytes:    serverMaxHeaderBytes,
+		ociReadHeaderTimeout:    ociReadHeaderTimeout,
+		ociReadTimeout:          ociReadTimeout,
+		ociWriteTimeout:         ociWriteTimeout,
+		ociIdleTimeout:          ociIdleTimeout,
 		maxJSONBodyBytes:        byteLimits.maxJSONBodyBytes,
 		maxArchiveFileBytes:     byteLimits.maxArchiveFileBytes,
 		maxUploadBytes:          byteLimits.maxUploadBytes,

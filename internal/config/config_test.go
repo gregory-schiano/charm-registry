@@ -52,6 +52,10 @@ type configSnapshot struct {
 	ServerIdleTimeout       time.Duration
 	ServerShutdownTimeout   time.Duration
 	ServerMaxHeaderBytes    int
+	OCIReadHeaderTimeout    time.Duration
+	OCIReadTimeout          time.Duration
+	OCIWriteTimeout         time.Duration
+	OCIIdleTimeout          time.Duration
 }
 
 func snapshotConfig(cfg Config) configSnapshot {
@@ -99,6 +103,10 @@ func snapshotConfig(cfg Config) configSnapshot {
 		ServerIdleTimeout:       cfg.ServerIdleTimeout,
 		ServerShutdownTimeout:   cfg.ServerShutdownTimeout,
 		ServerMaxHeaderBytes:    cfg.ServerMaxHeaderBytes,
+		OCIReadHeaderTimeout:    cfg.OCIReadHeaderTimeout,
+		OCIReadTimeout:          cfg.OCIReadTimeout,
+		OCIWriteTimeout:         cfg.OCIWriteTimeout,
+		OCIIdleTimeout:          cfg.OCIIdleTimeout,
 	}
 }
 
@@ -269,6 +277,10 @@ func TestLoadDefaults(t *testing.T) {
 		ServerIdleTimeout:       120 * time.Second,
 		ServerShutdownTimeout:   30 * time.Second,
 		ServerMaxHeaderBytes:    1 << 20,
+		OCIReadHeaderTimeout:    10 * time.Second,
+		OCIReadTimeout:          0,
+		OCIWriteTimeout:         0,
+		OCIIdleTimeout:          300 * time.Second,
 	}, snapshotConfig(cfg))
 
 }
@@ -344,6 +356,10 @@ func TestLoadCustomValues(t *testing.T) {
 		ServerIdleTimeout:       120 * time.Second,
 		ServerShutdownTimeout:   30 * time.Second,
 		ServerMaxHeaderBytes:    1 << 20,
+		OCIReadHeaderTimeout:    10 * time.Second,
+		OCIReadTimeout:          0,
+		OCIWriteTimeout:         0,
+		OCIIdleTimeout:          300 * time.Second,
 	}, snapshotConfig(cfg))
 
 }

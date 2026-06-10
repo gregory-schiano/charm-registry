@@ -73,10 +73,10 @@ func newOCIServer(cfg config.Config, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              cfg.OCIListenAddress,
 		Handler:           handler,
-		ReadHeaderTimeout: cfg.ServerReadHeaderTimeout,
-		ReadTimeout:       cfg.ServerReadTimeout,
-		WriteTimeout:      cfg.ServerWriteTimeout,
-		IdleTimeout:       cfg.ServerIdleTimeout,
+		ReadHeaderTimeout: cfg.OCIReadHeaderTimeout,
+		ReadTimeout:       cfg.OCIReadTimeout,
+		WriteTimeout:      cfg.OCIWriteTimeout,
+		IdleTimeout:       cfg.OCIIdleTimeout,
 		MaxHeaderBytes:    cfg.ServerMaxHeaderBytes,
 		BaseContext: func(_ net.Listener) context.Context {
 			return context.Background()
