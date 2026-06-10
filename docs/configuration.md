@@ -154,4 +154,54 @@ snap set charm-registry oidc.client-id=charm-registry
 snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
 ```
 
-Snap keys use dotted paths that correspond to the environment variable names. See the wrapper script for the full mapping.
+Snap keys use dotted paths that correspond to the environment variable names. Supported snap options include:
+
+| Snap option | Environment variable | Value |
+|---|---|---|
+| `listen` | `CHARM_REGISTRY_LISTEN` | API listen address, for example `:8080` |
+| `oci.listen` | `CHARM_REGISTRY_OCI_LISTEN` | OCI listen address, for example `:5000` |
+| `public-api-url` | `CHARM_REGISTRY_PUBLIC_API_URL` | Public API base URL |
+| `public-storage-url` | `CHARM_REGISTRY_PUBLIC_STORAGE_URL` | Public storage base URL |
+| `public-registry-url` | `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` | Public OCI registry base URL |
+| `tls.enabled` | Enables `CHARM_REGISTRY_TLS_CERT_FILE` / `CHARM_REGISTRY_TLS_KEY_FILE` | Boolean (`true` / `false`) |
+| `tls.cert-file` | `CHARM_REGISTRY_TLS_CERT_FILE` | API TLS certificate path |
+| `tls.key-file` | `CHARM_REGISTRY_TLS_KEY_FILE` | API TLS private key path |
+| `oci.internal-url` | `CHARM_REGISTRY_OCI_INTERNAL_URL` | Internal OCI URL used by the API |
+| `database.backend` | `CHARM_REGISTRY_DATABASE_BACKEND` | `sqlite` or `postgres` |
+| `database.url` | `CHARM_REGISTRY_DATABASE_URL` | Postgres connection URL |
+| `storage.backend` | `CHARM_REGISTRY_STORAGE_BACKEND` | `filesystem` or `s3` |
+| `storage.s3.endpoint` | `CHARM_REGISTRY_S3_ENDPOINT` | S3 endpoint URL |
+| `storage.s3.bucket` | `CHARM_REGISTRY_S3_BUCKET` | S3 bucket name |
+| `storage.s3.region` | `CHARM_REGISTRY_S3_REGION` | S3 region |
+| `storage.s3.access-key-id` | `CHARM_REGISTRY_S3_ACCESS_KEY_ID` | S3 access key ID |
+| `storage.s3.secret-access-key` | `CHARM_REGISTRY_S3_SECRET_ACCESS_KEY` | S3 secret access key |
+| `storage.s3.use-path-style` | `CHARM_REGISTRY_S3_USE_PATH_STYLE` | Boolean |
+| `storage.s3.disable-tls` | `CHARM_REGISTRY_S3_DISABLE_TLS` | Boolean |
+| `oci.storage.backend` | `CHARM_REGISTRY_OCI_STORAGE_BACKEND` | `filesystem` or `s3` |
+| `oci.storage.s3.endpoint` | `CHARM_REGISTRY_OCI_S3_ENDPOINT` | OCI S3 endpoint URL |
+| `oci.storage.s3.bucket` | `CHARM_REGISTRY_OCI_S3_BUCKET` | OCI S3 bucket name |
+| `oci.storage.s3.prefix` | `CHARM_REGISTRY_OCI_S3_PREFIX` | OCI S3 key prefix |
+| `oci.storage.s3.region` | `CHARM_REGISTRY_OCI_S3_REGION` | OCI S3 region |
+| `oci.storage.s3.access-key` | `CHARM_REGISTRY_OCI_S3_ACCESS_KEY` | OCI S3 access key |
+| `oci.storage.s3.secret-key` | `CHARM_REGISTRY_OCI_S3_SECRET_KEY` | OCI S3 secret key |
+| `oci.storage.s3.use-path-style` | `CHARM_REGISTRY_OCI_S3_USE_PATH_STYLE` | Boolean |
+| `oci.secret-key` | `CHARM_REGISTRY_OCI_SECRET_KEY` | Secret used to encrypt OCI credentials |
+| `oci.tls.cert-file` | `CHARM_REGISTRY_OCI_TLS_CERT_FILE` | OCI TLS certificate path |
+| `oci.tls.key-file` | `CHARM_REGISTRY_OCI_TLS_KEY_FILE` | OCI TLS private key path |
+| `oidc.issuer-url` | `CHARM_REGISTRY_OIDC_ISSUER_URL` | OIDC issuer URL |
+| `oidc.client-id` | `CHARM_REGISTRY_OIDC_CLIENT_ID` | OIDC client ID |
+| `oidc.username-claim` | `CHARM_REGISTRY_OIDC_USERNAME_CLAIM` | OIDC username claim name |
+| `oidc.display-name-claim` | `CHARM_REGISTRY_OIDC_DISPLAY_NAME_CLAIM` | OIDC display-name claim name |
+| `oidc.email-claim` | `CHARM_REGISTRY_OIDC_EMAIL_CLAIM` | OIDC email claim name |
+| `admin.subjects` | `CHARM_REGISTRY_ADMIN_SUBJECTS` | Comma-separated admin OIDC subjects |
+| `admin.emails` | `CHARM_REGISTRY_ADMIN_EMAILS` | Comma-separated admin email addresses |
+| `admin.usernames` | `CHARM_REGISTRY_ADMIN_USERNAMES` | Comma-separated admin usernames |
+| `insecure-dev-auth` | `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH` | Boolean; development only |
+| `charmhub.url` | `CHARM_REGISTRY_CHARMHUB_URL` | Charmhub API URL |
+| `charmhub.sync-interval` | `CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL` | Sync interval duration |
+| `rate-limit.ip-limit` | `CHARM_REGISTRY_IP_RATE_LIMIT` | Non-negative integer; `0` disables IP limiting |
+| `rate-limit.ip-window` | `CHARM_REGISTRY_IP_RATE_WINDOW` | Positive duration such as `30s`, `1m`, or `2h` |
+| `rate-limit.token-limit` | `CHARM_REGISTRY_TOKEN_RATE_LIMIT` | Non-negative integer; `0` disables token issuance limiting |
+| `rate-limit.token-window` | `CHARM_REGISTRY_TOKEN_RATE_WINDOW` | Positive duration such as `30s`, `1m`, or `2h` |
+
+The configure hook rejects invalid rate-limit values before snapd stores them: limits must be non-negative integers, and windows must be positive durations.
