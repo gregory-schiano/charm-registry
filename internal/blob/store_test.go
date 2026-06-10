@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -287,6 +288,55 @@ func TestS3StoreEnsureBucketNoConstraintForUsEast1(t *testing.T) {
 	require.NotNil(t, capturedInput)
 	assert.Nil(t, capturedInput.CreateBucketConfiguration, "us-east-1 must not include a LocationConstraint")
 
+}
+
+func TestS3StoreEnsureBucketHeadAccessDeniedSkipsCreate(t *testing.T) {
+	t.Parallel()
+	createCalled := false
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "access denied"}
+		},
+		createBucketFn: func(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			createCalled = true
+			return nil, nil
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+	err := store.ensureBucket(context.Background())
+	require.NoError(t, err)
+	assert.False(t, createCalled, "CreateBucket should not be called when HeadBucket returns typed AccessDenied")
+}
+
+func TestS3StoreEnsureBucketCreateAccessDeniedIsAllowed(t *testing.T) {
+	t.Parallel()
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			return nil, &smithy.GenericAPIError{Code: "AccessDenied", Message: "access denied"}
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+	err := store.ensureBucket(context.Background())
+	require.NoError(t, err)
+}
+
+func TestS3StoreEnsureBucketDoesNotClassifyStringOnlyAccessDenied(t *testing.T) {
+	t.Parallel()
+	createErr := errors.New("operation error S3: CreateBucket, https response error StatusCode: 403, AccessDenied")
+	mock := &mockS3Client{
+		headBucketFn: func(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+			return nil, errors.New("bucket not found")
+		},
+		createBucketFn: func(_ context.Context, _ *s3.CreateBucketInput, _ ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+			return nil, createErr
+		},
+	}
+	store := newS3StoreWithClient(mock, "my-bucket", "us-east-1", true)
+	err := store.ensureBucket(context.Background())
+	assert.ErrorIs(t, err, createErr)
 }
 
 func TestS3StoreEnsureBucketCreateError(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/gschiano/charm-registry/internal/config"
 )
@@ -273,14 +274,8 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 }
 
 func isBucketAccessDenied(err error) bool {
-	if err == nil {
-		return false
-	}
-	var apiErr interface{ ErrorCode() string }
-	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied" {
-		return true
-	}
-	return strings.Contains(err.Error(), "AccessDenied") || strings.Contains(err.Error(), "StatusCode: 403")
+	var apiErr smithy.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDenied"
 }
 
 // Put is part of the [Store] interface.
