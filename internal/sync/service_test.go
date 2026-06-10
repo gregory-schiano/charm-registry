@@ -8,6 +8,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -24,10 +25,12 @@ import (
 )
 
 type fakeCharmhubClient struct {
-	channels     map[string]charmhubclient.PackageChannel
-	infos        map[string]charmhubclient.PackageChannel
-	downloads    map[string][]byte
-	downloadErrs map[string]error
+	channels        map[string]charmhubclient.PackageChannel
+	infos           map[string]charmhubclient.PackageChannel
+	downloads       map[string][]byte
+	downloadErrs    map[string]error
+	downloadCalls   map[string]int
+	downloadToCalls map[string]int
 }
 
 type trackingOCIRegistry struct {
@@ -76,6 +79,7 @@ func (f *fakeCharmhubClient) RefreshChannel(
 }
 
 func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]byte, error) {
+	f.downloadCalls[artifactURL]++
 	if err, ok := f.downloadErrs[artifactURL]; ok {
 		return nil, err
 	}
@@ -84,6 +88,26 @@ func (f *fakeCharmhubClient) Download(_ context.Context, artifactURL string) ([]
 		return nil, fmt.Errorf("unknown download URL %s", artifactURL)
 	}
 	return append([]byte(nil), payload...), nil
+}
+
+func (f *fakeCharmhubClient) DownloadTo(ctx context.Context, artifactURL string, dst io.Writer) (int64, error) {
+	f.downloadToCalls[artifactURL]++
+	payload, err := f.downloadPayload(artifactURL)
+	if err != nil {
+		return 0, err
+	}
+	return io.Copy(dst, bytes.NewReader(payload))
+}
+
+func (f *fakeCharmhubClient) downloadPayload(artifactURL string) ([]byte, error) {
+	if err, ok := f.downloadErrs[artifactURL]; ok {
+		return nil, err
+	}
+	payload, ok := f.downloads[artifactURL]
+	if !ok {
+		return nil, fmt.Errorf("unknown download URL %s", artifactURL)
+	}
+	return payload, nil
 }
 
 func (o *trackingOCIRegistry) MirrorImage(
@@ -252,6 +276,13 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	require.Len(t, rules, 1)
 	assert.Equal(t, charmhubSyncStatusOK, rules[0].LastSyncStatus)
 	assert.Nil(t, rules[0].LastSyncError)
+
+	assert.Zero(t, fakeClient.downloadCalls[fakeClient.channels["demo|latest/stable"].DefaultRelease.Revision.Download.URL])
+	assert.Equal(t, 1, fakeClient.downloadToCalls[fakeClient.channels["demo|latest/stable"].DefaultRelease.Revision.Download.URL])
+	for _, resource := range fakeClient.channels["demo|latest/stable"].DefaultRelease.Resources {
+		assert.Zero(t, fakeClient.downloadCalls[resource.Download.URL])
+		assert.Equal(t, 1, fakeClient.downloadToCalls[resource.Download.URL])
+	}
 }
 
 func TestReconcileCharmhubPackagePersistsSyncAccountOnSQLite(t *testing.T) {
@@ -678,10 +709,12 @@ func newSyncFixture(
 	t.Helper()
 
 	client := &fakeCharmhubClient{
-		channels:     map[string]charmhubclient.PackageChannel{},
-		infos:        map[string]charmhubclient.PackageChannel{},
-		downloads:    map[string][]byte{},
-		downloadErrs: map[string]error{},
+		channels:        map[string]charmhubclient.PackageChannel{},
+		infos:           map[string]charmhubclient.PackageChannel{},
+		downloads:       map[string][]byte{},
+		downloadErrs:    map[string]error{},
+		downloadCalls:   map[string]int{},
+		downloadToCalls: map[string]int{},
 	}
 	addTrackFixture(t, client, packageName, packageID, "latest", 7, 3, 2)
 	return client, &trackingOCIRegistry{OCIRegistry: testutil.OCIRegistry{RegistryHost: "oci.test"}}

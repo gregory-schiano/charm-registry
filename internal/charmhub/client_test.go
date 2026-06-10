@@ -154,6 +154,42 @@ func TestDownloadRejectsOversizedArtifact(t *testing.T) {
 	require.ErrorContains(t, err, "Charmhub artifact exceeds 5 bytes")
 }
 
+func TestDownloadToStreamsArtifactWithoutBuffering(t *testing.T) {
+	// Use a TLS server so the SSRF host-allowlist and HTTPS checks pass.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("streamed artifact"))
+	}))
+	defer server.Close()
+
+	client := NewWithLimits(server.URL, 1024, 64)
+	// Wire the test server's CA so the HTTPS client trusts it.
+	client.http.Transport = server.Client().Transport
+
+	var dst strings.Builder
+	size, err := client.DownloadTo(context.Background(), server.URL+"/artifact.charm", &dst)
+
+	require.NoError(t, err)
+	require.EqualValues(t, len("streamed artifact"), size)
+	require.Equal(t, "streamed artifact", dst.String())
+}
+
+func TestDownloadToRejectsOversizedArtifact(t *testing.T) {
+	// Use a TLS server so the SSRF host-allowlist and HTTPS checks pass.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 6)))
+	}))
+	defer server.Close()
+
+	client := NewWithLimits(server.URL, 1024, 5)
+	// Wire the test server's CA so the HTTPS client trusts it.
+	client.http.Transport = server.Client().Transport
+
+	var dst strings.Builder
+	_, err := client.DownloadTo(context.Background(), server.URL+"/artifact.charm", &dst)
+
+	require.ErrorContains(t, err, "Charmhub artifact exceeds 5 bytes")
+}
+
 func TestRefreshChannelResolvesBaseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
