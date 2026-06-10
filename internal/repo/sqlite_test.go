@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -88,6 +91,56 @@ func TestSQLitePersistsCoreRepositoryData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, latest.Revision)
 	assert.Equal(t, []core.Base{{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"}}, latest.Bases)
+}
+
+func TestSQLiteCreatePackageMapsUniqueViolationToConflict(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := newSQLiteTestRepository(t)
+	owner := ensureSQLiteAccount(t, repository, "acc-1", "owner")
+	now := time.Now().UTC()
+	pkg := core.Package{
+		ID:             "pkg-1",
+		Name:           "demo",
+		Type:           "charm",
+		Status:         "registered",
+		OwnerAccountID: owner.ID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	require.NoError(t, repository.CreatePackage(ctx, pkg))
+
+	duplicate := pkg
+	duplicate.ID = "pkg-2"
+	err := repository.CreatePackage(ctx, duplicate)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, err.Error(), "cannot create package")
+}
+
+func TestSQLiteCreatePackageReturnsOriginalErrorForForeignKeyViolation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := newSQLiteTestRepository(t)
+	now := time.Now().UTC()
+	err := repository.CreatePackage(ctx, core.Package{
+		ID:             "pkg-1",
+		Name:           "demo",
+		Type:           "charm",
+		Status:         "registered",
+		OwnerAccountID: "missing-account",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+
+	require.Error(t, err)
+	var sqliteErr *sqlite.Error
+	require.ErrorAs(t, err, &sqliteErr)
+	assert.Equal(t, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY, sqliteErr.Code())
+	assert.NotErrorIs(t, err, ErrConflict)
 }
 
 func TestSQLiteReleasesUseBaseScopedUniqueness(t *testing.T) {

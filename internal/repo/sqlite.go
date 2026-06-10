@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/gschiano/charm-registry/internal/core"
 )
@@ -267,7 +268,7 @@ INSERT INTO packages (
 		nullInt64(pkg.OCIPullRobot), robotUsername(pkg.OCIPullRobot), robotSecret(pkg.OCIPullRobot), pkg.OCISyncedAt,
 		pkg.Authority, pkg.Contact, pkg.DefaultTrack, pkg.Description, pkg.Summary, pkg.Title, pkg.Website,
 		string(linksJSON), string(mediaJSON), string(guardrailsJSON), pkg.CreatedAt, pkg.UpdatedAt)
-	if isSQLiteConstraint(err) {
+	if isSQLiteUniqueConstraint(err) {
 		return fmt.Errorf("cannot create package: %w", ErrConflict)
 	}
 	return err
@@ -719,7 +720,7 @@ INSERT INTO charmhub_sync_rules (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rule.PackageName, rule.Track, string(basesJSON), string(architecturesJSON), rule.CreatedByAccountID,
 		rule.CreatedAt, rule.UpdatedAt, rule.LastSyncStatus, rule.LastSyncStartedAt, rule.LastSyncFinishedAt, rule.LastSyncError)
-	if isSQLiteConstraint(err) {
+	if isSQLiteUniqueConstraint(err) {
 		return ErrConflict
 	}
 	return err
@@ -1107,8 +1108,9 @@ func sqlNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
 }
 
-func isSQLiteConstraint(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "constraint failed")
+func isSQLiteUniqueConstraint(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
 }
 
 func inQuery(format string, values []string) (string, []any) {
