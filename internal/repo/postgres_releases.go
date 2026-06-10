@@ -66,6 +66,29 @@ func (p *Postgres) DeleteReleaseForBase(ctx context.Context, packageID, channel 
 	return nil
 }
 
+func (p *Postgres) DeleteStaleTrackReleases(ctx context.Context, packageID, track string, keep []ReleaseVariant) (int64, error) {
+	keepVariants := make([]map[string]string, 0, len(keep))
+	for _, variant := range keep {
+		baseJSON, err := rawJSON(variant.Base)
+		if err != nil {
+			return 0, err
+		}
+		keepVariants = append(keepVariants, map[string]string{
+			"channel":  variant.Channel,
+			"base_key": string(baseJSON),
+		})
+	}
+	keepJSON, err := rawJSON(keepVariants)
+	if err != nil {
+		return 0, err
+	}
+	return p.queries().DeleteStaleTrackReleases(ctx, sqlcdb.DeleteStaleTrackReleasesParams{
+		PackageID:    packageID,
+		TrackPrefix:  track + "/%",
+		KeepVariants: keepJSON,
+	})
+}
+
 func (p *Postgres) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
 	rows, err := p.queries().ListReleases(ctx, packageID)
 	if err != nil {

@@ -666,6 +666,29 @@ func (s *SQLite) DeleteReleaseForBase(ctx context.Context, packageID, channel st
 	return rowsErr(res, err)
 }
 
+func (s *SQLite) DeleteStaleTrackReleases(ctx context.Context, packageID, track string, keep []ReleaseVariant) (int64, error) {
+	args := make([]any, 0, 2+len(keep))
+	args = append(args, packageID, track+"/%")
+	query := "DELETE FROM releases WHERE package_id = ? AND channel LIKE ?"
+	if len(keep) > 0 {
+		placeholders := make([]string, 0, len(keep))
+		for _, variant := range keep {
+			baseJSON, err := rawJSON(variant.Base)
+			if err != nil {
+				return 0, err
+			}
+			placeholders = append(placeholders, "(?, ?)")
+			args = append(args, variant.Channel, string(baseJSON))
+		}
+		query += " AND (channel, base_key) NOT IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *SQLite) ListReleases(ctx context.Context, packageID string) ([]core.Release, error) {
 	rows, err := s.db.QueryContext(ctx, releaseSelectSQL()+" WHERE package_id = ? ORDER BY channel ASC, base_key ASC", packageID)
 	if err != nil {

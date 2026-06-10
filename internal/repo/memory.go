@@ -18,6 +18,19 @@ type aclEntry struct {
 	Role          string // "viewer", "editor", or "owner"
 }
 
+type ReleaseVariant struct {
+	Channel string
+	Base    *core.Base
+}
+
+func releaseTrack(channel string) string {
+	track, _, ok := strings.Cut(channel, "/")
+	if !ok {
+		return "latest"
+	}
+	return track
+}
+
 type Memory struct {
 	mu                sync.RWMutex
 	accounts          map[string]core.Account
@@ -744,6 +757,32 @@ func (m *Memory) DeleteReleaseForBase(_ context.Context, packageID, channel stri
 	}
 	delete(releases, key)
 	return nil
+}
+
+// DeleteStaleTrackReleases removes releases in track except the supplied present variants.
+func (m *Memory) DeleteStaleTrackReleases(_ context.Context, packageID, track string, keep []ReleaseVariant) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	releases, ok := m.releases[packageID]
+	if !ok {
+		return 0, nil
+	}
+	keepVariants := make(map[string]struct{}, len(keep))
+	for _, variant := range keep {
+		keepVariants[releaseVariantKey(variant.Channel, variant.Base)] = struct{}{}
+	}
+	var removed int64
+	for key, release := range releases {
+		if releaseTrack(release.Channel) != track {
+			continue
+		}
+		if _, ok := keepVariants[key]; ok {
+			continue
+		}
+		delete(releases, key)
+		removed++
+	}
+	return removed, nil
 }
 
 // ListReleases is part of the [Repository] interface.

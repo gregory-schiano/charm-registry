@@ -377,6 +377,39 @@ func TestRepositoryReleaseVariantsByBase(t *testing.T) {
 
 }
 
+func TestRepositoryDeleteStaleTrackReleasesKeepsPresentVariants(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
+	ctx := context.Background()
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-stale-release", "owner-stale-release")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-stale-release",
+		Name: "stale-release",
+	})
+	amd64 := &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"}
+	arm64 := &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "arm64"}
+	oldBase := &core.Base{Name: "ubuntu", Channel: "22.04", Architecture: "amd64"}
+	releases := []core.Release{
+		{ID: "keep-stable-amd64", Channel: "latest/stable", Revision: 1, Base: amd64, When: time.Now().UTC()},
+		{ID: "keep-edge-arm64", Channel: "latest/edge", Revision: 2, Base: arm64, When: time.Now().UTC()},
+		{ID: "delete-stable-old", Channel: "latest/stable", Revision: 3, Base: oldBase, When: time.Now().UTC()},
+		{ID: "keep-other-track", Channel: "2.0/stable", Revision: 4, Base: oldBase, When: time.Now().UTC()},
+	}
+	for _, release := range releases {
+		require.NoError(t, repository.ReplaceRelease(ctx, pkg.ID, release))
+	}
+
+	deleted, err := repository.DeleteStaleTrackReleases(ctx, pkg.ID, "latest", []ReleaseVariant{
+		{Channel: "latest/stable", Base: amd64},
+		{Channel: "latest/edge", Base: arm64},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	remaining, err := repository.ListReleases(ctx, pkg.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1, 2, 4}, releaseRevisions(remaining))
+}
+
 func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
@@ -458,6 +491,14 @@ func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func releaseRevisions(releases []core.Release) []int {
+	out := make([]int, 0, len(releases))
+	for _, release := range releases {
+		out = append(out, release.Revision)
+	}
+	return out
 }
 
 type repositoryBehaviorUpdatePackageFailingRepository struct {
