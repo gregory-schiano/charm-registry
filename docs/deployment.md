@@ -190,3 +190,4 @@ Before any internet-facing deployment:
 5. **Enable database TLS:** Use `sslmode=require` or `verify-full` in `CHARM_REGISTRY_DATABASE_URL`
 6. **Put TLS in front of the API:** Use a reverse proxy or the snap's TLS support
 7. **Restrict network access:** Bind to specific interfaces or use firewall rules
+8. **Protect `/metrics`:** The Prometheus endpoint is unauthenticated by design. Keep it on an internal listener/network or configure the reverse proxy/ingress to allow it only from trusted scrape sources.

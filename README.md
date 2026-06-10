@@ -37,7 +37,7 @@ The service stores charm metadata in Postgres or SQLite, stores charm and resour
 
 - Registry-managed Charmhub track synchronization with a background worker
 - Admin CLI `charm-registryctl` for managing synchronized tracks
-- Health (`/healthz`) and readiness (`/readyz`) endpoints
+- Health (`/healthz`), readiness (`/readyz`), and Prometheus (`/metrics`) endpoints
 - OpenAPI spec at `/openapi.yaml`
 
 ## Architecture
@@ -281,7 +281,7 @@ See [docs/testing.md](docs/testing.md) for the full testing guide.
 - **Juju auth forwarding risk.** Stock `juju` can target an alternate Charmhub URL, but private package auth support is still the main compatibility risk to validate end-to-end in your environment. If Juju does not forward auth for consumer requests, private deployments may need network-level access controls in front of the registry.
 - **No API TLS in the Go app.** The main API server always uses plain HTTP. TLS termination requires a reverse proxy or the snap wrapper's TLS support.
 - **No backup infrastructure.** There are no built-in backup or restore commands. See [docs/operations.md](docs/operations.md) for manual backup procedures.
-- **No Prometheus metrics.** There is no `/metrics` endpoint yet. Production monitoring relies on structured log output.
+- **Internal-only Prometheus metrics.** `GET /metrics` is unauthenticated for Prometheus compatibility and must be kept on an internal network or protected by firewall/ingress rules.
 - **Snap grade is `devel`.** The snap cannot be published to the stable channel until the grade is changed.
 
 ## Quality gates

@@ -13,7 +13,11 @@ The readiness check does not verify S3 or OCI storage driver health. If S3 is do
 
 ## Monitoring
 
-The registry produces structured log output via `slog` (text handler). Every request is logged with:
+The registry exposes Prometheus metrics at `GET /metrics` on the main API listener. Treat this endpoint as an internal-only operational endpoint: it is intentionally unauthenticated for Prometheus compatibility, so production deployments must keep it off the public internet by binding `CHARM_REGISTRY_LISTEN` to a private interface, firewalling the listener, or allowing `/metrics` only from trusted scrape networks at the ingress/reverse-proxy layer.
+
+The endpoint currently includes the standard Go/process Prometheus collectors and custom process/build metrics such as `charm_registry_build_info` and `charm_registry_go_goroutines`.
+
+The registry also produces structured log output via `slog` (text handler). Every request is logged with:
 
 - Request ID
 - Method and path
@@ -26,11 +30,10 @@ Log level is currently not configurable at runtime. The registry logs at the def
 
 ### What is not monitored
 
-- **No `/metrics` endpoint.** There is no Prometheus metrics endpoint. This is a known gap.
 - **No distributed tracing.** The application does not emit OpenTelemetry spans.
 - **No error aggregation.** Errors go to structured logs only, not to Sentry or similar.
 
-For production monitoring, scrape the logs or put an observability stack in front of the registry (e.g., Promtail + Loki for log aggregation, or an HTTP metrics exporter as a sidecar).
+For production monitoring, scrape `/metrics` only from trusted networks and scrape logs through an observability stack such as Promtail + Loki.
 
 ## Backup and restore
 
