@@ -126,14 +126,17 @@ func TestAuthenticateInsecureDevTokenPreservesUsernameSuffix(t *testing.T) {
 		tokenStore: repository,
 	}
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", "Bearer dev:alice:Alice:Admin")
+	// Insecure dev tokens are parsed as dev:<subject>:<username>. Extra
+	// colons belong to the username so local development can exercise
+	// usernames that contain colon-delimited suffixes.
+	req.Header.Set("Authorization", "Bearer dev:subj:user:extra")
 	claims, storeToken, err := a.Authenticate(req)
 	require.NoError(t, err)
 	assert.Nil(t, storeToken)
-	assert.Equal(t, "alice", claims.Subject)
-	assert.Equal(t, "Alice:Admin", claims.Username)
-	assert.Equal(t, "Alice:Admin", claims.DisplayName)
-	assert.Equal(t, "Alice:Admin@example.invalid", claims.Email)
+	assert.Equal(t, "subj", claims.Subject)
+	assert.Equal(t, "user:extra", claims.Username)
+	assert.Equal(t, "user:extra", claims.DisplayName)
+	assert.Equal(t, "user:extra@example.invalid", claims.Email)
 }
 
 func TestAuthenticateMacaroonScheme(t *testing.T) {
