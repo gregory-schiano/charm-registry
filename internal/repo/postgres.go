@@ -40,15 +40,31 @@ func NewPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 
 // Migrate applies the embedded repository schema migrations.
 //
-// Uses a schema_migrations table for version tracking and an advisory lock
-// (pg_advisory_lock) to prevent concurrent migration runs from racing.
+// Acquires a single dedicated connection from the pool and uses it for the
+// entire lock → migrate → unlock sequence. This avoids the previous bug
+// where pool.QueryRow could execute the lock and unlock on different
+// physical connections, silently orphaning the advisory lock.
+//
+// Uses pg_advisory_lock (blocking) so concurrent startup units wait for
+// each other instead of immediately failing with "lock is held by another
+// process — skipping".
 //
 // The following errors may be returned:
+// - Errors from acquiring a connection from the pool.
 // - Errors from reading embedded migrations.
 // - Errors from executing migration statements.
 func (p *Postgres) Migrate(ctx context.Context) error {
+	// Acquire a single dedicated connection for the entire migration sequence.
+	// All lock, query, and transaction operations below use this connection
+	// to guarantee the advisory lock stays on the same session.
+	conn, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot acquire connection for migration: %w", err)
+	}
+	defer conn.Release()
+
 	// Ensure the schema_migrations tracking table exists.
-	if _, err := p.pool.Exec(ctx, `
+	if _, err := conn.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
     applied_at TIMESTAMP NOT NULL
@@ -56,19 +72,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return fmt.Errorf("cannot create schema_migrations table: %w", err)
 	}
 
-	// Acquire an advisory lock to serialize concurrent migration attempts.
+	// Acquire a blocking advisory lock to serialize concurrent migration
+	// attempts. Unlike pg_try_advisory_lock, this waits instead of returning
+	// false, which avoids crash loops when multiple units start simultaneously.
 	const lockClass, lockObjID = 1, 0
-	var locked bool
-	if err := p.pool.QueryRow(ctx,
-		"SELECT pg_try_advisory_lock($1, $2)", lockClass, lockObjID).Scan(&locked); err != nil {
+	if _, err := conn.Exec(ctx,
+		"SELECT pg_advisory_lock($1, $2)", lockClass, lockObjID); err != nil {
 		return fmt.Errorf("cannot acquire migration advisory lock: %w", err)
 	}
-	if !locked {
-		return fmt.Errorf("migration advisory lock is held by another process — skipping")
-	}
+	// Best-effort unlock before the deferred conn.Release(). If the unlock
+	// fails the lock is still released when the connection is returned to
+	// the pool and eventually closed.
 	defer func() {
-		// Advisory lock release is best-effort; connection close also releases it.
-		_ = p.pool.QueryRow(ctx, "SELECT pg_advisory_unlock($1, $2)", lockClass, lockObjID).Scan(nil)
+		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1, $2)", lockClass, lockObjID)
 	}()
 
 	entries, err := migrationsFS.ReadDir("migrations")
@@ -78,7 +94,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	for _, entry := range entries {
 		// Skip already-applied migrations.
 		var applied string
-		err := p.pool.QueryRow(ctx,
+		err := conn.QueryRow(ctx,
 			"SELECT version FROM schema_migrations WHERE version = $1", entry.Name()).Scan(&applied)
 		if err == nil {
 			continue
@@ -91,18 +107,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err != nil {
 			return err
 		}
-		// Apply each migration inside a transaction and record it.
-		if err := p.WithinTransaction(ctx, func(repository CompositeRepo) error {
-			pgRepo := repository.(*Postgres)
-			if _, err := pgRepo.db.Exec(ctx, string(payload)); err != nil {
-				return fmt.Errorf("cannot apply migration %s: %w", entry.Name(), err)
-			}
-			_, err := pgRepo.db.Exec(ctx,
-				"INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
-				entry.Name(), time.Now().UTC())
-			return err
-		}); err != nil {
-			return err
+		// Apply each migration inside a transaction on the same dedicated
+		// connection that holds the advisory lock.
+		tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return fmt.Errorf("cannot begin transaction for migration %s: %w", entry.Name(), err)
+		}
+		txRepo := &Postgres{pool: p.pool, db: tx}
+		if _, err := txRepo.db.Exec(ctx, string(payload)); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("cannot apply migration %s: %w", entry.Name(), err)
+		}
+		if _, err := txRepo.db.Exec(ctx,
+			"INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)",
+			entry.Name(), time.Now().UTC()); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("cannot record migration %s: %w", entry.Name(), err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("cannot commit migration %s: %w", entry.Name(), err)
 		}
 	}
 	return nil
