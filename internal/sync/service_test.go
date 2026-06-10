@@ -979,7 +979,7 @@ func TestNewErrorWithCause(t *testing.T) {
 	t.Parallel()
 
 	cause := assert.AnError
-	err := newErrorWithCause(registryservice.ErrorKindNotFound, "not-found", "missing", cause)
+	err := registryservice.NewErrorWithCause(registryservice.ErrorKindNotFound, "not-found", "missing", cause)
 
 	var svcErr *registryservice.Error
 	require.ErrorAs(t, err, &svcErr)
@@ -992,18 +992,18 @@ func TestTranslateRepoError(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil error returns nil", func(t *testing.T) {
-		assert.NoError(t, translateRepoError(nil, "msg"))
+		assert.NoError(t, registryservice.TranslateRepoError(nil, "msg"))
 	})
 
 	t.Run("not-found maps to service error", func(t *testing.T) {
-		err := translateRepoError(repo.ErrNotFound, "charm not found")
+		err := registryservice.TranslateRepoError(repo.ErrNotFound, "charm not found")
 		var svcErr *registryservice.Error
 		require.ErrorAs(t, err, &svcErr)
 		assert.Equal(t, registryservice.ErrorKindNotFound, svcErr.Kind)
 	})
 
 	t.Run("conflict maps to service error", func(t *testing.T) {
-		err := translateRepoError(repo.ErrConflict, "already exists")
+		err := registryservice.TranslateRepoError(repo.ErrConflict, "already exists")
 		var svcErr *registryservice.Error
 		require.ErrorAs(t, err, &svcErr)
 		assert.Equal(t, registryservice.ErrorKindConflict, svcErr.Kind)
@@ -1011,7 +1011,7 @@ func TestTranslateRepoError(t *testing.T) {
 
 	t.Run("other errors pass through unchanged", func(t *testing.T) {
 		other := errors.New("some database error")
-		err := translateRepoError(other, "msg")
+		err := registryservice.TranslateRepoError(other, "msg")
 		assert.Equal(t, other, err)
 	})
 }
