@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -928,4 +929,167 @@ func assertServiceError(t *testing.T, err error, expectedKind registryservice.Er
 	var svcErr *registryservice.Error
 	require.ErrorAs(t, err, &svcErr)
 	assert.Equal(t, expectedKind, svcErr.Kind)
+}
+
+// ---------------------------------------------------------------------------
+// Coverage: previously-untested helper functions and Manager methods
+// ---------------------------------------------------------------------------
+
+func TestMergeLinks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all fields populated", func(t *testing.T) {
+		existing := map[string][]string{
+			"issues": {"https://github.com/example/issues"},
+		}
+		got := mergeLinks(existing, "https://docs.example.com", "https://bugs.example.com", "https://src.example.com", []string{"https://web1.example.com", "https://web2.example.com"})
+		assert.Equal(t, []string{"https://docs.example.com"}, got["docs"])
+		assert.Equal(t, []string{"https://github.com/example/issues", "https://bugs.example.com"}, got["issues"])
+		assert.Equal(t, []string{"https://src.example.com"}, got["source"])
+		assert.ElementsMatch(t, []string{"https://web1.example.com", "https://web2.example.com"}, got["website"])
+	})
+
+	t.Run("empty inputs produce empty map", func(t *testing.T) {
+		got := mergeLinks(nil, "", "", "", nil)
+		assert.Empty(t, got)
+	})
+
+	t.Run("nil existing preserves fields", func(t *testing.T) {
+		got := mergeLinks(nil, "d", "", "", nil)
+		assert.Equal(t, []string{"d"}, got["docs"])
+		_, hasIssues := got["issues"]
+		assert.False(t, hasIssues)
+	})
+}
+
+func TestUniqueAppend(t *testing.T) {
+	t.Parallel()
+
+	got := uniqueAppend([]string{"a", "b"}, "b")
+	assert.Equal(t, []string{"a", "b"}, got, "duplicate should not be appended")
+
+	got = uniqueAppend([]string{"a"}, "b")
+	assert.Equal(t, []string{"a", "b"}, got, "new value should be appended")
+
+	got = uniqueAppend(nil, "x")
+	assert.Equal(t, []string{"x"}, got, "nil slice should work")
+}
+
+func TestNewErrorWithCause(t *testing.T) {
+	t.Parallel()
+
+	cause := assert.AnError
+	err := newErrorWithCause(registryservice.ErrorKindNotFound, "not-found", "missing", cause)
+
+	var svcErr *registryservice.Error
+	require.ErrorAs(t, err, &svcErr)
+	assert.Equal(t, registryservice.ErrorKindNotFound, svcErr.Kind)
+	assert.Equal(t, "missing", svcErr.Message)
+	assert.Equal(t, cause, svcErr.Cause)
+}
+
+func TestTranslateRepoError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil error returns nil", func(t *testing.T) {
+		assert.NoError(t, translateRepoError(nil, "msg"))
+	})
+
+	t.Run("not-found maps to service error", func(t *testing.T) {
+		err := translateRepoError(repo.ErrNotFound, "charm not found")
+		var svcErr *registryservice.Error
+		require.ErrorAs(t, err, &svcErr)
+		assert.Equal(t, registryservice.ErrorKindNotFound, svcErr.Kind)
+	})
+
+	t.Run("conflict maps to service error", func(t *testing.T) {
+		err := translateRepoError(repo.ErrConflict, "already exists")
+		var svcErr *registryservice.Error
+		require.ErrorAs(t, err, &svcErr)
+		assert.Equal(t, registryservice.ErrorKindConflict, svcErr.Kind)
+	})
+
+	t.Run("other errors pass through unchanged", func(t *testing.T) {
+		other := errors.New("some database error")
+		err := translateRepoError(other, "msg")
+		assert.Equal(t, other, err)
+	})
+}
+
+// newManager is a helper for manager-only tests that don't need a full Service.
+func newManager(t *testing.T) *Manager {
+	t.Helper()
+	return &Manager{
+		pending:    make(map[string]struct{}),
+		failCounts: make(map[string]int),
+		failSkip:   make(map[string]int),
+		done:       make(chan struct{}),
+		wake:       make(chan struct{}, 1),
+	}
+}
+
+func TestManagerTakePending(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+
+	// Empty map returns empty slice
+	got := m.takePending()
+	assert.Empty(t, got)
+
+	// Add some entries
+	m.pending["charm-a"] = struct{}{}
+	m.pending["charm-b"] = struct{}{}
+	m.pending["charm-c"] = struct{}{}
+
+	got = m.takePending()
+	assert.Equal(t, []string{"charm-a", "charm-b", "charm-c"}, got)
+	// Map should be drained
+	assert.Empty(t, m.pending)
+}
+
+func TestManagerBackoff(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+
+	// No failures → not backed off
+	assert.False(t, m.isBackedOff("charm-x"))
+
+	// First failure → skip 1 interval
+	m.recordFailure("charm-x")
+	assert.Equal(t, 1, m.failCounts["charm-x"])
+	assert.True(t, m.isBackedOff("charm-x"))  // skipCount was 1, now decrements to 0
+	assert.False(t, m.isBackedOff("charm-x")) // skipCount is now 0
+
+	// Second consecutive failure → skip 2 intervals
+	m.recordFailure("charm-x")
+	assert.Equal(t, 2, m.failCounts["charm-x"])
+	assert.Equal(t, 2, m.failSkip["charm-x"])
+
+	// Skip 2 intervals
+	assert.True(t, m.isBackedOff("charm-x"))  // skip 2→1
+	assert.True(t, m.isBackedOff("charm-x"))  // skip 1→0
+	assert.False(t, m.isBackedOff("charm-x")) // skip 0 → not backed off
+
+	// Success resets everything
+	m.recordFailure("charm-x")
+	m.recordSuccess("charm-x")
+	assert.Equal(t, 0, m.failCounts["charm-x"])
+	assert.Equal(t, 0, m.failSkip["charm-x"])
+	assert.False(t, m.isBackedOff("charm-x"))
+}
+
+func TestManagerBackoffCap(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+
+	// 4 failures → skip = 8 (capped)
+	for i := 0; i < 4; i++ {
+		m.recordFailure("pkg")
+	}
+	assert.Equal(t, 4, m.failCounts["pkg"])
+	assert.Equal(t, 8, m.failSkip["pkg"])
+
+	// 5 failures → still capped at 8
+	m.recordFailure("pkg")
+	assert.Equal(t, 8, m.failSkip["pkg"])
 }

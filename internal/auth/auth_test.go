@@ -450,3 +450,11 @@ func TestNewAuthenticatorWithInvalidOIDC(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot configure OIDC provider")
 
 }
+
+func TestAsString(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "hello", asString("hello"))
+	assert.Equal(t, "", asString(nil))
+	assert.Equal(t, "", asString(42))
+	assert.Equal(t, "", asString([]int{1}))
+}

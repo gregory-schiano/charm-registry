@@ -790,3 +790,286 @@ func TestMemoryResolveDefaultReleasePicksHighestRevision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, release.Revision, "fallback should pick highest revision")
 }
+
+
+// ---------------------------------------------------------------------------
+// Coverage: previously-untested memory.go functions
+// ---------------------------------------------------------------------------
+
+func TestMemoryWithinTransaction(t *testing.T) {
+	t.Parallel()
+	m := NewMemory()
+	called := false
+	err := m.WithinTransaction(context.Background(), func(r CompositeRepo) error {
+		called = true
+		assert.NotNil(t, r)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
+}
+
+func TestMemoryFindStoreTokenByPrefix(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	tok := core.StoreToken{
+		SessionID:   "sess-1",
+		TokenHash:   "hash-abc",
+		TokenPrefix: "prefix-abc",
+		HashScheme:  "sha256",
+		AccountID:   acc.ID,
+		ValidSince:  time.Now().UTC(),
+		ValidUntil:  time.Now().UTC().Add(time.Hour),
+	}
+	require.NoError(t, m.CreateStoreToken(ctx, tok))
+
+	got, gotAcc, err := m.FindStoreTokenByPrefix(ctx, "prefix-abc")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-1", got.SessionID)
+	assert.Equal(t, acc.ID, gotAcc.ID)
+
+	_, _, err = m.FindStoreTokenByPrefix(ctx, "nope")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryUpdateTokenHashScheme(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	tok := core.StoreToken{
+		SessionID:   "sess-2",
+		TokenHash:   "old-hash",
+		TokenPrefix: "old-prefix",
+		HashScheme:  "sha256",
+		AccountID:   acc.ID,
+		ValidSince:  time.Now().UTC(),
+		ValidUntil:  time.Now().UTC().Add(time.Hour),
+	}
+	require.NoError(t, m.CreateStoreToken(ctx, tok))
+
+	err := m.UpdateTokenHashScheme(ctx, "sess-2", "new-hash", "new-prefix", "sha512")
+	require.NoError(t, err)
+
+	// Old hash key should be gone
+	_, _, err = m.FindStoreTokenByHash(ctx, "old-hash")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Find by new hash
+	got, _, err := m.FindStoreTokenByHash(ctx, "new-hash")
+	require.NoError(t, err)
+	assert.Equal(t, "sha512", got.HashScheme)
+	assert.Equal(t, "new-prefix", got.TokenPrefix)
+
+	// Not found for unknown session
+	err = m.UpdateTokenHashScheme(ctx, "no-such-session", "h", "p", "s")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryListTracksForPackages(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	require.NoError(t, m.CreatePackage(ctx, core.Package{
+		ID: "pid-1", Name: "charm-a", OwnerAccountID: acc.ID,
+		Tracks: []core.Track{{Name: "latest"}},
+	}))
+	require.NoError(t, m.CreatePackage(ctx, core.Package{
+		ID: "pid-2", Name: "charm-b", OwnerAccountID: acc.ID,
+		Tracks: []core.Track{{Name: "2.0"}},
+	}))
+
+	result, err := m.ListTracksForPackages(ctx, []string{"pid-1", "pid-2", "pid-unknown"})
+	require.NoError(t, err)
+	assert.Len(t, result, 3)
+	assert.Len(t, result["pid-1"], 1)
+	assert.Equal(t, "latest", result["pid-1"][0].Name)
+	assert.Len(t, result["pid-2"], 1)
+	assert.Nil(t, result["pid-unknown"])
+}
+
+func TestMemoryListRevisionsByNumbers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m, acc := memWithAccount(t)
+
+	require.NoError(t, m.CreatePackage(ctx, core.Package{
+		ID: "pid-1", Name: "charm-x", OwnerAccountID: acc.ID,
+	}))
+
+	for _, rev := range []int{1, 2, 3, 5} {
+		require.NoError(t, m.CreateRevision(ctx, core.Revision{
+			ID:        fmt.Sprintf("rev-%d", rev),
+			PackageID: "pid-1",
+			Revision:  rev,
+		}))
+	}
+
+	got, err := m.ListRevisionsByNumbers(ctx, "pid-1", []int{2, 5, 99})
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.Equal(t, 2, got[2].Revision)
+	assert.Equal(t, 5, got[5].Revision)
+
+	// Empty request
+	empty, err := m.ListRevisionsByNumbers(ctx, "pid-1", nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func TestMemoryDeleteResourceDefinition(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	_, err := m.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID: "rd-1", PackageID: "pkg-1", Name: "res-a",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, m.DeleteResourceDefinition(ctx, "rd-1"))
+
+	_, err = m.GetResourceDefinition(ctx, "pkg-1", "res-a")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	err = m.DeleteResourceDefinition(ctx, "rd-999")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryDeleteResourceRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	require.NoError(t, m.CreateResourceRevision(ctx, core.ResourceRevision{
+		ResourceID: "rd-1", Revision: 1,
+	}))
+	require.NoError(t, m.CreateResourceRevision(ctx, core.ResourceRevision{
+		ResourceID: "rd-1", Revision: 2,
+	}))
+
+	require.NoError(t, m.DeleteResourceRevision(ctx, "rd-1", 1))
+	_, err := m.GetResourceRevision(ctx, "rd-1", 1)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	got, err := m.GetResourceRevision(ctx, "rd-1", 2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, got.Revision)
+
+	err = m.DeleteResourceRevision(ctx, "rd-1", 99)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryDeleteReleaseForBase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	base := &core.Base{Name: "ubuntu"}
+	require.NoError(t, m.ReplaceRelease(ctx, "pkg-1", core.Release{
+		Channel: "latest/stable", Base: base, Revision: 3,
+	}))
+
+	err := m.DeleteReleaseForBase(ctx, "pkg-1", "latest/stable", base)
+	require.NoError(t, err)
+
+	_, err = m.ResolveReleaseForBase(ctx, "pkg-1", "latest/stable", *base)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Package with no releases
+	err = m.DeleteReleaseForBase(ctx, "pkg-nope", "latest/stable", base)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Wrong base key
+	otherBase := &core.Base{Name: "centos"}
+	require.NoError(t, m.ReplaceRelease(ctx, "pkg-2", core.Release{
+		Channel: "latest/stable", Base: otherBase, Revision: 1,
+	}))
+	err = m.DeleteReleaseForBase(ctx, "pkg-2", "latest/stable", base)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryResolveReleaseForBase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	base := core.Base{Name: "ubuntu", Channel: "22.04", Architecture: "amd64"}
+	rel := core.Release{
+		Channel:  "latest/stable",
+		Base:     &base,
+		Revision: 7,
+	}
+	require.NoError(t, m.ReplaceRelease(ctx, "pkg-1", rel))
+
+	got, err := m.ResolveReleaseForBase(ctx, "pkg-1", "latest/stable", base)
+	require.NoError(t, err)
+	assert.Equal(t, 7, got.Revision)
+
+	_, err = m.ResolveReleaseForBase(ctx, "pkg-1", "latest/edge", base)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	_, err = m.ResolveReleaseForBase(ctx, "pkg-nope", "latest/stable", base)
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMemoryCharmhubSyncRuleCRUD(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	rule := core.CharmhubSyncRule{
+		PackageName: "my-charm",
+		Track:       "latest",
+	}
+
+	// Create
+	require.NoError(t, m.CreateCharmhubSyncRule(ctx, rule))
+
+	// Conflict
+	assert.ErrorIs(t, m.CreateCharmhubSyncRule(ctx, rule), ErrConflict)
+
+	// List all
+	all, err := m.ListCharmhubSyncRules(ctx)
+	require.NoError(t, err)
+	assert.Len(t, all, 1)
+	assert.Equal(t, "my-charm", all[0].PackageName)
+
+	// List by package name
+	byPkg, err := m.ListCharmhubSyncRulesByPackageName(ctx, "my-charm")
+	require.NoError(t, err)
+	assert.Len(t, byPkg, 1)
+
+	// List empty package
+	empty, err := m.ListCharmhubSyncRulesByPackageName(ctx, "nope")
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	// Update
+	rule.Architectures = []string{"amd64"}
+	require.NoError(t, m.UpdateCharmhubSyncRule(ctx, rule))
+
+	// Update non-existent
+	err = m.UpdateCharmhubSyncRule(ctx, core.CharmhubSyncRule{PackageName: "nope", Track: "x"})
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Delete
+	require.NoError(t, m.DeleteCharmhubSyncRule(ctx, "my-charm", "latest"))
+
+	// Delete non-existent package
+	err = m.DeleteCharmhubSyncRule(ctx, "nope", "latest")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Delete non-existent track (but package exists)
+	require.NoError(t, m.CreateCharmhubSyncRule(ctx, core.CharmhubSyncRule{PackageName: "c", Track: "t1"}))
+	err = m.DeleteCharmhubSyncRule(ctx, "c", "t-missing")
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	// Deleting the last track cleans up
+	require.NoError(t, m.DeleteCharmhubSyncRule(ctx, "c", "t1"))
+	all, _ = m.ListCharmhubSyncRules(ctx)
+	assert.Empty(t, all)
+}

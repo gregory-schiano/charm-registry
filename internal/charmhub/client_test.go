@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gschiano/charm-registry/internal/core"
@@ -258,4 +259,26 @@ func TestGetChannelAcceptsRFC3339Timestamps(t *testing.T) {
 	channel, err := client.GetChannel(context.Background(), "postgresql-k8s", "14/stable")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 3, 21, 16, 25, 13, 716831000, time.UTC), channel.DefaultRelease.Channel.ReleasedAt)
+}
+
+func TestAPIErrorMessage(t *testing.T) {
+	t.Parallel()
+	err := &APIError{StatusCode: 404, Body: "not found"}
+	assert.Contains(t, err.Error(), "404")
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestDefaultReleasePresent(t *testing.T) {
+	t.Parallel()
+	// Empty → not present
+	dr := DefaultRelease{}
+	assert.False(t, dr.Present())
+
+	// With channel name but no revision → not present
+	dr.Channel.Name = "latest/stable"
+	assert.False(t, dr.Present())
+
+	// Both set → present
+	dr.Revision.Revision = 5
+	assert.True(t, dr.Present())
 }
