@@ -154,25 +154,18 @@ FROM accounts WHERE subject = ?`, subject))
 }
 
 func (s *SQLite) CreateStoreToken(ctx context.Context, token core.StoreToken) error {
-	packagesJSON, err := rawJSON(token.Packages)
+	jsonFields, err := rawJSONStrings(token.Packages, token.Channels, token.Permissions)
 	if err != nil {
 		return err
 	}
-	channelsJSON, err := rawJSON(token.Channels)
-	if err != nil {
-		return err
-	}
-	permissionsJSON, err := rawJSON(token.Permissions)
-	if err != nil {
-		return err
-	}
+	packagesJSON, channelsJSON, permissionsJSON := jsonFields[0], jsonFields[1], jsonFields[2]
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO store_tokens (
     session_id, token_hash, token_prefix, token_hash_scheme, account_id, description, packages, channels, permissions,
     valid_since, valid_until, revoked_at, revoked_by
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		token.SessionID, token.TokenHash, token.TokenPrefix, token.HashScheme, token.AccountID, token.Description, string(packagesJSON), string(channelsJSON),
-		string(permissionsJSON), token.ValidSince, token.ValidUntil, token.RevokedAt, token.RevokedBy)
+		token.SessionID, token.TokenHash, token.TokenPrefix, token.HashScheme, token.AccountID, token.Description, packagesJSON, channelsJSON,
+		permissionsJSON, token.ValidSince, token.ValidUntil, token.RevokedAt, token.RevokedBy)
 	return err
 }
 
@@ -243,18 +236,11 @@ UPDATE store_tokens SET token_hash = ?, token_prefix = ?, token_hash_scheme = ? 
 }
 
 func (s *SQLite) CreatePackage(ctx context.Context, pkg core.Package) error {
-	linksJSON, err := rawJSON(pkg.Links)
+	jsonFields, err := rawJSONStrings(pkg.Links, pkg.Media, pkg.TrackGuardrails)
 	if err != nil {
 		return err
 	}
-	mediaJSON, err := rawJSON(pkg.Media)
-	if err != nil {
-		return err
-	}
-	guardrailsJSON, err := rawJSON(pkg.TrackGuardrails)
-	if err != nil {
-		return err
-	}
+	linksJSON, mediaJSON, guardrailsJSON := jsonFields[0], jsonFields[1], jsonFields[2]
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO packages (
     id, name, type, private, status, owner_account_id,
@@ -267,7 +253,7 @@ INSERT INTO packages (
 		pkg.OCIProject, nullInt64(pkg.OCIPushRobot), robotUsername(pkg.OCIPushRobot), robotSecret(pkg.OCIPushRobot),
 		nullInt64(pkg.OCIPullRobot), robotUsername(pkg.OCIPullRobot), robotSecret(pkg.OCIPullRobot), pkg.OCISyncedAt,
 		pkg.Authority, pkg.Contact, pkg.DefaultTrack, pkg.Description, pkg.Summary, pkg.Title, pkg.Website,
-		string(linksJSON), string(mediaJSON), string(guardrailsJSON), pkg.CreatedAt, pkg.UpdatedAt)
+		linksJSON, mediaJSON, guardrailsJSON, pkg.CreatedAt, pkg.UpdatedAt)
 	if isSQLiteUniqueConstraint(err) {
 		return fmt.Errorf("cannot create package: %w", ErrConflict)
 	}
@@ -275,18 +261,11 @@ INSERT INTO packages (
 }
 
 func (s *SQLite) UpdatePackage(ctx context.Context, pkg core.Package) error {
-	linksJSON, err := rawJSON(pkg.Links)
+	jsonFields, err := rawJSONStrings(pkg.Links, pkg.Media, pkg.TrackGuardrails)
 	if err != nil {
 		return err
 	}
-	mediaJSON, err := rawJSON(pkg.Media)
-	if err != nil {
-		return err
-	}
-	guardrailsJSON, err := rawJSON(pkg.TrackGuardrails)
-	if err != nil {
-		return err
-	}
+	linksJSON, mediaJSON, guardrailsJSON := jsonFields[0], jsonFields[1], jsonFields[2]
 	res, err := s.db.ExecContext(ctx, `
 UPDATE packages SET private = ?, status = ?, oci_project = ?, oci_push_robot_id = ?,
     oci_push_robot_name = ?, oci_push_robot_secret = ?, oci_pull_robot_id = ?,
@@ -298,7 +277,7 @@ WHERE id = ?`,
 		robotUsername(pkg.OCIPushRobot), robotSecret(pkg.OCIPushRobot), nullInt64(pkg.OCIPullRobot),
 		robotUsername(pkg.OCIPullRobot), robotSecret(pkg.OCIPullRobot), pkg.OCISyncedAt,
 		pkg.Authority, pkg.Contact, pkg.DefaultTrack, pkg.Description, pkg.Summary, pkg.Title, pkg.Website,
-		string(linksJSON), string(mediaJSON), string(guardrailsJSON), pkg.UpdatedAt, pkg.ID)
+		linksJSON, mediaJSON, guardrailsJSON, pkg.UpdatedAt, pkg.ID)
 	return rowsErr(res, err)
 }
 
@@ -406,7 +385,7 @@ FROM tracks WHERE package_id IN (%s) ORDER BY created_at ASC`, packageIDs)
 }
 
 func (s *SQLite) CreateUpload(ctx context.Context, upload core.Upload) error {
-	errorsJSON, err := rawJSON(upload.Errors)
+	errorsJSON, err := rawJSONString(upload.Errors)
 	if err != nil {
 		return err
 	}
@@ -414,7 +393,7 @@ func (s *SQLite) CreateUpload(ctx context.Context, upload core.Upload) error {
 INSERT INTO uploads (id, filename, object_key, size, sha256, sha384, status, kind, created_at, approved_at, revision, errors)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		upload.ID, upload.Filename, upload.ObjectKey, upload.Size, upload.SHA256, upload.SHA384, upload.Status,
-		upload.Kind, upload.CreatedAt, upload.ApprovedAt, upload.Revision, string(errorsJSON))
+		upload.Kind, upload.CreatedAt, upload.ApprovedAt, upload.Revision, errorsJSON)
 	return err
 }
 
@@ -429,29 +408,22 @@ func (s *SQLite) ApproveUpload(ctx context.Context, uploadID string, revision *i
 	if len(apiErrors) > 0 {
 		status = "rejected"
 	}
-	errorsJSON, err := rawJSON(apiErrors)
+	errorsJSON, err := rawJSONString(apiErrors)
 	if err != nil {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, `
 UPDATE uploads SET approved_at = ?, revision = ?, errors = ?, status = ? WHERE id = ?`,
-		time.Now().UTC(), revision, string(errorsJSON), status, uploadID)
+		time.Now().UTC(), revision, errorsJSON, status, uploadID)
 	return rowsErr(res, err)
 }
 
 func (s *SQLite) CreateRevision(ctx context.Context, revision core.Revision) error {
-	basesJSON, err := rawJSON(revision.Bases)
+	jsonFields, err := rawJSONStrings(revision.Bases, revision.Attributes, revision.Relations)
 	if err != nil {
 		return err
 	}
-	attributesJSON, err := rawJSON(revision.Attributes)
-	if err != nil {
-		return err
-	}
-	relationsJSON, err := rawJSON(revision.Relations)
-	if err != nil {
-		return err
-	}
+	basesJSON, attributesJSON, relationsJSON := jsonFields[0], jsonFields[1], jsonFields[2]
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO revisions (
     id, package_id, revision, version, status, created_at, created_by, size,
@@ -460,8 +432,8 @@ INSERT INTO revisions (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		revision.ID, revision.PackageID, revision.Revision, revision.Version, revision.Status, revision.CreatedAt,
 		revision.CreatedBy, revision.Size, revision.SHA256, revision.SHA384, revision.ObjectKey, revision.MetadataYAML,
-		revision.ConfigYAML, revision.ActionsYAML, revision.BundleYAML, revision.ReadmeMD, string(basesJSON),
-		string(attributesJSON), string(relationsJSON), revision.Subordinate)
+		revision.ConfigYAML, revision.ActionsYAML, revision.BundleYAML, revision.ReadmeMD, basesJSON,
+		attributesJSON, relationsJSON, revision.Subordinate)
 	return err
 }
 
@@ -570,14 +542,11 @@ func (s *SQLite) DeleteResourceDefinition(ctx context.Context, resourceID string
 }
 
 func (s *SQLite) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	basesJSON, err := rawJSON(revision.Bases)
+	jsonFields, err := rawJSONStrings(revision.Bases, revision.Architectures)
 	if err != nil {
 		return err
 	}
-	architecturesJSON, err := rawJSON(revision.Architectures)
-	if err != nil {
-		return err
-	}
+	basesJSON, architecturesJSON := jsonFields[0], jsonFields[1]
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO resource_revisions (
     id, resource_id, revision, package_revision, name, type, description,
@@ -586,7 +555,7 @@ INSERT INTO resource_revisions (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		revision.ID, revision.ResourceID, revision.Revision, revision.PackageRevision, revision.Name, revision.Type,
 		revision.Description, revision.Filename, revision.CreatedAt, revision.Size, revision.SHA256, revision.SHA384,
-		revision.SHA512, revision.SHA3384, revision.ObjectKey, string(basesJSON), string(architecturesJSON),
+		revision.SHA512, revision.SHA3384, revision.ObjectKey, basesJSON, architecturesJSON,
 		revision.OCIImageDigest, revision.OCIImageBlob)
 	return err
 }
@@ -597,19 +566,16 @@ func (s *SQLite) DeleteResourceRevision(ctx context.Context, resourceID string, 
 }
 
 func (s *SQLite) UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	basesJSON, err := rawJSON(revision.Bases)
+	jsonFields, err := rawJSONStrings(revision.Bases, revision.Architectures)
 	if err != nil {
 		return err
 	}
-	architecturesJSON, err := rawJSON(revision.Architectures)
-	if err != nil {
-		return err
-	}
+	basesJSON, architecturesJSON := jsonFields[0], jsonFields[1]
 	res, err := s.db.ExecContext(ctx, `
 UPDATE resource_revisions
 SET bases = ?, architectures = ?, oci_image_digest = ?, oci_image_blob = ?
 WHERE resource_id = ? AND revision = ? AND id = ?`,
-		string(basesJSON), string(architecturesJSON), revision.OCIImageDigest, revision.OCIImageBlob,
+		basesJSON, architecturesJSON, revision.OCIImageDigest, revision.OCIImageBlob,
 		revision.ResourceID, revision.Revision, revision.ID)
 	return rowsErr(res, err)
 }
@@ -628,15 +594,12 @@ func (s *SQLite) GetResourceRevision(ctx context.Context, resourceID string, rev
 }
 
 func (s *SQLite) ReplaceRelease(ctx context.Context, packageID string, release core.Release) error {
-	baseJSON, err := rawJSON(release.Base)
+	jsonFields, err := rawJSONStrings(release.Base, release.Resources)
 	if err != nil {
 		return err
 	}
-	resourcesJSON, err := rawJSON(release.Resources)
-	if err != nil {
-		return err
-	}
-	baseKey := string(baseJSON)
+	baseJSON, resourcesJSON := jsonFields[0], jsonFields[1]
+	baseKey := baseJSON
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO releases (
     id, package_id, channel, revision, base, base_key, resources, when_created, expiration_date, progressive
@@ -648,7 +611,7 @@ ON CONFLICT(package_id, channel, base_key) DO UPDATE SET
     when_created = excluded.when_created,
     expiration_date = excluded.expiration_date,
     progressive = excluded.progressive`,
-		release.ID, packageID, release.Channel, release.Revision, string(baseJSON), baseKey, string(resourcesJSON),
+		release.ID, packageID, release.Channel, release.Revision, baseJSON, baseKey, resourcesJSON,
 		release.When, release.ExpirationDate, release.Progressive)
 	return err
 }
@@ -659,11 +622,11 @@ func (s *SQLite) DeleteRelease(ctx context.Context, packageID, channel string) e
 }
 
 func (s *SQLite) DeleteReleaseForBase(ctx context.Context, packageID, channel string, base *core.Base) error {
-	baseJSON, err := rawJSON(base)
+	baseJSON, err := rawJSONString(base)
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, "DELETE FROM releases WHERE package_id = ? AND channel = ? AND base_key = ?", packageID, channel, string(baseJSON))
+	res, err := s.db.ExecContext(ctx, "DELETE FROM releases WHERE package_id = ? AND channel = ? AND base_key = ?", packageID, channel, baseJSON)
 	return rowsErr(res, err)
 }
 
@@ -681,11 +644,11 @@ func (s *SQLite) ResolveRelease(ctx context.Context, packageID string, channel s
 }
 
 func (s *SQLite) ResolveReleaseForBase(ctx context.Context, packageID string, channel string, base core.Base) (core.Release, error) {
-	baseJSON, err := rawJSON(base)
+	baseJSON, err := rawJSONString(base)
 	if err != nil {
 		return core.Release{}, err
 	}
-	return scanRelease(s.db.QueryRowContext(ctx, releaseSelectSQL()+" WHERE package_id = ? AND channel = ? AND base_key = ?", packageID, channel, string(baseJSON)))
+	return scanRelease(s.db.QueryRowContext(ctx, releaseSelectSQL()+" WHERE package_id = ? AND channel = ? AND base_key = ?", packageID, channel, baseJSON))
 }
 
 func (s *SQLite) ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error) {
@@ -705,20 +668,17 @@ LIMIT 1`, packageID))
 }
 
 func (s *SQLite) CreateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error {
-	basesJSON, err := rawJSON(rule.Bases)
+	jsonFields, err := rawJSONStrings(rule.Bases, rule.Architectures)
 	if err != nil {
 		return err
 	}
-	architecturesJSON, err := rawJSON(rule.Architectures)
-	if err != nil {
-		return err
-	}
+	basesJSON, architecturesJSON := jsonFields[0], jsonFields[1]
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO charmhub_sync_rules (
     package_name, track, bases, architectures, created_by_account_id, created_at, updated_at,
     last_sync_status, last_sync_started_at, last_sync_finished_at, last_sync_error
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rule.PackageName, rule.Track, string(basesJSON), string(architecturesJSON), rule.CreatedByAccountID,
+		rule.PackageName, rule.Track, basesJSON, architecturesJSON, rule.CreatedByAccountID,
 		rule.CreatedAt, rule.UpdatedAt, rule.LastSyncStatus, rule.LastSyncStartedAt, rule.LastSyncFinishedAt, rule.LastSyncError)
 	if isSQLiteUniqueConstraint(err) {
 		return ErrConflict
@@ -1111,6 +1071,26 @@ func sqlNotFound(err error) bool {
 func isSQLiteUniqueConstraint(err error) bool {
 	var sqliteErr *sqlite.Error
 	return errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
+}
+
+func rawJSONString(value any) (string, error) {
+	payload, err := rawJSON(value)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func rawJSONStrings(values ...any) ([]string, error) {
+	fields := make([]string, len(values))
+	for i, value := range values {
+		payload, err := rawJSONString(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = payload
+	}
+	return fields, nil
 }
 
 func inQuery(format string, values []string) (string, []any) {
