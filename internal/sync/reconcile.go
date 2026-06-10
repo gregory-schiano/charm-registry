@@ -426,28 +426,27 @@ func (s *Service) syncTrackReleases(
 	present []channelState,
 	trackCache *packageTrackCache,
 ) (core.Package, error) {
-	var err error
 	for _, state := range present {
-		var resourceRefs []core.ReleaseResourceRef
-		pkg, resourceRefs, err = s.ensureCharmhubArtifacts(ctx, pkg, createdBy, state.info, trackCache)
-		if err != nil {
-			return core.Package{}, err
-		}
 		releaseWhen := state.info.DefaultRelease.Channel.ReleasedAt
 		if releaseWhen.IsZero() {
 			releaseWhen = s.now()
 		}
 		release, err := core.NewRelease(core.Release{
-			ID:        uuid.NewString(),
-			Channel:   state.channel,
-			Revision:  state.info.DefaultRelease.Revision.Revision,
-			Base:      state.info.DefaultRelease.Channel.Base,
-			Resources: resourceRefs,
-			When:      releaseWhen,
+			ID:       uuid.NewString(),
+			Channel:  state.channel,
+			Revision: state.info.DefaultRelease.Revision.Revision,
+			Base:     state.info.DefaultRelease.Channel.Base,
+			When:     releaseWhen,
 		})
 		if err != nil {
 			return core.Package{}, err
 		}
+		var resourceRefs []core.ReleaseResourceRef
+		pkg, resourceRefs, err = s.ensureCharmhubArtifacts(ctx, pkg, createdBy, state.info, trackCache)
+		if err != nil {
+			return core.Package{}, err
+		}
+		release.Resources = resourceRefs
 		if err := s.repo.ReplaceRelease(ctx, pkg.ID, release); err != nil {
 			return core.Package{}, err
 		}
@@ -600,7 +599,7 @@ func (s *Service) ensureCharmhubArtifacts(
 	trackCache *packageTrackCache,
 ) (core.Package, []core.ReleaseResourceRef, error) {
 	revisionNumber := info.DefaultRelease.Revision.Revision
-	updatedPkg, err := s.ensureCharmhubRevisionArtifacts(ctx, pkg, createdBy, info, revisionNumber, trackCache)
+	updatedPkg, revisionCreated, err := s.ensureCharmhubRevisionArtifacts(ctx, pkg, createdBy, info, revisionNumber, trackCache)
 	if err != nil {
 		return core.Package{}, nil, err
 	}
@@ -608,6 +607,9 @@ func (s *Service) ensureCharmhubArtifacts(
 
 	resourceRefs, updatedPkg, err := s.ensureCharmhubResourceArtifacts(ctx, pkg, info, revisionNumber)
 	if err != nil {
+		if revisionCreated {
+			err = errors.Join(err, s.cleanupFailedCharmhubRevisionImport(ctx, pkg, revisionNumber))
+		}
 		return core.Package{}, nil, err
 	}
 
@@ -621,7 +623,7 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 	info charmhubclient.PackageChannel,
 	revisionNumber int,
 	trackCache *packageTrackCache,
-) (core.Package, error) {
+) (core.Package, bool, error) {
 	_, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
 	switch {
 	case err == nil:
@@ -630,31 +632,31 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 			"package_id", pkg.ID,
 			"revision", revisionNumber,
 		)
-		return pkg, nil
+		return pkg, false, nil
 	case !errors.Is(err, repo.ErrNotFound):
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 
-	revisionArtifact, err := s.downloadAndParseRevision(ctx, info.DefaultRelease.Revision.Download.URL)
+	revisionArtifact, err := s.downloadAndParseRevision(ctx, info.DefaultRelease.Revision.Download)
 	if err != nil {
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 	defer revisionArtifact.Close()
 
 	revisionKey := filepath.ToSlash(filepath.Join("charms", pkg.ID, fmt.Sprintf("%d.charm", revisionNumber)))
 	if err := s.putRevisionBlob(ctx, revisionKey, revisionArtifact); err != nil {
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 
 	updatedPkg, err := s.updatePackageFromUpstream(ctx, pkg, info, revisionArtifact.Archive.Manifest, trackCache)
 	if err != nil {
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 	if err := s.createRevisionRecord(ctx, updatedPkg, createdBy, info, revisionNumber, revisionKey, revisionArtifact); err != nil {
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 	if err := s.upsertManifestResourceDefinitions(ctx, updatedPkg.ID, revisionArtifact.Archive.Manifest); err != nil {
-		return core.Package{}, err
+		return core.Package{}, false, err
 	}
 	slog.InfoContext(ctx, "charmhub revision imported",
 		"package", updatedPkg.Name,
@@ -663,7 +665,46 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 		"size", revisionArtifact.Size,
 		"resource_definition_count", len(revisionArtifact.Archive.Manifest.Resources),
 	)
-	return updatedPkg, nil
+	return updatedPkg, true, nil
+}
+
+func (s *Service) cleanupFailedCharmhubRevisionImport(ctx context.Context, pkg core.Package, revisionNumber int) error {
+	var errs []error
+	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
+	if err == nil && revision.ObjectKey != "" {
+		if deleteErr := s.blobs.Delete(ctx, revision.ObjectKey); deleteErr != nil {
+			errs = append(errs, deleteErr)
+		}
+	} else if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		errs = append(errs, err)
+	}
+	if err := s.repo.DeleteRevision(ctx, pkg.ID, revisionNumber); err != nil && !errors.Is(err, repo.ErrNotFound) {
+		errs = append(errs, err)
+	}
+	if err := s.deleteEmptyResourceDefinitions(ctx, pkg.ID); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) deleteEmptyResourceDefinitions(ctx context.Context, packageID string) error {
+	defs, err := s.repo.ListResourceDefinitions(ctx, packageID)
+	if err != nil {
+		return err
+	}
+	for _, def := range defs {
+		revisions, err := s.repo.ListResourceRevisions(ctx, def.ID)
+		if err != nil {
+			return err
+		}
+		if len(revisions) != 0 {
+			continue
+		}
+		if err := s.repo.DeleteResourceDefinition(ctx, def.ID); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 // preparedResourceRevision carries the outcome of the parallel preparation
@@ -868,9 +909,13 @@ func (a *downloadedArtifact) ReadAll(ctx context.Context) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-func (s *Service) downloadAndParseRevision(ctx context.Context, downloadURL string) (*downloadedArtifact, error) {
-	artifact, err := s.downloadArtifactToTemp(ctx, downloadURL)
+func (s *Service) downloadAndParseRevision(ctx context.Context, download core.Download) (*downloadedArtifact, error) {
+	artifact, err := s.downloadArtifactToTemp(ctx, download.URL)
 	if err != nil {
+		return nil, err
+	}
+	if err := verifyArtifactDigest(download.URL, artifact, download); err != nil {
+		_ = artifact.Close()
 		return nil, err
 	}
 	archive, err := charm.ParseArchiveFile(artifact.Path, artifact.Size, s.cfg.MaxArchiveFileBytes)
@@ -913,6 +958,33 @@ func (s *Service) downloadArtifactToTemp(ctx context.Context, downloadURL string
 	copy(artifact.SHA384[:], hash384.Sum(nil))
 	copy(artifact.SHA512[:], hash512.Sum(nil))
 	return artifact, nil
+}
+
+func verifyArtifactDigest(artifactName string, artifact *downloadedArtifact, download core.Download) error {
+	algorithm, expected, actual := selectedArtifactDigest(artifact, download)
+	if expected == "" {
+		return nil
+	}
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("artifact %s %s digest mismatch: expected %s, got %s", artifactName, algorithm, expected, actual)
+	}
+	return nil
+}
+
+func selectedArtifactDigest(artifact *downloadedArtifact, download core.Download) (string, string, string) {
+	if download.HashSHA256 != "" {
+		return "sha256", download.HashSHA256, hex.EncodeToString(artifact.SHA256[:])
+	}
+	if download.HashSHA384 != "" {
+		return "sha384", download.HashSHA384, hex.EncodeToString(artifact.SHA384[:])
+	}
+	if download.HashSHA3384 != "" {
+		return "sha3-384", download.HashSHA3384, hex.EncodeToString(artifact.SHA384[:])
+	}
+	if download.HashSHA512 != "" {
+		return "sha512", download.HashSHA512, hex.EncodeToString(artifact.SHA512[:])
+	}
+	return "", "", ""
 }
 
 func (s *Service) putRevisionBlob(ctx context.Context, key string, artifact *downloadedArtifact) error {
@@ -1042,6 +1114,10 @@ func (s *Service) prepareResourceRevision(
 ) (*downloadedArtifact, core.ResourceRevision, error) {
 	artifact, err := s.downloadArtifactToTemp(ctx, resource.Download.URL)
 	if err != nil {
+		return nil, core.ResourceRevision{}, err
+	}
+	if err := verifyArtifactDigest(resource.Download.URL, artifact, resource.Download); err != nil {
+		_ = artifact.Close()
 		return nil, core.ResourceRevision{}, err
 	}
 	item := core.ResourceRevision{

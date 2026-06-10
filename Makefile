@@ -1,7 +1,8 @@
 GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
+ACTIONLINT_VERSION ?= v1.7.7
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
+.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint actionlint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
 
 help:
 	@printf "%s\n" \
@@ -13,6 +14,7 @@ help:
 		"make coverage     - run tests with coverage and print report" \
 		"make vet          - run go vet" \
 		"make lint         - run golangci-lint" \
+		"make actionlint   - lint GitHub Actions workflows" \
 		"make vuln         - run govulncheck" \
 		"make gosec        - run gosec static analysis" \
 		"make sqlc-diff    - verify sqlc-generated code is up to date" \
@@ -100,6 +102,14 @@ run:
 
 lint:
 	$(GO) tool golangci-lint run $(_LINT_PKGS)
+
+actionlint:
+	@if command -v actionlint >/dev/null 2>&1; then \
+		actionlint; \
+	else \
+		echo "actionlint not installed; running pinned github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) via go run"; \
+		$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION); \
+	fi
 
 vuln:
 	$(GO) tool govulncheck $(_GO_PKGS)

@@ -65,9 +65,6 @@ func (s *Service) createRelease(
 	if request.Channel == "" {
 		return core.Release{}, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
 	}
-	if err := validateReleaseBase(&request); err != nil {
-		return core.Release{}, err
-	}
 	if _, err := s.repo.GetRevisionByNumber(ctx, packageID, request.Revision); err != nil {
 		return core.Release{}, translateRepoError(err, messageRevisionNotFound)
 	}
@@ -80,6 +77,11 @@ func (s *Service) createRelease(
 	if request.ID == "" {
 		request.ID = uuid.NewString()
 	}
+	validated, err := core.NewRelease(request)
+	if err != nil {
+		return core.Release{}, newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
+	}
+	request = validated
 	if err := s.enforceChannelRestriction(identity, request.Channel); err != nil {
 		return core.Release{}, err
 	}
@@ -94,18 +96,6 @@ func (s *Service) createRelease(
 		"account_id", identity.Account.ID,
 	)
 	return request, nil
-}
-
-func validateReleaseBase(release *core.Release) error {
-	if release.Base == nil {
-		return nil
-	}
-	validated, err := core.NewBase(*release.Base)
-	if err != nil {
-		return newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
-	}
-	release.Base = &validated
-	return nil
 }
 
 func (s *Service) validateReleaseResources(

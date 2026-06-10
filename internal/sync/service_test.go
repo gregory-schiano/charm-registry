@@ -320,6 +320,179 @@ func TestReconcileCharmhubPackageCreatesMirroredArtifacts(t *testing.T) {
 	}
 }
 
+func TestCharmhubSyncRejectsIncompleteReleaseBase(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	incompleteBase := core.Base{Name: "ubuntu", Channel: "24.04"}
+	stable := fakeClient.channels["demo|latest/stable"]
+	stable.DefaultRelease.Channel.Base = &incompleteBase
+	fakeClient.channels["demo|latest/stable"] = stable
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|"] = stable
+	info := fakeClient.infos["demo"]
+	require.Len(t, info.ChannelMap, 1)
+	info.ChannelMap[0].Channel.Base = &incompleteBase
+	fakeClient.infos["demo"] = info
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "base architecture is required")
+
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusError, rules[0].LastSyncStatus)
+	require.NotNil(t, rules[0].LastSyncError)
+	assert.Contains(t, *rules[0].LastSyncError, "base architecture is required")
+
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
+	if errors.Is(err, repo.ErrNotFound) {
+		return
+	}
+	require.NoError(t, err)
+	releases, err := env.repo.ListReleases(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, releases)
+	revisions, err := env.repo.ListRevisions(context.Background(), pkg.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, revisions)
+	resources, err := env.repo.ListResourceDefinitions(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, resources)
+}
+
+func TestCharmhubSyncRejectsRevisionDigestMismatch(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	stable := fakeClient.channels["demo|latest/stable"]
+	stable.DefaultRelease.Revision.Download.HashSHA256 = strings.Repeat("0", sha256.Size*2)
+	fakeClient.channels["demo|latest/stable"] = stable
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"] = stable
+	info := fakeClient.infos["demo"]
+	info.ChannelMap[0].Revision = stable.DefaultRelease.Revision
+	fakeClient.infos["demo"] = info
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "digest mismatch")
+	assert.Contains(t, err.Error(), stable.DefaultRelease.Revision.Download.URL)
+
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusError, rules[0].LastSyncStatus)
+	require.NotNil(t, rules[0].LastSyncError)
+	assert.Contains(t, *rules[0].LastSyncError, "digest mismatch")
+
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
+	if errors.Is(err, repo.ErrNotFound) {
+		return
+	}
+	require.NoError(t, err)
+	releases, err := env.repo.ListReleases(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, releases)
+	revisions, err := env.repo.ListRevisions(context.Background(), pkg.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, revisions)
+	resources, err := env.repo.ListResourceDefinitions(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, resources)
+}
+
+func TestCharmhubSyncRejectsResourceDigestMismatch(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	stable := fakeClient.channels["demo|latest/stable"]
+	for idx := range stable.DefaultRelease.Resources {
+		if stable.DefaultRelease.Resources[idx].Name == "config" {
+			stable.DefaultRelease.Resources[idx].Download.HashSHA256 = strings.Repeat("f", sha256.Size*2)
+		}
+	}
+	fakeClient.channels["demo|latest/stable"] = stable
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"] = stable
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	err = env.sync.reconcilePackage(context.Background(), "demo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "digest mismatch")
+	assert.Contains(t, err.Error(), "resource-config")
+
+	rules, err := env.repo.ListCharmhubSyncRules(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, charmhubSyncStatusError, rules[0].LastSyncStatus)
+
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, err)
+	releases, err := env.repo.ListReleases(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, releases)
+	revisions, err := env.repo.ListRevisions(context.Background(), pkg.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, revisions)
+	resources, err := env.repo.ListResourceDefinitions(context.Background(), pkg.ID)
+	require.NoError(t, err)
+	assert.Empty(t, resources)
+}
+
+func TestCharmhubSyncAcceptsDeclaredDownloadDigests(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "demo", "upstream-demo")
+	stable := fakeClient.channels["demo|latest/stable"]
+	revisionPayload := fakeClient.downloads[stable.DefaultRelease.Revision.Download.URL]
+	stable.DefaultRelease.Revision.Download.HashSHA256 = sha256Hex(revisionPayload)
+	fakeClient.channels["demo|latest/stable"] = stable
+	fakeClient.channels["demo|latest/stable|ubuntu@24.04|amd64"] = stable
+	info := fakeClient.infos["demo"]
+	info.ChannelMap[0].Revision = stable.DefaultRelease.Revision
+	fakeClient.infos["demo"] = info
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "demo", "latest", nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "demo"))
+	pkg, err := env.repo.GetPackageByName(context.Background(), "demo")
+	require.NoError(t, err)
+	release, err := env.repo.ResolveRelease(context.Background(), pkg.ID, "latest/stable")
+	require.NoError(t, err)
+	assert.Equal(t, 7, release.Revision)
+	revision, err := env.repo.GetRevisionByNumber(context.Background(), pkg.ID, 7)
+	require.NoError(t, err)
+	assert.Equal(t, stable.DefaultRelease.Revision.Download.HashSHA256, revision.SHA256)
+}
+
 func TestReconcileCharmhubPackagePersistsSyncAccountOnSQLite(t *testing.T) {
 	t.Parallel()
 
@@ -964,6 +1137,11 @@ func addTrackVariantFixture(
 		Revision: stable.DefaultRelease.Revision,
 	})
 	client.infos[packageName] = info
+}
+
+func sha256Hex(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func makeFakeResource(name, resourceType string, revision int, downloadURL string, payload []byte) charmhubclient.ReleaseResource {

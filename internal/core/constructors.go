@@ -82,6 +82,13 @@ func NewRelease(release Release) (Release, error) {
 	if release.Revision <= 0 {
 		return Release{}, fmt.Errorf("release revision must be greater than zero")
 	}
+	if release.Base != nil {
+		base, err := NewBase(*release.Base)
+		if err != nil {
+			return Release{}, err
+		}
+		release.Base = &base
+	}
 	if release.When.IsZero() {
 		return Release{}, fmt.Errorf("release timestamp is required")
 	}
