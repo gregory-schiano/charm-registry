@@ -59,6 +59,7 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 		return s.reconcileDeletingPackage(ctx, packageName, deletingRules)
 	}
 
+	trackCache := newPackageTrackCache()
 	var errs []error
 	for _, rule := range activeRules {
 		slog.InfoContext(ctx, "charmhub sync track started",
@@ -73,7 +74,7 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 			continue
 		}
 
-		updatedPkg, syncErr := s.syncCharmhubTrack(ctx, pkg, activeRules, rule)
+		updatedPkg, syncErr := s.syncCharmhubTrack(ctx, pkg, activeRules, rule, trackCache)
 		if syncErr != nil {
 			slog.InfoContext(ctx, "charmhub sync track failed",
 				"package", packageName,
@@ -99,7 +100,7 @@ func (s *Service) reconcilePackage(ctx context.Context, packageName string) erro
 		}
 	}
 
-	if pruneErr := s.pruneDeletedRules(ctx, pkg, activeRules, deletingRules); pruneErr != nil {
+	if pruneErr := s.pruneDeletedRules(ctx, pkg, activeRules, deletingRules, trackCache); pruneErr != nil {
 		errs = append(errs, pruneErr)
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -133,6 +134,7 @@ func (s *Service) pruneDeletedRules(
 	pkg core.Package,
 	activeRules []core.CharmhubSyncRule,
 	deletingRules []core.CharmhubSyncRule,
+	trackCache *packageTrackCache,
 ) error {
 	if pkg.ID == "" || len(deletingRules) == 0 {
 		return nil
@@ -141,7 +143,7 @@ func (s *Service) pruneDeletedRules(
 	if err := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleting, nil); err != nil {
 		errs = append(errs, err)
 	}
-	if pruneErr := s.pruneSyncedPackage(ctx, pkg, activeRules); pruneErr != nil {
+	if pruneErr := s.pruneSyncedPackage(ctx, pkg, activeRules, trackCache); pruneErr != nil {
 		errs = append(errs, pruneErr)
 		if markErr := s.markCharmhubSyncRules(ctx, deletingRules, charmhubSyncStatusDeleteError, pruneErr); markErr != nil {
 			errs = append(errs, markErr)
@@ -152,6 +154,50 @@ func (s *Service) pruneDeletedRules(
 		errs = append(errs, deleteErr)
 	}
 	return errors.Join(errs...)
+}
+
+type packageTrackCache struct {
+	byPackage map[string][]core.Track
+}
+
+func newPackageTrackCache() *packageTrackCache {
+	return &packageTrackCache{byPackage: map[string][]core.Track{}}
+}
+
+func (c *packageTrackCache) tracks(ctx context.Context, repository repo.PackageRepo, packageID string) ([]core.Track, error) {
+	if tracks, ok := c.byPackage[packageID]; ok {
+		return slices.Clone(tracks), nil
+	}
+	tracks, err := repository.ListTracks(ctx, packageID)
+	if err != nil {
+		return nil, err
+	}
+	c.remember(packageID, tracks)
+	return slices.Clone(tracks), nil
+}
+
+func (c *packageTrackCache) remember(packageID string, tracks []core.Track) {
+	c.byPackage[packageID] = slices.Clone(tracks)
+}
+
+func (c *packageTrackCache) add(packageID string, track core.Track) {
+	tracks := c.byPackage[packageID]
+	for _, item := range tracks {
+		if item.Name == track.Name {
+			return
+		}
+	}
+	c.byPackage[packageID] = append(slices.Clone(tracks), track)
+}
+
+func (c *packageTrackCache) remove(packageID, trackName string) {
+	tracks, ok := c.byPackage[packageID]
+	if !ok {
+		return
+	}
+	c.byPackage[packageID] = slices.DeleteFunc(slices.Clone(tracks), func(track core.Track) bool {
+		return track.Name == trackName
+	})
 }
 
 func partitionCharmhubSyncRules(rules []core.CharmhubSyncRule) ([]core.CharmhubSyncRule, []core.CharmhubSyncRule) {
@@ -225,6 +271,7 @@ func (s *Service) syncCharmhubTrack(
 	pkg core.Package,
 	allRules []core.CharmhubSyncRule,
 	rule core.CharmhubSyncRule,
+	trackCache *packageTrackCache,
 ) (core.Package, error) {
 	present, err := s.loadTrackChannelStates(ctx, rule)
 	if err != nil {
@@ -243,20 +290,20 @@ func (s *Service) syncCharmhubTrack(
 	if err != nil {
 		return core.Package{}, err
 	}
-	pkg, err = s.ensureSyncedPackage(ctx, pkg, rule, allRules, syncIdentity, present[0].info)
+	pkg, err = s.ensureSyncedPackage(ctx, pkg, rule, allRules, syncIdentity, present[0].info, trackCache)
 	if err != nil {
 		return core.Package{}, err
 	}
 
 	pkg.DefaultTrack = stringPtr(defaultTrackForRules(allRules))
-	pkg, err = s.syncTrackReleases(ctx, pkg, syncIdentity.Account.ID, present)
+	pkg, err = s.syncTrackReleases(ctx, pkg, syncIdentity.Account.ID, present, trackCache)
 	if err != nil {
 		return core.Package{}, err
 	}
 	if err := s.removeStaleTrackReleases(ctx, pkg.ID, rule.Track, present); err != nil {
 		return core.Package{}, err
 	}
-	return s.persistSyncedPackage(ctx, pkg)
+	return s.persistSyncedPackage(ctx, pkg, trackCache)
 }
 
 type channelState struct {
@@ -325,9 +372,10 @@ func (s *Service) ensureSyncedPackage(
 	allRules []core.CharmhubSyncRule,
 	syncIdentity core.Identity,
 	firstInfo charmhubclient.PackageChannel,
+	trackCache *packageTrackCache,
 ) (core.Package, error) {
 	if pkg.ID != "" {
-		return pkg, s.ensureCharmhubTrack(ctx, pkg, rule.Track)
+		return pkg, s.ensureCharmhubTrack(ctx, pkg, rule.Track, trackCache)
 	}
 
 	created, err := core.NewPackage(core.Package{
@@ -361,7 +409,8 @@ func (s *Service) ensureSyncedPackage(
 		"package_id", created.ID,
 		"default_track", stringValue(created.DefaultTrack),
 	)
-	return created, s.ensureCharmhubTrack(ctx, created, rule.Track)
+	trackCache.remember(created.ID, nil)
+	return created, s.ensureCharmhubTrack(ctx, created, rule.Track, trackCache)
 }
 
 func (s *Service) syncTrackReleases(
@@ -369,11 +418,12 @@ func (s *Service) syncTrackReleases(
 	pkg core.Package,
 	createdBy string,
 	present []channelState,
+	trackCache *packageTrackCache,
 ) (core.Package, error) {
 	var err error
 	for _, state := range present {
 		var resourceRefs []core.ReleaseResourceRef
-		pkg, resourceRefs, err = s.ensureCharmhubArtifacts(ctx, pkg, createdBy, state.info)
+		pkg, resourceRefs, err = s.ensureCharmhubArtifacts(ctx, pkg, createdBy, state.info, trackCache)
 		if err != nil {
 			return core.Package{}, err
 		}
@@ -434,9 +484,9 @@ func (s *Service) removeStaleTrackReleases(
 	return nil
 }
 
-func (s *Service) persistSyncedPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
+func (s *Service) persistSyncedPackage(ctx context.Context, pkg core.Package, trackCache *packageTrackCache) (core.Package, error) {
 	pkg.UpdatedAt = s.now()
-	if tracks, err := s.repo.ListTracks(ctx, pkg.ID); err == nil {
+	if tracks, err := trackCache.tracks(ctx, s.repo, pkg.ID); err == nil {
 		pkg.Tracks = tracks
 	}
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
@@ -451,8 +501,8 @@ func (s *Service) persistSyncedPackage(ctx context.Context, pkg core.Package) (c
 	return pkg, nil
 }
 
-func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, track string) error {
-	tracks, err := s.repo.ListTracks(ctx, pkg.ID)
+func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, track string, trackCache *packageTrackCache) error {
+	tracks, err := trackCache.tracks(ctx, s.repo, pkg.ID)
 	if err != nil {
 		return err
 	}
@@ -461,15 +511,16 @@ func (s *Service) ensureCharmhubTrack(ctx context.Context, pkg core.Package, tra
 			return nil
 		}
 	}
-	createdTrack, err := core.NewTrack(core.Track{
+	created, err := core.NewTrack(core.Track{
 		Name:      track,
 		CreatedAt: s.now(),
 	})
 	if err != nil {
 		return fmt.Errorf("charmhub sync track %s: %w", track, err)
 	}
-	_, err = s.repo.CreateTracks(ctx, pkg.ID, []core.Track{createdTrack})
+	_, err = s.repo.CreateTracks(ctx, pkg.ID, []core.Track{created})
 	if err == nil {
+		trackCache.add(pkg.ID, created)
 		slog.InfoContext(ctx, "charmhub track created",
 			"package", pkg.Name,
 			"package_id", pkg.ID,
@@ -540,9 +591,10 @@ func (s *Service) ensureCharmhubArtifacts(
 	pkg core.Package,
 	createdBy string,
 	info charmhubclient.PackageChannel,
+	trackCache *packageTrackCache,
 ) (core.Package, []core.ReleaseResourceRef, error) {
 	revisionNumber := info.DefaultRelease.Revision.Revision
-	updatedPkg, err := s.ensureCharmhubRevisionArtifacts(ctx, pkg, createdBy, info, revisionNumber)
+	updatedPkg, err := s.ensureCharmhubRevisionArtifacts(ctx, pkg, createdBy, info, revisionNumber, trackCache)
 	if err != nil {
 		return core.Package{}, nil, err
 	}
@@ -562,6 +614,7 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 	createdBy string,
 	info charmhubclient.PackageChannel,
 	revisionNumber int,
+	trackCache *packageTrackCache,
 ) (core.Package, error) {
 	_, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
 	switch {
@@ -586,7 +639,7 @@ func (s *Service) ensureCharmhubRevisionArtifacts(
 		return core.Package{}, err
 	}
 
-	updatedPkg, err := s.updatePackageFromUpstream(ctx, pkg, info, archive.Manifest)
+	updatedPkg, err := s.updatePackageFromUpstream(ctx, pkg, info, archive.Manifest, trackCache)
 	if err != nil {
 		return core.Package{}, err
 	}
@@ -720,11 +773,12 @@ func (s *Service) updatePackageFromUpstream(
 	pkg core.Package,
 	info charmhubclient.PackageChannel,
 	manifest core.CharmManifest,
+	trackCache *packageTrackCache,
 ) (core.Package, error) {
 	pkg = applyCharmhubPackageMetadata(pkg, info.Result, manifest)
 	pkg.Status = "published"
 	pkg.UpdatedAt = s.now()
-	if tracks, err := s.repo.ListTracks(ctx, pkg.ID); err == nil {
+	if tracks, err := trackCache.tracks(ctx, s.repo, pkg.ID); err == nil {
 		pkg.Tracks = tracks
 	}
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
@@ -919,7 +973,7 @@ func (s *Service) populateResourceHashes(item *core.ResourceRevision, payload []
 	item.SHA3384 = item.SHA384
 }
 
-func (s *Service) pruneSyncedPackage(ctx context.Context, pkg core.Package, rules []core.CharmhubSyncRule) error {
+func (s *Service) pruneSyncedPackage(ctx context.Context, pkg core.Package, rules []core.CharmhubSyncRule, trackCache *packageTrackCache) error {
 	validTracks := validTracksFromRules(rules)
 	revisionRefs, resourceRefs, err := s.pruneOutOfScopeReleases(ctx, pkg.ID, validTracks)
 	if err != nil {
@@ -931,7 +985,7 @@ func (s *Service) pruneSyncedPackage(ctx context.Context, pkg core.Package, rule
 	if err := s.pruneDanglingResources(ctx, pkg, resourceRefs); err != nil {
 		return err
 	}
-	return s.pruneDanglingTracks(ctx, pkg.ID, validTracks)
+	return s.pruneDanglingTracks(ctx, pkg.ID, validTracks, trackCache)
 }
 
 func (s *Service) cleanupSyncedPackage(ctx context.Context, packageName string) error {
@@ -1131,8 +1185,8 @@ func (s *Service) deleteResourceArtifact(
 	return nil
 }
 
-func (s *Service) pruneDanglingTracks(ctx context.Context, packageID string, validTracks map[string]struct{}) error {
-	tracks, err := s.repo.ListTracks(ctx, packageID)
+func (s *Service) pruneDanglingTracks(ctx context.Context, packageID string, validTracks map[string]struct{}, trackCache *packageTrackCache) error {
+	tracks, err := trackCache.tracks(ctx, s.repo, packageID)
 	if err != nil {
 		return err
 	}
@@ -1140,7 +1194,10 @@ func (s *Service) pruneDanglingTracks(ctx context.Context, packageID string, val
 		if _, ok := validTracks[track.Name]; ok {
 			continue
 		}
-		_ = s.repo.DeleteTrack(ctx, packageID, track.Name)
+		if err := s.repo.DeleteTrack(ctx, packageID, track.Name); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+		trackCache.remove(packageID, track.Name)
 		slog.InfoContext(ctx, "dangling charmhub track deleted",
 			"package_id", packageID,
 			"track", track.Name,
