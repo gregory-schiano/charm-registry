@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
 // Register a charm, upload an archive, push a revision, release to a channel,
 // and verify the release appears in the releases list.
 func TestREV01_FullUploadToReleasePipeline(t *testing.T) {

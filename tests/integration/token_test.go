@@ -449,9 +449,9 @@ func TestTOKEN20_MacaroonHeaderAuthentication(t *testing.T) {
 	macaroonsValue := "[" + base64URLEncode(fmt.Sprintf(`[{"identifier":"%s"}]`, rawToken)) + "]"
 	resp, err := doRequestRaw("POST", "/v1/tokens/exchange",
 		map[string]string{
-			"Macaroons":       macaroonsValue,
-			"Content-Type":    "application/json",
-			"Content-Length":  "0",
+			"Macaroons":      macaroonsValue,
+			"Content-Type":   "application/json",
+			"Content-Length": "0",
 		}, strings.NewReader(""))
 	require.NoError(t, err, "exchange with Macaroons header request failed")
 

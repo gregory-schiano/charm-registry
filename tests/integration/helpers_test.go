@@ -438,8 +438,8 @@ resources:
       - amd64
 `
 	return buildZipArchive(t, map[string]string{
-		"metadata.yaml":  metadata,
-		"manifest.yaml":   manifest,
+		"metadata.yaml": metadata,
+		"manifest.yaml": manifest,
 	})
 }
 

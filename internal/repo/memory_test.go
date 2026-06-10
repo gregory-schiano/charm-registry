@@ -834,7 +834,6 @@ func TestMemoryResolveDefaultReleasePicksHighestRevision(t *testing.T) {
 	assert.Equal(t, 5, release.Revision, "fallback should pick highest revision")
 }
 
-
 // ---------------------------------------------------------------------------
 // Coverage: previously-untested memory.go functions
 // ---------------------------------------------------------------------------

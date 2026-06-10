@@ -421,8 +421,6 @@ func parseResourceDownloadFilename(filename string) (string, string, int, error)
 	return packageID, resourcePart[:lastUnderscore], revision, nil
 }
 
-
-
 func (api *API) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Use r.RemoteAddr which has already been populated by
