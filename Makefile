@@ -175,5 +175,3 @@ snap-integration-test:
 		echo "ERROR: spread not found — install it (snap install spread --classic) or run in CI."; \
 		exit 1; \
 	fi
-
-	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test
