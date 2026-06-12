@@ -46,7 +46,7 @@ Manual dispatch defaults to dry-run mode for safety.
 
 When `dry_run=true`:
 
-- ✓ All build jobs run (test, build-binaries, build-rock, build-charm, build-snap, generate-sbom)
+- ✓ All build jobs run (test, integration-smoke, build-binaries, build-rock, build-charm, build-snap, generate-sbom)
 - ✓ GitHub release is created as a **draft** with all artifacts attached
 - ✗ Publish jobs are **skipped** (charm, rock, snap)
 - ✗ Attestations are **skipped**

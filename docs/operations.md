@@ -7,6 +7,11 @@ Operational procedures for Charm Registry.
 When using a PostgreSQL backend, certain migrations require extensions or
 privileges beyond what the application's database role typically holds.
 
+Migrations run automatically on startup, serialized by a blocking Postgres
+advisory lock held on a dedicated connection. When several units start
+concurrently (for example a multi-unit Juju deployment), the first one runs
+the migrations and the others wait for the lock instead of failing.
+
 ### pg_trgm extension (migration 0008)
 
 The trigram index on `packages.name` requires the `pg_trgm` extension.
@@ -88,56 +93,9 @@ For production monitoring, scrape `/metrics` only from trusted networks and scra
 
 ## Backup and restore
 
-There is no built-in backup infrastructure. Backups must be performed manually.
+There is no built-in backup infrastructure. Backups must be performed manually — see [Backup and Restore](backup-restore.md) for the full procedures (Postgres, SQLite, S3, filesystem) and the disaster-recovery checklist.
 
-### Postgres backup
-
-```bash
-pg_dump -Fc -f charm-registry-$(date +%Y%m%d).dump charm_registry
-```
-
-### Postgres restore
-
-```bash
-pg_restore -d charm_registry charm-registry-YYYYMMDD.dump
-```
-
-### S3 backup
-
-For S3-compatible storage, use your provider's bucket versioning, replication, or snapshot features. With MinIO:
-
-```bash
-mc mirror local/charm-registry-blobs /backup/charm-registry-blobs/
-mc mirror local/charm-registry-oci /backup/charm-registry-oci/
-```
-
-### SQLite backup
-
-```bash
-sqlite3 "$CHARM_REGISTRY_DATA_DIR/registry.sqlite" ".backup '$CHARM_REGISTRY_DATA_DIR/registry.sqlite.bak'"
-```
-
-Or stop the service, copy the file, and restart.
-
-### Filesystem backup
-
-```bash
-tar czf charm-registry-data-$(date +%Y%m%d).tar.gz -C "$CHARM_REGISTRY_DATA_DIR" .
-```
-
-### Restoration procedure
-
-1. Stop the registry service
-2. Restore the database from backup
-3. Restore blob/OCI storage from backup
-4. Verify file permissions and ownership
-5. Start the registry service
-6. Check `/healthz` and `/readyz`
-7. Test a package download and a `juju refresh` against the restored service
-
-### Migration rollback
-
-If a database migration goes wrong, restore from the last backup taken before the migration. The registry does not support down-migrations. Always take a backup before upgrading.
+One rule worth repeating here: the registry does not support down-migrations. If a database migration goes wrong, the only way back is the last backup taken before the upgrade, so always take one first.
 
 ## Token management
 
@@ -238,4 +196,4 @@ Certificate hot-reload is not supported. To update certificates, restart the ser
 
 ### API server certificates
 
-The API server does not natively support TLS. Use a reverse proxy or the snap wrapper's TLS support for API TLS termination. See [Deployment](deployment.md) for details.
+The API server serves HTTPS natively when `CHARM_REGISTRY_API_TLS_CERT_FILE` and `CHARM_REGISTRY_API_TLS_KEY_FILE` are both set (the snap maps `tls.enabled` / `tls.cert-file` / `tls.key-file` onto these). Without them it serves plain HTTP, in which case put a reverse proxy or ingress in front for TLS termination. See [Deployment](deployment.md) for details.

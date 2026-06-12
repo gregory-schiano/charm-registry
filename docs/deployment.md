@@ -83,7 +83,7 @@ snap set charm-registry rate-limit.token-window=1m
 
 # Switch to Postgres
 snap set charm-registry database.backend=postgres
-snap set charm-registry database.url=postgres://user:***@host:5432/charm_registry?sslmode=require
+snap set charm-registry database.url='postgres://user:<password>@host:5432/charm_registry?sslmode=require'
 
 # Switch to S3 storage
 snap set charm-registry storage.backend=s3
@@ -169,17 +169,35 @@ The rock builds for `amd64`. Additional architectures (`arm64`, `ppc64el`, `s390
 
 ## Charm (Juju)
 
-The charm deploys charm-registry as a Kubernetes workload through Juju, with relations to PostgreSQL, S3-compatible storage, and ingress.
+The charm deploys charm-registry as a Kubernetes workload through Juju, with relations to PostgreSQL, S3-compatible storage, and two ingresses.
+
+### Relations
+
+Both ingress relations are **mandatory** — the charm stays blocked until they are related:
+
+- `ingress` fronts the API and artifact-download endpoints. Its URL becomes `CHARM_REGISTRY_PUBLIC_API_URL` and `CHARM_REGISTRY_PUBLIC_STORAGE_URL`.
+- `oci-ingress` fronts the embedded OCI registry. Its URL becomes `CHARM_REGISTRY_PUBLIC_REGISTRY_URL`.
+
+There are no public-URL config options: the relations are the single source of truth, and URL changes on the ingress side propagate to the workload automatically.
 
 ### Deploy with Juju
 
 ```bash
-juju deploy postgresql-k8s
-juju deploy traefik-k8s
-juju deploy ./charm-registry_*.charm
-juju integrate charm-registry postgresql-k8s
-juju integrate charm-registry traefik-k8s
+juju deploy postgresql-k8s --trust
+juju deploy traefik-k8s ingress-api --trust
+juju deploy traefik-k8s ingress-oci --trust
+juju deploy ./charm-registry_*.charm charm-registry
+
+juju integrate charm-registry:postgresql postgresql-k8s:database
+juju integrate charm-registry:ingress ingress-api:ingress
+juju integrate charm-registry:oci-ingress ingress-oci:ingress
 ```
+
+Two separate traefik applications are needed because each ingress relation publishes a route keyed on the same model/app name — a single traefik cannot serve both.
+
+### TLS
+
+The workload serves plain HTTP on both listeners; TLS terminates at the ingress. Give the traefik applications real certificates (for example via their `certificates` relation). The OCI ingress in particular must serve HTTPS — containerd and Docker refuse plain-HTTP registries by default.
 
 See the charm's `charmcraft.yaml` for the full relation and configuration interface.
 
@@ -187,7 +205,7 @@ See the charm's `charmcraft.yaml` for the full relation and configuration interf
 
 Before any internet-facing deployment:
 
-1. **Disable insecure dev auth:** Set `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=***
+1. **Disable insecure dev auth:** Set `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=false` (the default)
 2. **Configure OIDC:** Set `CHARM_REGISTRY_OIDC_ISSUER_URL` and `CHARM_REGISTRY_OIDC_CLIENT_ID`
 3. **Set admin identities:** Configure at least one of `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
 4. **Set OCI secret key:** Generate a strong random key for `CHARM_REGISTRY_OCI_SECRET_KEY`

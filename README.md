@@ -48,12 +48,14 @@ cmd/charm-registryctl/    — admin CLI
 cmd/functional-test/      — shared functional test harness
 internal/api/             — HTTP router, response shaping, OpenAPI stub
 internal/app/             — application wiring
+internal/core/            — domain types and validating constructors
 internal/service/         — registry business logic
+internal/sync/            — Charmhub synchronization worker
 internal/repo/            — Postgres, SQLite, and in-memory repositories
 internal/blob/            — S3-compatible and filesystem blob stores
 internal/auth/            — OIDC, macaroon, and store-token authentication
 internal/charm/           — charm archive parsing
-internal/charmhub/        — upstream Charmhub client (sync worker)
+internal/charmhub/        — upstream Charmhub API client
 internal/oci/             — embedded OCI Distribution registry backend
 internal/config/          — environment-driven configuration
 ```
@@ -104,10 +106,10 @@ make install-k8s-cert
 
 ### Authentication
 
-For local-only development, you can opt into insecure bearer tokens:
+For local-only development, you can opt into insecure bearer tokens of the form `dev:<subject>:<username>`:
 
 ```text
-Authorization: Bearer ***
+Authorization: Bearer dev:admin:admin
 ```
 
 This mode is **only** for development. Never enable it on a network-reachable deployment. Production deployments must configure OIDC.
@@ -163,7 +165,7 @@ The CLI talks to the registry over HTTP and requires an admin bearer token. Set 
 
 ```bash
 export CHARM_REGISTRY_URL=http://localhost:8080
-export CHARM_REGISTRY_TOKEN='***'
+export CHARM_REGISTRY_TOKEN='<admin-token>'
 ```
 
 If you are using insecure dev auth locally, configure an admin identity on the running server through one of:
@@ -210,7 +212,7 @@ The registry ships two production deployment targets:
 1. **Snap** — for Ubuntu hosts. Includes built-in TLS certificate generation and snap configuration. See [docs/deployment.md](docs/deployment.md) for details.
 2. **Rock (OCI image)** — for Kubernetes and container orchestration. Built with `rockcraft pack`, published with `skopeo`. See [docs/deployment.md](docs/deployment.md) for details.
 
-The charm deploys charm-registry as a Kubernetes workload through Juju. See [docs/deployment.md](docs/deployment.md) for the full deployment reference including configuration, TLS, and production hardening.
+The charm deploys charm-registry as a Kubernetes workload through Juju. It requires two ingress relations — one for the API/storage endpoints and one for the embedded OCI registry — and derives all public URLs from them; TLS terminates at the ingress. See [docs/deployment.md](docs/deployment.md) for the full deployment reference including configuration, TLS, and production hardening.
 
 ## Configuration
 
@@ -279,7 +281,6 @@ See [docs/testing.md](docs/testing.md) for the full testing guide.
 - **OCI garbage collection is best-effort.** The embedded OCI backend deletes manifests and repository metadata on best effort, but unreferenced S3 blobs still need a future garbage-collection pass.
 - **Minimal access model.** Group ACL tables exist in the database schema but are not implemented. The effective access model is: owners manage their own charms, and configured admins can access everything.
 - **Juju auth forwarding risk.** Stock `juju` can target an alternate Charmhub URL, but private package auth support is still the main compatibility risk to validate end-to-end in your environment. If Juju does not forward auth for consumer requests, private deployments may need network-level access controls in front of the registry.
-- **No API TLS in the Go app.** The main API server always uses plain HTTP. TLS termination requires a reverse proxy or the snap wrapper's TLS support.
 - **No backup infrastructure.** There are no built-in backup or restore commands. See [docs/operations.md](docs/operations.md) for manual backup procedures.
 - **Internal-only Prometheus metrics.** `GET /metrics` is unauthenticated for Prometheus compatibility and must be kept on an internal network or protected by firewall/ingress rules.
 - **Snap grade is `devel`.** The snap cannot be published to the stable channel until the grade is changed.
@@ -290,6 +291,7 @@ The repository carries a Juju-inspired Go hygiene baseline:
 
 - `.golangci.yml` with curated linters
 - `go.mod` `tool` block pinning lint and security tooling
-- `make lint`, `make vuln`, `make gosec` for repeatable local checks
+- `make lint`, `make vuln`, `make gosec`, `make actionlint` for repeatable local checks
+- A CI coverage gate with a documented ratchet policy ([docs/coverage-policy.md](docs/coverage-policy.md))
 - Explicit HTTP timeouts, body-size limits, and security headers
 - Non-root execution in the rock image

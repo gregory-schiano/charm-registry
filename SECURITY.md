@@ -35,7 +35,7 @@ If you are deploying this service internally, treat the following as confidentia
 - Per-package OCI push/pull credentials encrypted with `CHARM_REGISTRY_OCI_SECRET_KEY`
 - Macaroon token support for charmcraft compatibility
 - Token TTL enforcement and revocation
-- Rate limiting on token issuance (5 per minute per identity)
+- Rate limiting on token issuance (5 per minute per identity by default) and per-IP request limiting, both configurable
 - Explicit HTTP server timeouts, header limits, and body-size limits
 - Security response headers (`Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`)
 - Authenticated uploads and protected OCI credential/blob endpoints
@@ -58,7 +58,7 @@ If you are deploying this service internally, treat the following as confidentia
 
 Production deployments should additionally provide:
 
-- **TLS termination** for the main API server (reverse proxy or snap TLS)
+- **TLS for the main API server** — natively via `CHARM_REGISTRY_API_TLS_CERT_FILE` / `CHARM_REGISTRY_API_TLS_KEY_FILE` (the snap's `tls.enabled` option), or terminated at a reverse proxy / ingress
 - **OIDC configuration** for end-user authentication (`CHARM_REGISTRY_OIDC_ISSUER_URL`, `CHARM_REGISTRY_OIDC_CLIENT_ID`)
 - **Admin identity configuration** via `CHARM_REGISTRY_ADMIN_SUBJECTS`, `CHARM_REGISTRY_ADMIN_EMAILS`, or `CHARM_REGISTRY_ADMIN_USERNAMES`
 - **Network-level access control** for private registry traffic (the registry does not implement IP-based ACLs)
@@ -76,7 +76,7 @@ When deployed as a snap:
 - `plugs: network, network-bind` — the snap can open listening sockets and make outbound network connections, but cannot access the filesystem or other snaps beyond `$SNAP_COMMON`
 - Data lives under `$SNAP_COMMON/data/` (writable, persistent across upgrades)
 - TLS certificates live under `$SNAP_COMMON/certs/` with `0600` permissions on private keys
-- The wrapper drops the `install-mode: disable` flag so the service does not auto-start on install; enable it explicitly with `snap start charm-registry`
+- The service installs disabled (`install-mode: disable`) so it never starts before it is configured; start it explicitly with `snap start charm-registry`
 
 ## Unsafe development mode
 

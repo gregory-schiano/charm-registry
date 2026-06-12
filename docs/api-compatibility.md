@@ -19,7 +19,7 @@ These endpoints are used by `charmcraft` when pushing charms to a registry.
 | `POST` | `/v1/tokens/dashboard/exchange` | Dashboard token exchange |
 | `GET` | `/v1/whoami` | Return the authenticated identity (shorthand) |
 
-Token issuance is rate-limited to 5 tokens per minute per identity.
+Token issuance is rate-limited to 5 tokens per minute per identity by default, configurable via `CHARM_REGISTRY_TOKEN_RATE_LIMIT` and `CHARM_REGISTRY_TOKEN_RATE_WINDOW`.
 
 ### Package management
 
@@ -123,7 +123,7 @@ The push-revision endpoint accepts a JSON body with an `upload-id` field, not a 
 
 ### Bundles
 
-There is no `type=bundle` handling. Bundles are deprecated in modern Juju in favor of Scopes.
+There is no `type=bundle` handling. Bundles are deprecated in modern Juju.
 
 ### Progressive rollout
 

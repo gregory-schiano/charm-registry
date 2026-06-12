@@ -22,7 +22,7 @@ make test-race
 make coverage
 ```
 
-Produces a coverage report via `go tool cover -func=coverage.out`.
+Produces a coverage report via `go tool cover -func=coverage.out`. CI enforces a minimum coverage threshold; see [coverage-policy.md](coverage-policy.md) for the current baseline and the ratchet rules.
 
 Postgres-specific tests require a live database — set `CHARM_REGISTRY_DATABASE_URL` to run them.
 
@@ -36,6 +36,7 @@ Postgres-specific tests require a live database — set `CHARM_REGISTRY_DATABASE
 | `make gosec` | `gosec` | Security-focused static analysis |
 | `make tidy-check` | `go mod` | Verify go.mod/go.sum are tidy (CI gate) |
 | `make sqlc-diff` | `sqlc` | Verify generated code matches SQL queries |
+| `make actionlint` | `actionlint` | Lint GitHub Actions workflows |
 | `make audit` | all | Runs lint, tests, and security checks in sequence |
 
 ## Fuzz tests
@@ -46,6 +47,16 @@ Security-sensitive parsers have fuzz tests:
 go test -fuzz=FuzzParseArchive ./internal/charm/
 go test -fuzz=FuzzParseMacaroon ./internal/auth/
 ```
+
+## Charm unit tests
+
+The charm's Python code has unit tests under `tests/unit/`, run through tox:
+
+```bash
+cd charm && tox run -e unit
+```
+
+The snap's shell plumbing has its own checks: `make snap-shell-test` verifies the shared hook/wrapper helpers, and `make snap-config-env-test` verifies the snap-option-to-environment mapping.
 
 ## Functional test harness
 
@@ -110,15 +121,15 @@ python3 -m pytest -v -s --tb native
 
 ### What it covers
 
-- Deploys `postgresql-k8s`, `traefik-k8s`, and optionally `s3-integrator`
-- Deploys the local `charm-registry` charm
+- Deploys `postgresql-k8s`, two `traefik-k8s` apps (one per mandatory ingress relation), and optionally `s3-integrator`
+- Deploys the local `charm-registry` charm and relates both ingresses
 - Waits for `active/idle` workload status
 - Runs the shared functional-test binary against the deployed endpoint
 - Verifies data persists across Juju unit reschedule
 
 ### CI
 
-The charm integration suite runs in `.github/workflows/integration.yml` on a schedule and manual dispatch, using microk8s on a GitHub Actions runner.
+The charm integration suite runs in `.github/workflows/integration.yml` on a schedule and manual dispatch, using microk8s on a GitHub Actions runner. A lightweight smoke subset (server boot + health checks against a SQLite-backed binary) also runs on every pull request, and the release workflow requires it before publishing.
 
 ## Snap integration tests (spread)
 

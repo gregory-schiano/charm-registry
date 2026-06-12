@@ -36,7 +36,9 @@ Charm Registry is a single Go binary that runs two HTTP servers: a Charmhub-comp
 | `cmd/charm-registryctl` | Admin CLI (sync rules only) |
 | `internal/api` | HTTP handlers, chi router, response shaping, OpenAPI spec |
 | `internal/app` | Dependency wiring (repos, blob store, OCI, auth, service) |
-| `internal/service` | Business logic: packages, revisions, releases, resources, tokens, OCI, sync |
+| `internal/service` | Business logic: packages, revisions, releases, resources, tokens, OCI |
+| `internal/sync` | Charmhub synchronization worker: scheduling, reconciliation, artifact mirroring |
+| `internal/core` | Domain types and validating constructors shared across layers |
 | `internal/repo` | Postgres (sqlc-generated), SQLite, and in-memory repositories |
 | `internal/repo/db` | sqlc-generated query code (excluded from lint/security scans) |
 | `internal/blob` | S3-compatible and filesystem blob stores |
@@ -45,6 +47,7 @@ Charm Registry is a single Go binary that runs two HTTP servers: a Charmhub-comp
 | `internal/charmhub` | Upstream Charmhub API client (used by the sync worker) |
 | `internal/oci` | Embedded OCI Distribution v2 registry backend |
 | `internal/config` | Environment-driven configuration with validation |
+| `internal/testutil` | Test helpers, including a local OCI registry fixture |
 
 ## Data flow
 
@@ -83,8 +86,8 @@ Key behaviors:
 
 - Each charm package gets an OCI project (e.g., `charm/<package-name>`)
 - Per-package robot accounts are created for push and pull operations
-- Credentials are encrypted at rest with `CHARM_REGISTRY_OCI_SECRET_KEY`
-- The OCI listener runs HTTPS by default (charmcraft requires TLS for OCI registries)
+- Credentials are encrypted at rest with a key derived from `CHARM_REGISTRY_OCI_SECRET_KEY`
+- The OCI listener serves HTTPS when its TLS certificate and key are configured. The snap generates a self-signed certificate by default; the charm serves plain HTTP and terminates TLS at the ingress. OCI clients such as containerd and Docker require HTTPS, so one of the two must be in place.
 - Internal registry pushes (e.g., during sync mirroring) use `CHARM_REGISTRY_OCI_INTERNAL_URL`
 
 ### OCI credential lifecycle
@@ -92,7 +95,7 @@ Key behaviors:
 1. When a package is first registered or receives an OCI image resource, the service provisions an OCI project and two robot accounts (push, pull)
 2. Push credentials allow push and pull; pull credentials allow pull only
 3. `GET /v1/charm/{name}/resources/{resource}/oci-image/upload-credentials` returns push credentials for the package
-4. Credentials are deterministic HMAC-derived from `CHARM_REGISTRY_OCI_SECRET_KEY` — changing this key invalidates all existing credentials with no migration path
+4. Robot secrets are stored encrypted (AES-GCM) with a key derived from `CHARM_REGISTRY_OCI_SECRET_KEY`. Treat that key as immutable: changing it makes existing encrypted credentials undecryptable, with no automatic re-encryption path. See [Operations](operations.md) for the rotation procedure.
 
 ## Authentication model
 
@@ -111,6 +114,6 @@ Admins can access and manage every package. Non-admin users can only manage pack
 
 ### Insecure dev auth
 
-When `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true`, the registry accepts opaque development bearer tokens in the format `dev:<username>:<display>`. This is for local development only and must never be enabled in production.
+When `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true`, the registry accepts development bearer tokens in the format `dev:<subject>:<username>` (for example `dev:admin:admin`). Everything after the second colon belongs to the username, so usernames may contain colons. This is for local development only and must never be enabled in production.
 
 The application validates at startup that either OIDC is configured or insecure dev auth is explicitly enabled.

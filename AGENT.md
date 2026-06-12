@@ -167,14 +167,16 @@ This is a compatibility-driven project. Small response-shape changes can break r
 
 From `.github/workflows/ci.yml`:
 
+- `make actionlint`
 - `make tidy-check`
 - `make vet`
 - `make lint`
 - `make sqlc-diff`
 - `make vuln`
 - `make gosec`
+- `make test`
 - `make coverage`
-- coverage threshold: `70%`
+- coverage threshold: `65%` (ratchet policy — see `docs/coverage-policy.md`)
 - `make build`
 
 ### Practical notes

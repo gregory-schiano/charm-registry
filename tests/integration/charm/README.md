@@ -55,24 +55,31 @@ cd charm && tox run -e integration
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────┐
-│                   Juju Model                   │
-│                                                │
-│  ┌─────────────┐  relate  ┌───────────────┐   │
-│  │charm-registry│◄────────│postgresql-k8s  │   │
-│  │ (Go service) │  relate  └───────────────┘   │
-│  │              │◄────────┌───────────────┐    │
-│  │              │  relate  │s3-integrator  │    │
-│  │              │◄────────┌───────────────┐    │
-│  │              │         │traefik-k8s    │    │
-│  └──────────────┘         └───────────────┘    │
-└────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                      Juju Model                      │
+│                                                      │
+│  ┌──────────────┐  postgresql  ┌──────────────────┐  │
+│  │charm-registry│◄─────────────│ postgresql-k8s   │  │
+│  │ (Go service) │  s3/oci-s3   ├──────────────────┤  │
+│  │              │◄─────────────│ s3-integrator    │  │
+│  │              │  ingress     ├──────────────────┤  │
+│  │              │◄─────────────│ ingress-api      │  │
+│  │              │  oci-ingress │ (traefik-k8s)    │  │
+│  │              │◄─────────────│ ingress-oci      │  │
+│  └──────────────┘              │ (traefik-k8s)    │  │
+│                                └──────────────────┘  │
+└──────────────────────────────────────────────────────┘
           ▲
           │ HTTP
           ▼
    functional-test binary (16 scenarios)
    + direct health/persistence assertions
 ```
+
+Both ingress relations are mandatory: the charm derives its public API,
+storage, and OCI registry URLs from them and stays blocked until both are
+related. Two traefik applications are deployed because each relation
+publishes a route keyed on the same model/app name.
 
 ## Design Decisions
 

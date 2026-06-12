@@ -49,7 +49,6 @@ In `auto` mode, the registry uses S3 when `CHARM_REGISTRY_S3_ENDPOINT` or creden
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHARM_REGISTRY_OCI_LISTEN` | `:5000` | Embedded OCI registry listen address |
-| `CHARM_REGISTRY_OCI_HOST_PORT` | `5000` | Host port for the OCI listener (used in multi-process deployments) |
 | `CHARM_REGISTRY_OCI_INTERNAL_URL` | `https://127.0.0.1:5000` | URL the service uses to push into its own OCI registry |
 | `CHARM_REGISTRY_OCI_STORAGE_BACKEND` | `auto` | `auto`, `s3`, or `filesystem` for OCI blobs |
 | `CHARM_REGISTRY_OCI_STORAGE_DIR` | `<data_dir>/oci-registry` | Filesystem OCI storage directory |
@@ -109,6 +108,26 @@ The application requires either OIDC configuration or explicit opt-in to insecur
 | `CHARM_REGISTRY_MAX_JSON_BODY_BYTES` | `1048576` (1 MiB) | Max JSON request body size |
 | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` | `10485760` (10 MiB) | Max per-entry decompressed charm archive size |
 | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` | `67108864` (64 MiB) | Max upload body size |
+
+The embedded OCI registry server has its own timeouts. Read and write timeouts default to `0` (disabled) so that large image blob transfers are never truncated:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHARM_REGISTRY_OCI_SERVER_READ_HEADER_TIMEOUT` | `10s` | OCI server read header timeout |
+| `CHARM_REGISTRY_OCI_SERVER_READ_TIMEOUT` | `0` (disabled) | OCI server read timeout |
+| `CHARM_REGISTRY_OCI_SERVER_WRITE_TIMEOUT` | `0` (disabled) | OCI server write timeout |
+| `CHARM_REGISTRY_OCI_SERVER_IDLE_TIMEOUT` | `5m` | OCI server idle timeout |
+
+### Rate limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHARM_REGISTRY_IP_RATE_LIMIT` | `30` | Max requests per IP per window; `0` disables IP limiting |
+| `CHARM_REGISTRY_IP_RATE_WINDOW` | `1m` | Sliding window for the per-IP limit |
+| `CHARM_REGISTRY_TOKEN_RATE_LIMIT` | `5` | Max token issuances per identity per window; `0` disables |
+| `CHARM_REGISTRY_TOKEN_RATE_WINDOW` | `1m` | Sliding window for the token issuance limit |
+
+The per-IP limit applies to unauthenticated traffic and keys on the client address as seen behind trusted proxy headers. If charmcraft sessions hit `429` responses during busy uploads, raise the token limit.
 
 ### Legacy variable aliases
 

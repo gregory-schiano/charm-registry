@@ -1,15 +1,18 @@
 # Backup and Restore
 
 This document covers backup and restore procedures for the charm-registry
-deployment stack (PostgreSQL, Harbor/S3 blob storage, and application state).
+deployment stack: the database (PostgreSQL or SQLite), blob storage
+(S3-compatible or filesystem), TLS certificates, and application configuration.
 
 ## Overview
 
 | Component | What to back up | Tool | Frequency |
 |---|---|---|---|
 | PostgreSQL | All databases | `pg_dump` / `pg_restore` | Daily (cron) |
-| Blob storage | S3 bucket objects | `aws s3 sync` / rclone | Daily (cron) |
-| TLS certificates | `deploy/oci/certs/` directory | File copy | On renewal |
+| SQLite | `registry.sqlite` | `sqlite3 .backup` | Daily (cron) |
+| Blob storage (S3) | Bucket objects | `aws s3 sync` / rclone | Daily (cron) |
+| Blob storage (filesystem) | `$CHARM_REGISTRY_DATA_DIR` | `tar` | Daily (cron) |
+| TLS certificates | `certs/` (local) or `$SNAP_COMMON/certs/` (snap) | File copy | On renewal |
 | Application config | `.env` / snap config | File copy | On change |
 
 ## PostgreSQL
@@ -42,7 +45,19 @@ psql -h $PGHOST -U $PGUSER -d $PGDATABASE < registry_YYYYMMDD.sql
 > **Note:** `--clean --if-exists` drops existing objects before restoring.
 > Omit these flags if you want to restore into a fresh database.
 
-## Blob Storage (S3 / Harbor)
+## SQLite
+
+Back up with SQLite's online backup command (safe while the service is running):
+
+```bash
+sqlite3 "$CHARM_REGISTRY_DATA_DIR/registry.sqlite" \
+  ".backup '$CHARM_REGISTRY_DATA_DIR/registry.sqlite.bak'"
+```
+
+Or stop the service, copy the file, and restart. To restore, stop the service
+and copy the backup file back into place.
+
+## Blob Storage (S3-compatible)
 
 ### Backup
 
@@ -51,9 +66,12 @@ psql -h $PGHOST -U $PGUSER -d $PGDATABASE < registry_YYYYMMDD.sql
 aws s3 sync s3://$S3_BUCKET/ s3-backup-$(date +%Y%m%d)/ \
   --endpoint-url $S3_ENDPOINT_URL
 
-# With rclone (for non-AWS S3-compatible stores like MinIO/Harbor)
-rclone sync harbor-s3:$S3_BUCKET/ s3-backup-$(date +%Y%mDD)/
+# With rclone (for non-AWS S3-compatible stores like MinIO)
+rclone sync s3:$S3_BUCKET/ s3-backup-$(date +%Y%m%d)/
 ```
+
+Remember the embedded OCI registry has its own bucket (or key prefix) — back up
+both the charm-blob bucket and the OCI storage bucket.
 
 ### Restore
 
@@ -62,6 +80,17 @@ rclone sync harbor-s3:$S3_BUCKET/ s3-backup-$(date +%Y%mDD)/
 aws s3 sync s3-backup-YYYYMMDD/ s3://$S3_BUCKET/ \
   --endpoint-url $S3_ENDPOINT_URL
 ```
+
+## Blob Storage (filesystem)
+
+For filesystem-backed deployments, the data directory holds the SQLite
+database, charm blobs, and OCI storage together:
+
+```bash
+tar czf charm-registry-data-$(date +%Y%m%d).tar.gz -C "$CHARM_REGISTRY_DATA_DIR" .
+```
+
+For the snap, the data directory is `/var/snap/charm-registry/common/data/`.
 
 ## Full Stack Restore Procedure
 
@@ -77,11 +106,11 @@ aws s3 sync s3-backup-YYYYMMDD/ s3://$S3_BUCKET/ \
 
 3. **Restore blob storage** (see above).
 
-4. **Verify TLS certificates** are present and valid:
+4. **Verify TLS certificates** are present and valid (paths depend on the
+   deployment: `certs/` for a local checkout, `$SNAP_COMMON/certs/` for the snap):
 
    ```bash
-   ls -la deploy/oci/certs/
-   openssl x509 -checkend 86400 -noout -in deploy/oci/certs/server.crt
+   openssl x509 -checkend 86400 -noout -in /var/snap/charm-registry/common/certs/oci.crt
    ```
 
 5. **Restart the application**:
@@ -95,8 +124,12 @@ aws s3 sync s3-backup-YYYYMMDD/ s3://$S3_BUCKET/ \
 6. **Smoke-test** the restored instance:
 
    ```bash
-   curl -sf http://localhost:8080/v1/health | jq .
+   curl -sf http://localhost:8080/healthz
+   curl -sf http://localhost:8080/readyz
    ```
+
+   Then test a package download and a `juju refresh` against the restored
+   service.
 
 ## Automated Backup (Cron)
 
