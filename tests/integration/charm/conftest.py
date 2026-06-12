@@ -138,8 +138,13 @@ def deployed(juju, charm_file, functional_test_binary):
     app = "charm-registry"
     pg_app = os.environ.get("JUB_POSTGRES_CHARM", "postgresql-k8s")
     pg_channel = os.environ.get("JUB_POSTGRES_CHANNEL", "14/stable")
-    ingress_app = os.environ.get("JUB_TRAEFIK_CHARM", "traefik-k8s")
+    ingress_charm = os.environ.get("JUB_TRAEFIK_CHARM", "traefik-k8s")
     ingress_channel = os.environ.get("JUB_TRAEFIK_CHANNEL", "latest/stable")
+    # Two traefik apps: one fronting the API/storage endpoints, one fronting
+    # the embedded OCI registry. Both ingress relations are mandatory and are
+    # the sole source of the workload's public URLs.
+    api_ingress_app = "ingress-api"
+    oci_ingress_app = "ingress-oci"
     s3_app_name = os.environ.get("JUB_S3_INTEGRATOR", "s3-integrator")
     s3_channel = os.environ.get("JUB_S3_CHANNEL", "latest/stable")
 
@@ -148,8 +153,10 @@ def deployed(juju, charm_file, functional_test_binary):
     logger.info("Deploying %s (channel: %s)", pg_app, pg_channel)
     juju.deploy(pg_app, channel=pg_channel, trust=True)
 
-    logger.info("Deploying %s (channel: %s)", ingress_app, ingress_channel)
-    juju.deploy(ingress_app, channel=ingress_channel, trust=True)
+    logger.info("Deploying %s as %s and %s (channel: %s)",
+                ingress_charm, api_ingress_app, oci_ingress_app, ingress_channel)
+    juju.deploy(ingress_charm, api_ingress_app, channel=ingress_channel, trust=True)
+    juju.deploy(ingress_charm, oci_ingress_app, channel=ingress_channel, trust=True)
 
     # S3-integrator: optional when env vars not supplied.
     s3_configured = bool(
@@ -174,14 +181,14 @@ def deployed(juju, charm_file, functional_test_binary):
         app,
         config={
             "enable-insecure-dev-auth": True,
-            "public-api-url": "http://placeholder:8080",
         },
     )
 
     # --- Create relations ---
 
     juju.integrate(f"{app}:postgresql", f"{pg_app}:database")
-    juju.integrate(f"{app}:oci-ingress", f"{ingress_app}:ingress")
+    juju.integrate(f"{app}:ingress", f"{api_ingress_app}:ingress")
+    juju.integrate(f"{app}:oci-ingress", f"{oci_ingress_app}:ingress")
 
     if s3_configured:
         juju.integrate(f"{app}:s3", f"{s3_app_name}:s3")
@@ -203,27 +210,17 @@ def deployed(juju, charm_file, functional_test_binary):
 
     api_url = os.environ.get("JUB_API_URL", f"http://{address}:8080")
 
-    # OCI URL: check traefik units for an address.
+    # OCI URL: check the OCI traefik units for an address. The workload's
+    # public URLs come from the ingress relations; no config is needed.
     oci_url = os.environ.get("JUB_OCI_URL", "")
-    if not oci_url and ingress_app in status.apps:
-        traefik_units = status.apps[ingress_app].units
+    if not oci_url and oci_ingress_app in status.apps:
+        traefik_units = status.apps[oci_ingress_app].units
         if traefik_units:
             traefik_addr = next(iter(traefik_units.values())).address
             if traefik_addr:
                 oci_url = f"http://{traefik_addr}:80"
 
     logger.info("Deployed endpoints — api: %s, oci: %s", api_url, oci_url)
-
-    # Update public URL config with real discovered addresses.
-    juju.config(app, {
-        "public-api-url": api_url,
-        "public-storage-url": api_url,
-    })
-    if oci_url:
-        juju.config(app, {"public-registry-url": oci_url})
-
-    # Settle after config change.
-    time.sleep(10)
 
     yield {
         "model": juju.model,

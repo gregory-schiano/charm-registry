@@ -18,6 +18,27 @@ import paas_charm.go
 logger = logging.getLogger(__name__)
 
 
+def public_url_environment(
+    api_ingress_url: str | None,
+    oci_ingress_url: str | None,
+) -> dict[str, str]:
+    """Map ingress relation URLs to the workload's public URL environment.
+
+    The main ingress fronts both the API and artifact downloads, so its URL
+    feeds the API and storage variables; the OCI ingress fronts the embedded
+    OCI registry listener. Both relations are required, so the variables are
+    always present once the charm is active; until then the charm blocks.
+    """
+    env: dict[str, str] = {}
+    if api_ingress_url:
+        public_url = api_ingress_url.rstrip("/")
+        env["CHARM_REGISTRY_PUBLIC_API_URL"] = public_url
+        env["CHARM_REGISTRY_PUBLIC_STORAGE_URL"] = public_url
+    if oci_ingress_url:
+        env["CHARM_REGISTRY_PUBLIC_REGISTRY_URL"] = oci_ingress_url.rstrip("/")
+    return env
+
+
 class CharmRegistryApp(App):
     """Application runtime with an extra OCI S3 relation."""
 
@@ -25,6 +46,7 @@ class CharmRegistryApp(App):
         self,
         *args: typing.Any,
         oci_s3: PaaSS3Requirer | None = None,
+        api_ingress: IngressPerAppRequirer | None = None,
         oci_ingress: IngressPerAppRequirer | None = None,
         **kwargs: typing.Any,
     ) -> None:
@@ -33,11 +55,13 @@ class CharmRegistryApp(App):
         Args:
             args: passthrough to App.
             oci_s3: S3 requirer for the embedded OCI registry bucket.
+            api_ingress: ingress requirer fronting the API and storage endpoints.
             oci_ingress: ingress requirer for the embedded OCI registry listener.
             kwargs: passthrough to App.
         """
         super().__init__(*args, **kwargs)
         self._oci_s3 = oci_s3
+        self._api_ingress = api_ingress
         self._oci_ingress = oci_ingress
 
     def _generate_integration_environments(self, prefix: str = "") -> dict[str, str]:
@@ -48,8 +72,12 @@ class CharmRegistryApp(App):
             relation_data = self._oci_s3.to_relation_data()
             if relation_data:
                 env.update(self._oci_s3_environment(relation_data, prefix=prefix))
-        if self._oci_ingress and self._oci_ingress.url:
-            env["CHARM_REGISTRY_PUBLIC_REGISTRY_URL"] = self._oci_ingress.url.rstrip("/")
+        env.update(
+            public_url_environment(
+                self._api_ingress.url if self._api_ingress else None,
+                self._oci_ingress.url if self._oci_ingress else None,
+            )
+        )
         return env
 
     def _oci_s3_environment(
@@ -135,6 +163,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
             workload_config=self._workload_config,
             database_migration=self._database_migration,
             oci_s3=self._oci_s3,
+            api_ingress=self._ingress,
             oci_ingress=self._oci_ingress,
         )
 
@@ -156,9 +185,12 @@ class CharmRegistryCharm(paas_charm.go.Charm):
     ) -> typing.Iterator[str]:
         """Return missing required non-storage integrations."""
         yield from super()._missing_required_other_integrations(requires, charm_state)
+        # Both ingresses are mandatory: they are the sole source of the public
+        # API/storage and OCI registry URLs handed to clients.
+        if self._ingress and not self._ingress.is_ready():
+            yield "ingress"
         if self._oci_ingress and not self._oci_ingress.is_ready():
-            if not requires["oci-ingress"].optional:
-                yield "oci-ingress"
+            yield "oci-ingress"
 
 
 if __name__ == "__main__":

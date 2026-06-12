@@ -88,19 +88,13 @@ requires:
 
 config:
   options:
-    public-api-url:
-      type: string
-      description: Public URL handed to Juju and charmcraft for the registry API.
-    public-storage-url:
-      type: string
-      description: Public URL handed to clients for charm and resource artifact downloads.
-    public-registry-url:
-      type: string
-      description: Public URL handed to clients for the embedded OCI registry.
     oci-internal-url:
       type: string
-      default: https://127.0.0.1:5000
-      description: URL used by the registry process to reach its embedded OCI listener.
+      default: http://127.0.0.1:5000
+      description: >-
+        URL used by the registry process to reach its embedded OCI listener.
+        Plain HTTP by default: the workload serves without TLS and relies on
+        the ingress relations for TLS termination.
     oci-s3-prefix:
       type: string
       default: oci
