@@ -112,9 +112,6 @@ func (s *Service) GetPackage(
 	name string,
 	requireViewPermission bool,
 ) (core.Package, error) {
-	if err := s.requireAuth(identity); err != nil {
-		return core.Package{}, err
-	}
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
 		return core.Package{}, translateRepoError(err, messagePackageNotFound)
@@ -238,9 +235,6 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 // The following errors may be returned:
 // - Repository lookup or package enrichment errors.
 func (s *Service) SearchPackages(ctx context.Context, identity core.Identity, query string) (findResponse, error) {
-	if err := s.requireAuth(identity); err != nil {
-		return findResponse{}, err
-	}
 	packages, err := s.repo.SearchPackages(ctx, query)
 	if err != nil {
 		return findResponse{}, err

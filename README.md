@@ -1,5 +1,7 @@
 # Charm Registry
 
+![Charm Registry logo](medias/charm_registry_lockup_DARK_BG_TRANSPARENT_vector.png)
+
 A private charm registry that works with stock `juju` and stock `charmcraft`. No patched clients required.
 
 The service stores charm metadata in Postgres or SQLite, stores charm and resource artifacts in S3-compatible storage or on the filesystem, and runs an embedded OCI Distribution registry in-process for image push/pull and sync workflows.
@@ -209,7 +211,7 @@ Commands:
 
 The registry ships two production deployment targets:
 
-1. **Snap** — for Ubuntu hosts. Includes built-in TLS certificate generation and snap configuration. See [docs/deployment.md](docs/deployment.md) for details.
+1. **Snap** — for Ubuntu hosts. The temporary Snap Store package name is `spellbook`; the installed service and commands retain the Charm Registry naming. Includes built-in TLS certificate generation and snap configuration. See [docs/deployment.md](docs/deployment.md) for install, configuration, service management, and CLI usage.
 2. **Rock (OCI image)** — for Kubernetes and container orchestration. Built with `rockcraft pack`, published with `skopeo`. See [docs/deployment.md](docs/deployment.md) for details.
 
 The charm deploys charm-registry as a Kubernetes workload through Juju. It requires two ingress relations — one for the API/storage endpoints and one for the embedded OCI registry — and derives all public URLs from them; TLS terminates at the ingress. See [docs/deployment.md](docs/deployment.md) for the full deployment reference including configuration, TLS, and production hardening.

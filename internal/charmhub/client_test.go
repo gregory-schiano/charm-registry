@@ -191,6 +191,41 @@ func TestDownloadToRejectsOversizedArtifact(t *testing.T) {
 	require.ErrorContains(t, err, "Charmhub artifact exceeds 5 bytes")
 }
 
+func TestAllowedDownloadHostAcceptsCharmhubCDNSubdomains(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		allowed bool
+	}{
+		{
+			name:    "regional CDN host",
+			host:    "canonical-bos01.cdn.snapcraftcontent.com",
+			allowed: true,
+		},
+		{
+			name:    "CDN apex",
+			host:    "cdn.snapcraftcontent.com",
+			allowed: false,
+		},
+		{
+			name:    "lookalike domain",
+			host:    "canonical-bos01.cdn.snapcraftcontent.com.attacker.test",
+			allowed: false,
+		},
+		{
+			name:    "private address",
+			host:    "127.0.0.1",
+			allowed: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.allowed, isAllowedDownloadHost(test.host, "https://api.charmhub.io"))
+		})
+	}
+}
+
 func TestRefreshChannelResolvesBaseVariant(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)

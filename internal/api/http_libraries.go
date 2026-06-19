@@ -7,6 +7,12 @@ import (
 	"net/http"
 )
 
+// handleLibraryNotFound preserves Charmcraft's anonymous single-library lookup
+// contract while library hosting is intentionally unsupported.
+func (a *API) handleLibraryNotFound(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, newErrorListResponse("not-found", "library not found"))
+}
+
 // handleLibrariesBulk handles POST /v1/charm/libraries/bulk.
 //
 // charmcraft calls this endpoint (without auth, via its anonymous client)

@@ -169,11 +169,11 @@ Many variables accept legacy aliases for backward compatibility:
 When running as a snap, the wrapper script (`snap/local/charm-registry-wrapper`) reads snap configuration keys via `snapctl get` and maps them to environment variables. For example:
 
 ```bash
-snap set charm-registry public-api-url=https://registry.example.com:8080
-snap set charm-registry tls.enabled=true
-snap set charm-registry oidc.issuer-url=https://sso.example.com/realms/main
-snap set charm-registry oidc.client-id=charm-registry
-snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
+sudo snap set spellbook public-api-url=https://registry.example.com:8080
+sudo snap set spellbook tls.enabled=true
+sudo snap set spellbook oidc.issuer-url=https://sso.example.com/realms/main
+sudo snap set spellbook oidc.client-id=charm-registry
+sudo snap set spellbook oci.secret-key="$(openssl rand -hex 32)"
 ```
 
 Snap keys use dotted paths that correspond to the environment variable names. Supported snap options include:

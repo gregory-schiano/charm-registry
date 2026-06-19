@@ -76,7 +76,7 @@ When deployed as a snap:
 - `plugs: network, network-bind` — the snap can open listening sockets and make outbound network connections, but cannot access the filesystem or other snaps beyond `$SNAP_COMMON`
 - Data lives under `$SNAP_COMMON/data/` (writable, persistent across upgrades)
 - TLS certificates live under `$SNAP_COMMON/certs/` with `0600` permissions on private keys
-- The service installs disabled (`install-mode: disable`) so it never starts before it is configured; start it explicitly with `snap start charm-registry`
+- The service installs disabled (`install-mode: disable`) so it never starts before it is configured; start it explicitly with `sudo snap start spellbook`
 
 ## Unsafe development mode
 

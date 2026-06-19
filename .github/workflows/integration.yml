@@ -44,6 +44,7 @@ jobs:
           CHARM_REGISTRY_DATABASE_BACKEND: sqlite
           CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
           CHARM_REGISTRY_LISTEN: ":8080"
+          CHARM_REGISTRY_OCI_SECRET_KEY: integration-test-secret
         run: |
           .bin/charm-registry &
           echo $! > /tmp/charm-registry.pid
@@ -55,7 +56,8 @@ jobs:
             fi
             if [ "$i" = "30" ]; then
               echo "::error::Server did not become healthy within 30s"
-              kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+              SERVER_PID=$(cat /tmp/charm-registry.pid)
+              kill "$SERVER_PID" 2>/dev/null || true
               exit 1
             fi
             sleep 1
@@ -68,7 +70,9 @@ jobs:
 
       - name: Stop server
         if: always()
-        run: kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+        run: |
+          SERVER_PID=$(cat /tmp/charm-registry.pid)
+          kill "$SERVER_PID" 2>/dev/null || true
 
   # ── Heavy integration tests (schedule / manual only) ────────────────
   #
@@ -191,7 +195,7 @@ jobs:
         run: make functional-test-build
 
       - name: Pack snap
-        run: snapcraft pack --use-lxd
+        run: sg lxd -c 'make snap-pack'
 
       - name: Run spread tests
         run: sg lxd -c 'spread -v ./tests/spread/...'

@@ -141,6 +141,7 @@ jobs:
           CHARM_REGISTRY_DATABASE_BACKEND: sqlite
           CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
           CHARM_REGISTRY_LISTEN: ":8080"
+          CHARM_REGISTRY_OCI_SECRET_KEY: integration-test-secret
         run: |
           .bin/charm-registry &
           echo $! > /tmp/charm-registry.pid
@@ -152,7 +153,8 @@ jobs:
             fi
             if [ "$i" = "30" ]; then
               echo "::error::Server did not become healthy within 30s"
-              kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+              SERVER_PID=$(cat /tmp/charm-registry.pid)
+              kill "$SERVER_PID" 2>/dev/null || true
               exit 1
             fi
             sleep 1
@@ -165,7 +167,9 @@ jobs:
 
       - name: Stop server
         if: always()
-        run: kill $(cat /tmp/charm-registry.pid) 2>/dev/null || true
+        run: |
+          SERVER_PID=$(cat /tmp/charm-registry.pid)
+          kill "$SERVER_PID" 2>/dev/null || true
 
   build-binaries:
     name: Build binaries
@@ -242,11 +246,11 @@ jobs:
         run: sudo snap install rockcraft --classic
 
       - name: Pack rock
-        run: sg lxd -c 'rockcraft pack'
+        run: sg lxd -c 'make rock-pack'
 
       - name: Smoke-test rock
         run: |
-          ROCK_FILE=$(ls *.rock 2>/dev/null | head -1)
+          ROCK_FILE=$(find . -maxdepth 1 -type f -name '*.rock' -print -quit)
           if [ -z "$ROCK_FILE" ]; then
             echo "::error::No .rock file produced"
             exit 1
@@ -269,13 +273,17 @@ jobs:
         with:
           ref: ${{ needs.release-metadata.outputs.tag }}
 
+      - name: Install LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+
       - name: Install charmcraft
         run: sudo snap install charmcraft --classic
 
       - name: Pack charm
-        run: |
-          cd charm
-          charmcraft pack
+        run: sg lxd -c 'make charm-pack'
 
       - name: Upload charm artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -300,9 +308,10 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
 
       - name: Pack snap
-        run: snapcraft pack --use-lxd
+        run: sg lxd -c 'make snap-pack'
 
       - name: Upload snap artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -435,7 +444,7 @@ jobs:
       - name: Upload charm to Charmhub
         id: upload
         run: |
-          CHARM_FILE=$(ls charm/*.charm | head -1)
+          CHARM_FILE=$(find charm -maxdepth 1 -type f -name '*.charm' -print -quit)
           BUILT_SHA=${{ github.sha }}
           echo "Uploading: ${CHARM_FILE}"
           echo "Built from commit: ${BUILT_SHA}"
@@ -499,7 +508,7 @@ jobs:
 
       - name: Push rock image (version tag)
         run: |
-          ROCK_FILE=$(ls *.rock | head -1)
+          ROCK_FILE=$(find . -maxdepth 1 -type f -name '*.rock' -print -quit)
           IMAGE="${{ needs.release-metadata.outputs.rock_image }}"
           TAG="${{ needs.release-metadata.outputs.tag }}"
           echo "Pushing ${ROCK_FILE} → ${IMAGE}:${TAG}"
@@ -511,7 +520,7 @@ jobs:
       - name: Push rock image (latest tag)
         if: needs.release-metadata.outputs.is_rc != 'true'
         run: |
-          ROCK_FILE=$(ls *.rock | head -1)
+          ROCK_FILE=$(find . -maxdepth 1 -type f -name '*.rock' -print -quit)
           IMAGE="${{ needs.release-metadata.outputs.rock_image }}"
           echo "Pushing ${ROCK_FILE} → ${IMAGE}:latest"
           skopeo copy \
@@ -557,7 +566,7 @@ jobs:
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         run: |
-          SNAP_FILE=$(ls *.snap | head -1)
+          SNAP_FILE=$(find . -maxdepth 1 -type f -name '*.snap' -print -quit)
           BUILT_SHA=${{ github.sha }}
           echo "Uploading: ${SNAP_FILE}"
           echo "Built from commit: ${BUILT_SHA}"

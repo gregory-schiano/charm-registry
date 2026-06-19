@@ -540,7 +540,7 @@ func TestCreateTracks(t *testing.T) {
 func TestFindEndpoint(t *testing.T) {
 	t.Parallel()
 	handler := newTestHandler(t, testCfg)
-	resp := doRequest(t, handler, "GET", "/v2/charms/find?q=nonexistent", nil, "Bearer dev:alice:alice")
+	resp := doRequest(t, handler, "GET", "/v2/charms/find?q=nonexistent", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	results := body["results"].([]any)
@@ -991,6 +991,36 @@ func TestHandlersRejectBadAuth(t *testing.T) {
 
 }
 
+func TestProtectedRoutesRemainAuthenticated(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, http.MethodPost, "/v1/charm",
+		map[string]any{"name": "protected"}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"register package", http.MethodPost, "/v1/charm", map[string]any{"name": "protected"}},
+		{"upload artifact", http.MethodPost, "/unscanned-upload/", nil},
+		{"push revision", http.MethodPost, "/v1/charm/protected/revisions", map[string]any{"upload-id": "x"}},
+		{"oci credentials", http.MethodGet, "/v1/charm/protected/resources/image/oci-image/upload-credentials", nil},
+		{"admin sync rules", http.MethodGet, "/v1/admin/charmhub-sync", nil},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			resp := doRequest(t, handler, test.method, test.path, test.body, "")
+			assert.Equal(t, http.StatusUnauthorized, resp.Code)
+		})
+	}
+}
+
 func TestPackageMutationRouteAuthBoundaries(t *testing.T) {
 	t.Parallel()
 
@@ -1330,6 +1360,22 @@ func TestLibrariesBulkWithPayload(t *testing.T) {
 
 }
 
+func TestSingleLibraryLookupNoAuthReturnsNotFound(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, http.MethodGet,
+		"/v1/charm/libraries/example/00000000000000000000000000000000", nil, "")
+
+	require.Equal(t, http.StatusNotFound, resp.Code)
+	body := decodeJSON(t, resp)
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	apiErr := errorList[0].(map[string]any)
+	assert.Equal(t, "not-found", apiErr["code"])
+	assert.Equal(t, "library not found", apiErr["message"])
+}
+
 func TestLibrariesBulkRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
 	handler := newTestHandler(t, config.Config{
@@ -1380,26 +1426,31 @@ func TestFullPublishAndDownloadWithResources(t *testing.T) {
 	assert.Equal(t, "/v1/charm/full-charm/releases", resp.Header().Get("Location"))
 
 	// Info - should show resource downloads
-	resp = doRequest(t, handler, "GET", "/v2/charms/info/full-charm", nil, authHeader)
+	resp = doRequest(t, handler, "GET", "/v2/charms/info/full-charm", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	infoBody := decodeJSON(t, resp)
 	defaultRelease := infoBody["default-release"].(map[string]any)
 	resources := defaultRelease["resources"].([]any)
 	assert.Len(t, resources, 1)
 
+	// Resource revisions are part of Juju's anonymous Charmhub consumer API.
+	resp = doRequest(t, handler, "GET",
+		"/v2/charms/resources/full-charm/config/revisions", nil, "")
+	assert.Equal(t, http.StatusOK, resp.Code)
+
 	// Download charm
 	resp = doRequest(t, handler, "GET",
-		"/api/v1/charms/download/"+pkgID+"_1.charm", nil, authHeader)
+		"/api/v1/charms/download/"+pkgID+"_1.charm", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Download resource
 	resp = doRequest(t, handler, "GET",
-		"/api/v1/resources/download/charm_"+pkgID+".config_1", nil, authHeader)
+		"/api/v1/resources/download/charm_"+pkgID+".config_1", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Equal(t, []byte("resource-data"), resp.Body.Bytes())
 
 	// Find
-	resp = doRequest(t, handler, "GET", "/v2/charms/find?q=full", nil, authHeader)
+	resp = doRequest(t, handler, "GET", "/v2/charms/find?q=full", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	findBody := decodeJSON(t, resp)
 	results := findBody["results"].([]any)
@@ -1417,9 +1468,116 @@ func TestFullPublishAndDownloadWithResources(t *testing.T) {
 				map[string]any{"name": "config", "revision": 1},
 			},
 		}},
-	}, authHeader)
+	}, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 
+}
+
+func TestOptionalConsumerRoutesRejectInvalidCredentials(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, http.MethodGet, "/v2/charms/find?q=test", nil, "Bearer invalid")
+
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "authentication required")
+}
+
+func TestAnonymousConsumerRoutesDoNotExposePrivatePackage(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+
+	resp := doRequest(t, handler, http.MethodPost, "/v1/charm",
+		map[string]any{"name": "private-consumer-charm", "private": true}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	packageID := decodeJSON(t, resp)["id"].(string)
+
+	resp = doMultipartUpload(t, handler,
+		buildTestCharmArchiveWithResources(t, "private-consumer-charm"),
+		"private-consumer-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	charmUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, http.MethodPost, "/v1/charm/private-consumer-charm/revisions",
+		map[string]any{"upload-id": charmUploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doMultipartUpload(t, handler, []byte("private resource"), "config.yaml", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	resourceUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, http.MethodPost,
+		"/v1/charm/private-consumer-charm/resources/config/revisions",
+		map[string]any{"upload-id": resourceUploadID, "type": "file"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doJSONRequest(t, handler, http.MethodPost,
+		"/v1/charm/private-consumer-charm/releases",
+		`[{"channel":"latest/stable","revision":1,"resources":[{"name":"config","revision":1}]}]`,
+		authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, http.MethodGet,
+		"/v2/charms/find?q=private-consumer-charm", nil, "")
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Empty(t, decodeJSON(t, resp)["results"].([]any))
+
+	protectedReads := []string{
+		"/v2/charms/info/private-consumer-charm",
+		"/v2/charms/resources/private-consumer-charm/config/revisions",
+		"/api/v1/charms/download/" + packageID + "_1.charm",
+		"/api/v1/resources/download/charm_" + packageID + ".config_1",
+	}
+	for _, path := range protectedReads {
+		resp = doRequest(t, handler, http.MethodGet, path, nil, "")
+		assert.Equal(t, http.StatusUnauthorized, resp.Code, path)
+	}
+
+	resp = doRequest(t, handler, http.MethodPost, "/v2/charms/refresh", map[string]any{
+		"context": []any{},
+		"actions": []any{map[string]any{
+			"action":       "refresh",
+			"instance-key": "private/0",
+			"name":         "private-consumer-charm",
+			"channel":      "latest/stable",
+		}},
+	}, "")
+	require.Equal(t, http.StatusOK, resp.Code)
+	results := decodeJSON(t, resp)["results"].([]any)
+	require.Len(t, results, 1)
+	item := results[0].(map[string]any)
+	assert.Equal(t, "error", item["result"])
+	assert.Equal(t, "unauthorized", item["error"].(map[string]any)["code"])
+
+	// Optional authentication must preserve private access for an authorized caller.
+	authorizedReads := []string{
+		"/v2/charms/info/private-consumer-charm",
+		"/v2/charms/resources/private-consumer-charm/config/revisions",
+		"/api/v1/charms/download/" + packageID + "_1.charm",
+		"/api/v1/resources/download/charm_" + packageID + ".config_1",
+	}
+	for _, path := range authorizedReads {
+		resp = doRequest(t, handler, http.MethodGet, path, nil, authHeader)
+		assert.Equal(t, http.StatusOK, resp.Code, path)
+	}
+
+	resp = doRequest(t, handler, http.MethodGet,
+		"/v2/charms/find?q=private-consumer-charm", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Len(t, decodeJSON(t, resp)["results"].([]any), 1)
+
+	resp = doRequest(t, handler, http.MethodPost, "/v2/charms/refresh", map[string]any{
+		"context": []any{},
+		"actions": []any{map[string]any{
+			"action":       "refresh",
+			"instance-key": "private/0",
+			"name":         "private-consumer-charm",
+			"channel":      "latest/stable",
+		}},
+	}, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	results = decodeJSON(t, resp)["results"].([]any)
+	require.Len(t, results, 1)
+	assert.NotEqual(t, "error", results[0].(map[string]any)["result"])
 }
 
 func TestInfoEndpointSupportsChannelQuery(t *testing.T) {

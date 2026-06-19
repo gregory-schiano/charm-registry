@@ -43,7 +43,7 @@ spread -v ./tests/spread/...
 |----------|---------|---------|
 | `FTEST_API_URL` | `http://localhost:8080` | Charm registry API |
 | `FTEST_OCI_URL` | `https://127.0.0.1:5000` | OCI registry (TLS) |
-| `FTEST_OCI_CERT_PATH` | `/var/snap/charm-registry/common/certs/oci.crt` | OCI CA cert |
+| `FTEST_OCI_CERT_PATH` | `/var/snap/spellbook/common/certs/oci.crt` | OCI CA cert |
 | `FTEST_ADMIN_SUBJECT` | `admin` | Dev-auth subject |
 | `FTEST_ADMIN_USER` | `admin` | Dev-auth username |
 

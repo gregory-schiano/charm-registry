@@ -27,16 +27,19 @@ export CHARM_REGISTRY_DATA_DIR=/var/lib/charm-registry
 
 The snap packages the registry binary, admin CLI, and a wrapper script that handles snap-specific configuration and certificate management.
 
+The Snap Store package is currently named `spellbook`. This is temporary while the Charm Registry name is being reserved; the installed service remains `charm-registry`, and the packaged CLI remains `charm-registryctl`.
+
 ### Install
 
 ```bash
-snap install charm-registry
+sudo snap install spellbook
 ```
 
-The service does not auto-start on install (`install-mode: disable`). Start it explicitly:
+The service does not auto-start on install (`install-mode: disable`). Set the required OCI credential encryption key before starting it:
 
 ```bash
-snap start charm-registry
+sudo snap set spellbook oci.secret-key="$(openssl rand -hex 32)"
+sudo snap start spellbook
 ```
 
 ### Defaults
@@ -47,57 +50,108 @@ The snap defaults to standalone mode:
 - **Blob storage:** Filesystem under `$SNAP_COMMON/data/blobs/`
 - **OCI storage:** Filesystem under `$SNAP_COMMON/data/oci-registry/`
 - **OCI TLS:** Self-signed certificate at `$SNAP_COMMON/certs/oci.crt`
-- **API TLS:** Disabled by default. Enable with `snap set charm-registry tls.enabled=true`
+- **API TLS:** Disabled by default. Enable with `sudo snap set spellbook tls.enabled=true`
 
-### Configuration
+### Service management
+
+Manage the snap by package name. `snap services spellbook` shows the daemon as `spellbook.charm-registry`.
+
+```bash
+sudo snap start spellbook
+sudo snap stop spellbook
+sudo snap restart spellbook
+snap services spellbook
+```
+
+View service logs and inspect current snap configuration:
+
+```bash
+sudo snap logs spellbook.charm-registry
+snap get spellbook
+snap get spellbook oci.secret-key
+```
+
+### Standalone configuration
+
+Standalone mode is the default and uses SQLite plus filesystem storage under `/var/snap/spellbook/common/data/`. Configure the public URLs that Juju, Charmcraft, and OCI clients should use:
+
+```bash
+sudo snap set spellbook public-api-url=https://registry.example.com:8080
+sudo snap set spellbook public-storage-url=https://registry.example.com:8080
+sudo snap set spellbook public-registry-url=https://registry.example.com:5000
+```
+
+For local-only experiments, development bearer tokens can be enabled and an admin username bootstrapped:
+
+```bash
+sudo snap set spellbook enable-insecure-dev-auth=true
+sudo snap set spellbook admin.usernames=admin
+```
+
+Never enable insecure development auth on a network-reachable deployment.
+
+### Production configuration
 
 Snap configuration uses dotted keys that the wrapper maps to environment variables:
 
 ```bash
 # Networking
-snap set charm-registry public-api-url=https://registry.example.com:8080
-snap set charm-registry public-storage-url=https://registry.example.com:8080
-snap set charm-registry public-registry-url=https://registry.example.com:5000
+sudo snap set spellbook public-api-url=https://registry.example.com:8080
+sudo snap set spellbook public-storage-url=https://registry.example.com:8080
+sudo snap set spellbook public-registry-url=https://registry.example.com:5000
 
 # API TLS
-snap set charm-registry tls.enabled=true
-snap set charm-registry tls.cert-file=/path/to/registry.crt
-snap set charm-registry tls.key-file=/path/to/registry.key
+sudo snap set spellbook tls.enabled=true
+sudo snap set spellbook tls.cert-file=/path/to/registry.crt
+sudo snap set spellbook tls.key-file=/path/to/registry.key
 
 # OIDC
-snap set charm-registry oidc.issuer-url=https://sso.example.com/realms/main
-snap set charm-registry oidc.client-id=charm-registry
+sudo snap set spellbook oidc.issuer-url=https://sso.example.com/realms/main
+sudo snap set spellbook oidc.client-id=charm-registry
 
 # Admin identities
-snap set charm-registry admin.usernames=admin
-snap set charm-registry admin.emails=admin@example.com
+sudo snap set spellbook admin.usernames=admin
+sudo snap set spellbook admin.emails=admin@example.com
 
 # OCI secret key (required)
-snap set charm-registry oci.secret-key=$(openssl rand -hex 32)
+sudo snap set spellbook oci.secret-key="$(openssl rand -hex 32)"
 
 # Token and IP rate limits
-snap set charm-registry rate-limit.ip-limit=120
-snap set charm-registry rate-limit.ip-window=1m
-snap set charm-registry rate-limit.token-limit=5
-snap set charm-registry rate-limit.token-window=1m
+sudo snap set spellbook rate-limit.ip-limit=120
+sudo snap set spellbook rate-limit.ip-window=1m
+sudo snap set spellbook rate-limit.token-limit=5
+sudo snap set spellbook rate-limit.token-window=1m
 
 # Switch to Postgres
-snap set charm-registry database.backend=postgres
-snap set charm-registry database.url='postgres://user:<password>@host:5432/charm_registry?sslmode=require'
+sudo snap set spellbook database.backend=postgres
+sudo snap set spellbook database.url='postgres://user:<password>@host:5432/charm_registry?sslmode=require'
 
 # Switch to S3 storage
-snap set charm-registry storage.backend=s3
-snap set charm-registry storage.s3.endpoint=https://s3.example.com
-snap set charm-registry storage.s3.bucket=charm-registry-blobs
-snap set charm-registry storage.s3.access-key-id=AKIA...
-snap set charm-registry storage.s3.secret-access-key=...
+sudo snap set spellbook storage.backend=s3
+sudo snap set spellbook storage.s3.endpoint=https://s3.example.com
+sudo snap set spellbook storage.s3.bucket=charm-registry-blobs
+sudo snap set spellbook storage.s3.access-key-id=AKIA...
+sudo snap set spellbook storage.s3.secret-access-key=...
 ```
 
 After changing snap configuration, restart the service:
 
 ```bash
-snap restart charm-registry
+sudo snap restart spellbook
 ```
+
+Invoke the packaged admin CLI as `spellbook.charm-registryctl`:
+
+```bash
+spellbook.charm-registryctl --url https://registry.example.com:8080 --token '<admin-token>' sync list
+spellbook.charm-registryctl sync add postgresql-k8s --track 14
+spellbook.charm-registryctl sync run postgresql-k8s
+```
+
+Project links:
+
+- Repository: <https://github.com/gregory-schiano/charm-registry>
+- Issue tracker: <https://github.com/gregory-schiano/charm-registry/issues>
 
 ### Certificate management
 
@@ -109,10 +163,10 @@ The snap's configure hook automatically generates self-signed TLS certificates:
 Certificates are regenerated when the hostname changes. For production, replace the self-signed certificates with CA-issued certificates:
 
 ```bash
-snap set charm-registry tls.cert-file=/etc/ssl/certs/registry.crt
-snap set charm-registry tls.key-file=/etc/ssl/private/registry.key
-snap set charm-registry oci.tls.cert-file=/etc/ssl/certs/oci.crt
-snap set charm-registry oci.tls.key-file=/etc/ssl/private/oci.key
+sudo snap set spellbook tls.cert-file=/etc/ssl/certs/registry.crt
+sudo snap set spellbook tls.key-file=/etc/ssl/private/registry.key
+sudo snap set spellbook oci.tls.cert-file=/etc/ssl/certs/oci.crt
+sudo snap set spellbook oci.tls.key-file=/etc/ssl/private/oci.key
 ```
 
 The snap maps `tls.cert-file` and `tls.key-file` to `CHARM_REGISTRY_API_TLS_CERT_FILE` and `CHARM_REGISTRY_API_TLS_KEY_FILE`; the main API server reads those variables and serves HTTPS when both are set.

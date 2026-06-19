@@ -56,11 +56,23 @@ paths:
       summary: Upload a charm or resource blob for later publishing
   /v2/charms/find:
     get:
-      summary: Search charms
+      summary: Search public charms, optionally including authorized private charms
+      description: Authentication is optional; invalid supplied credentials are rejected.
   /v2/charms/info/{name}:
     get:
-      summary: Get charm info
+      summary: Get public charm info, or authorized private charm info
+      description: Authentication is optional; invalid supplied credentials are rejected.
   /v2/charms/refresh:
     post:
-      summary: Resolve revisions and resources for Juju refresh/install flows
+      summary: Resolve public revisions and resources for Juju refresh/install flows
+      description: Authentication is optional and extends results to authorized private charms.
+  /v2/charms/resources/{name}/{resource}/revisions:
+    get:
+      summary: List resource revisions for a public or authorized private charm
+  /api/v1/charms/download/{filename}:
+    get:
+      summary: Download a public or authorized private charm artifact
+  /api/v1/resources/download/{filename}:
+    get:
+      summary: Download a public or authorized private resource artifact
 `

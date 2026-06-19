@@ -74,6 +74,7 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 	router.Get("/docs", api.handleDocs)
 
 	router.Group(func(r chi.Router) {
+		r.Get("/v1/charm/libraries/{charm}/{libraryID}", api.handleLibraryNotFound)
 		r.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
 	})
 	router.Group(func(r chi.Router) {
@@ -111,13 +112,13 @@ func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, auth
 
 		r.Post("/unscanned-upload/", api.requireIdentity(api.handleUnscannedUpload))
 
-		r.Get("/v2/charms/find", api.requireIdentity(api.handleFind))
-		r.Get("/v2/charms/info/{name}", api.requireIdentity(api.handleInfo))
-		r.Post("/v2/charms/refresh", api.requireIdentity(api.handleRefresh))
-		r.Get("/v2/charms/resources/{name}/{resource}/revisions", api.requireIdentity(api.handleListResourceRevisions))
+		r.Get("/v2/charms/find", api.optionalIdentity(api.handleFind))
+		r.Get("/v2/charms/info/{name}", api.optionalIdentity(api.handleInfo))
+		r.Post("/v2/charms/refresh", api.optionalIdentity(api.handleRefresh))
+		r.Get("/v2/charms/resources/{name}/{resource}/revisions", api.optionalIdentity(api.handleListResourceRevisions))
 
-		r.Get("/api/v1/charms/download/{filename}", api.requireIdentity(api.handleCharmDownload))
-		r.Get("/api/v1/resources/download/{filename}", api.requireIdentity(api.handleResourceDownload))
+		r.Get("/api/v1/charms/download/{filename}", api.optionalIdentity(api.handleCharmDownload))
+		r.Get("/api/v1/resources/download/{filename}", api.optionalIdentity(api.handleResourceDownload))
 	})
 	return router
 }
@@ -205,6 +206,21 @@ func (a *API) resolveIdentity(r *http.Request) (core.Identity, error) {
 
 func (a *API) requireIdentity(next func(w http.ResponseWriter, r *http.Request, identity core.Identity)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		identity, err := a.resolveIdentity(r)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		next(w, r, identity)
+	}
+}
+
+func (a *API) optionalIdentity(next func(w http.ResponseWriter, r *http.Request, identity core.Identity)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			next(w, r, core.Identity{})
+			return
+		}
 		identity, err := a.resolveIdentity(r)
 		if err != nil {
 			writeError(w, r, err)

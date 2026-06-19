@@ -90,7 +90,7 @@ database, charm blobs, and OCI storage together:
 tar czf charm-registry-data-$(date +%Y%m%d).tar.gz -C "$CHARM_REGISTRY_DATA_DIR" .
 ```
 
-For the snap, the data directory is `/var/snap/charm-registry/common/data/`.
+For the snap, the data directory is `/var/snap/spellbook/common/data/`.
 
 ## Full Stack Restore Procedure
 
@@ -98,7 +98,7 @@ For the snap, the data directory is `/var/snap/charm-registry/common/data/`.
 
    ```bash
    # Snap deployment:
-   sudo snap stop charm-registry
+   sudo snap stop spellbook
    # Binary deployment: stop the systemd service or send SIGTERM
    ```
 
@@ -110,14 +110,14 @@ For the snap, the data directory is `/var/snap/charm-registry/common/data/`.
    deployment: `certs/` for a local checkout, `$SNAP_COMMON/certs/` for the snap):
 
    ```bash
-   openssl x509 -checkend 86400 -noout -in /var/snap/charm-registry/common/certs/oci.crt
+   openssl x509 -checkend 86400 -noout -in /var/snap/spellbook/common/certs/oci.crt
    ```
 
 5. **Restart the application**:
 
    ```bash
    # Snap deployment:
-   sudo snap start charm-registry
+   sudo snap start spellbook
    # Binary deployment: start the systemd service
    ```
 

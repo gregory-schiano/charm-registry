@@ -75,27 +75,28 @@ Token issuance is rate-limited to 5 tokens per minute per identity by default, c
 
 ### Charm libraries
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/v1/charm/libraries/bulk` | Bulk library query (returns empty list — not implemented) |
+| Method | Path | Access | Purpose |
+|--------|------|--------|---------|
+| `GET` | `/v1/charm/libraries/{charm}/{library-id}` | Public | Single library lookup (returns not found — hosting is not implemented) |
+| `POST` | `/v1/charm/libraries/bulk` | Public | Bulk library query (returns empty list — hosting is not implemented) |
 
 ## Consumer API (juju)
 
 These endpoints are used by `juju` when deploying and refreshing charms.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/v2/charms/find` | Find charms matching a query |
-| `GET` | `/v2/charms/info/{name}` | Get charm info |
-| `POST` | `/v2/charms/refresh` | Resolve refresh actions |
-| `GET` | `/v2/charms/resources/{name}/{resource}/revisions` | List resource revisions |
+| Method | Path | Access | Purpose |
+|--------|------|--------|---------|
+| `GET` | `/v2/charms/find` | Public, optional auth | Find charms matching a query |
+| `GET` | `/v2/charms/info/{name}` | Public, optional auth | Get charm info |
+| `POST` | `/v2/charms/refresh` | Public, optional auth | Resolve refresh actions |
+| `GET` | `/v2/charms/resources/{name}/{resource}/revisions` | Public, optional auth | List resource revisions |
 
 ### Artifact download
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/v1/charms/download/{name}_{revision}.charm` | Download a charm archive |
-| `GET` | `/api/v1/resources/download/{filename}` | Download a resource artifact |
+| Method | Path | Access | Purpose |
+|--------|------|--------|---------|
+| `GET` | `/api/v1/charms/download/{name}_{revision}.charm` | Public, optional auth | Download a charm archive |
+| `GET` | `/api/v1/resources/download/{filename}` | Public, optional auth | Download a resource artifact |
 
 ## Infrastructure endpoints
 
@@ -109,9 +110,22 @@ These endpoints are used by `juju` when deploying and refreshing charms.
 
 ## Compatibility notes
 
-### Authentication requirement on v2 endpoints
+### Public consumer authentication contract
 
-Currently, all v2 consumer endpoints require authentication (`requireIdentity` middleware). This differs from real Charmhub, which allows unauthenticated `find` and `refresh` for public charms. If `juju find` or anonymous `juju refresh` does not work against your registry, this is why. A public/anonymous read path for non-private packages is on the roadmap.
+Juju's Charmhub client does not send credentials for discovery, info, refresh,
+resource-revision lookup, or artifact downloads. Those consumer endpoints are
+therefore a stable public compatibility contract:
+
+- requests without credentials can see and download public packages only;
+- valid credentials additionally expose private packages the identity is
+  authorized to view;
+- malformed, expired, revoked, or otherwise invalid supplied credentials return
+  `401` instead of falling back to anonymous access;
+- publishing, package management, uploads, token management, OCI credentials,
+  and administration remain authenticated.
+
+Do not place the consumer endpoints behind mandatory authentication. Regression
+tests cover the anonymous Juju flow and private-package isolation.
 
 ### Upload flow
 
@@ -119,7 +133,10 @@ The push-revision endpoint accepts a JSON body with an `upload-id` field, not a 
 
 ### Libraries
 
-`/v1/charm/libraries/bulk` returns an empty list. Library hosting is intentionally not implemented. Charm libraries should be vendored or shared via git.
+Charmcraft uses an anonymous client for both single and bulk library lookups.
+The routes stay public for client compatibility, but this registry does not host
+libraries: single lookup returns `404` and bulk lookup returns an empty list.
+Charm libraries should be vendored or shared via git.
 
 ### Bundles
 

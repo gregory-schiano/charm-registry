@@ -1,4 +1,5 @@
-name: charm-registry
+name: spellbook
+license: Apache-2.0
 base: core24
 version: "0.1"
 summary: Private charm registry
@@ -6,6 +7,10 @@ description: |
   A private charm registry compatible with stock Juju and Charmcraft workflows.
   It stores charm metadata and artifacts, exposes publisher and consumer APIs,
   and includes an embedded OCI registry for image resources.
+icon: snap/gui/icon.svg
+website: https://github.com/gregory-schiano/charm-registry
+source-code: https://github.com/gregory-schiano/charm-registry
+issues: https://github.com/gregory-schiano/charm-registry/issues
 
 grade: devel
 confinement: strict

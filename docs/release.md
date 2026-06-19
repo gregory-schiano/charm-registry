@@ -176,7 +176,7 @@ skopeo copy docker://ghcr.io/<org>/charm-registry:<tag> oci-archive:local.rock
 ### Snap
 
 ```bash
-snap info charm-registry
+snap info spellbook
 # Check channel map shows the expected revision on the target channel
 ```
 

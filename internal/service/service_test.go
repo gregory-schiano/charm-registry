@@ -145,21 +145,101 @@ func TestPrivatePackagesRequireAuthentication(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestService()
 	owner := newIdentity("owner-2", "owner")
-	_, err := svc.RegisterPackage(ctx, owner, "secret-charm", "charm", true)
+	pkg, err := svc.RegisterPackage(ctx, owner, "secret-charm", "charm", true)
+	require.NoError(t, err)
+	upload, err := svc.CreateUpload(ctx, "secret-charm.charm", buildCharmArchive(t, "secret-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: upload.ID})
+	require.NoError(t, err)
+	_, err = svc.CreateRelease(ctx, owner, pkg.Name, []core.Release{{
+		Channel:  "latest/stable",
+		Revision: 1,
+	}})
 	require.NoError(t, err)
 
-	// Unauthenticated SearchPackages should return unauthorized.
-	_, err = svc.SearchPackages(ctx, core.Identity{}, "secret")
+	// Anonymous search is public but must omit private packages.
+	results, err := svc.SearchPackages(ctx, core.Identity{}, "secret")
+	require.NoError(t, err)
+	assert.Empty(t, results.Results)
+
+	// Direct private-package access still requires authentication.
+	_, err = svc.GetPackage(ctx, core.Identity{}, "secret-charm", false)
 	require.Error(t, err)
 	var svcErr *Error
 	require.ErrorAs(t, err, &svcErr)
 	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+}
 
-	// Unauthenticated GetPackage should also return unauthorized.
-	_, err = svc.GetPackage(ctx, core.Identity{}, "secret-charm", false)
-	require.Error(t, err)
-	require.ErrorAs(t, err, &svcErr)
-	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+func TestAnonymousPublicConsumerServiceAccess(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("public-owner", "public-owner")
+	anonymous := core.Identity{}
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "anonymous-public-charm", "charm", false)
+	require.NoError(t, err)
+	charmPayload := buildCharmArchive(t, "anonymous-public-charm")
+	charmUpload, err := svc.CreateUpload(ctx, "anonymous-public-charm.charm", charmPayload)
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, pkg.Name, PushRevisionRequest{UploadID: charmUpload.ID})
+	require.NoError(t, err)
+
+	resourcePayload := []byte("anonymous resource")
+	resourceUpload, err := svc.CreateUpload(ctx, "config.yaml", resourcePayload)
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, pkg.Name, "config", PushResourceRequest{
+		UploadID: resourceUpload.ID,
+		Type:     "file",
+	})
+	require.NoError(t, err)
+	_, err = svc.CreateRelease(ctx, owner, pkg.Name, []core.Release{{
+		Channel:  "latest/stable",
+		Revision: 1,
+		Resources: []core.ReleaseResourceRef{{
+			Name:     "config",
+			Revision: intPtr(1),
+		}},
+	}})
+	require.NoError(t, err)
+
+	search, err := svc.SearchPackages(ctx, anonymous, "anonymous-public")
+	require.NoError(t, err)
+	require.Len(t, search.Results, 1)
+
+	info, err := svc.GetPackageInfo(ctx, anonymous, pkg.Name)
+	require.NoError(t, err)
+	assert.Equal(t, pkg.ID, info.ID)
+
+	refresh, err := svc.ResolveRefresh(ctx, anonymous, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "refresh",
+			InstanceKey: "anonymous/0",
+			Name:        stringPtr(pkg.Name),
+			Channel:     stringPtr("latest/stable"),
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, refresh.Results, 1)
+	require.Nil(t, refresh.Results[0].Error)
+
+	resourceRevisions, err := svc.ListResourceRevisions(ctx, anonymous, pkg.Name, "config")
+	require.NoError(t, err)
+	require.Len(t, resourceRevisions, 1)
+
+	charmReader, _, err := svc.DownloadCharmStream(ctx, anonymous, pkg.ID, 1)
+	require.NoError(t, err)
+	charmContent, err := io.ReadAll(charmReader)
+	require.NoError(t, err)
+	require.NoError(t, charmReader.Close())
+	assert.Equal(t, charmPayload, charmContent)
+
+	resourceReader, _, err := svc.DownloadResourceStream(ctx, anonymous, pkg.ID, "config", 1)
+	require.NoError(t, err)
+	resourceContent, err := io.ReadAll(resourceReader)
+	require.NoError(t, err)
+	require.NoError(t, resourceReader.Close())
+	assert.Equal(t, resourcePayload, resourceContent)
 }
 
 func TestRegisterPackageDoesNotRequireOCIProvisioning(t *testing.T) {
@@ -1429,15 +1509,13 @@ func TestPublicPackageAccessibleAnonymously(t *testing.T) {
 	_, err := svc.RegisterPackage(ctx, owner, "public-charm", "charm", false)
 	require.NoError(t, err)
 
-	// Unauthenticated access is rejected even for public packages.
-	_, err = svc.GetPackage(ctx, core.Identity{}, "public-charm", true)
-	require.Error(t, err)
-	var svcErr *Error
-	require.ErrorAs(t, err, &svcErr)
-	assert.Equal(t, ErrorKindUnauthorized, svcErr.Kind)
+	// Anonymous callers can view public packages.
+	pkg, err := svc.GetPackage(ctx, core.Identity{}, "public-charm", true)
+	require.NoError(t, err)
+	assert.Equal(t, "public-charm", pkg.Name)
 
 	// Authenticated user can view public packages.
-	pkg, err := svc.GetPackage(ctx, newIdentity("other-1", "bob"), "public-charm", true)
+	pkg, err = svc.GetPackage(ctx, newIdentity("other-1", "bob"), "public-charm", true)
 	require.NoError(t, err)
 	assert.Equal(t, "public-charm", pkg.Name)
 }

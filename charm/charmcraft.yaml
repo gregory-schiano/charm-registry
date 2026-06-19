@@ -3,6 +3,7 @@
 # For questions or help, visit https://matrix.to/#/#12-factor-charms:ubuntu.com 
 
 name: charm-registry
+license: Apache-2.0
 
 type: charm
 

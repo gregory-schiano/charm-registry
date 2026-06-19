@@ -512,6 +512,7 @@ func isAllowedDownloadHost(host, baseURL string) bool {
 	// Known Charmhub CDN / storage hosts.
 	allowedSuffixes := []string{
 		".charmhub.io",
+		".cdn.snapcraftcontent.com",
 		".juju.is",
 		".canonical.com",
 	}
