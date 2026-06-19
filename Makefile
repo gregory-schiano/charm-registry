@@ -163,10 +163,10 @@ functional-test: functional-test-build
 # ---------- Artifact packaging ----------
 
 charm-pack:
-	cd charm && charmcraft pack
+	cd charm && CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=true charmcraft pack
 
 rock-pack:
-	rockcraft pack
+	ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=true rockcraft pack
 
 rock-smoke-test:
 	bash scripts/rock-smoke-test.sh $(ROCK_FILE)

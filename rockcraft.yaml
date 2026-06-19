@@ -39,6 +39,9 @@ parts:
     # Match go.mod's toolchain requirement.
     build-snaps:
     - go/1.26/stable
+    build-environment:
+    - CGO_ENABLED: "0"
+    - GOTOOLCHAIN: local
 #    organize:
 #    # if the main package is in the base directory and the rockcraft name
 #    # attribute is equal to the go module name, the name of the server will
