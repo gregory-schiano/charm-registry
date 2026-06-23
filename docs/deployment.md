@@ -35,12 +35,16 @@ The Snap Store package is currently named `spellbook`. This is temporary while t
 sudo snap install spellbook
 ```
 
-The service does not auto-start on install (`install-mode: disable`). Set the required OCI credential encryption key before starting it:
+The service does not auto-start on install (`install-mode: disable`). Set the required OCI credential encryption key and configure authentication before starting it. For local-only standalone testing, enable development auth:
 
 ```bash
 sudo snap set spellbook oci.secret-key="$(openssl rand -hex 32)"
+sudo snap set spellbook insecure-dev-auth=true
+sudo snap set spellbook admin.usernames=admin
 sudo snap start spellbook
 ```
+
+For production, configure OIDC and admin identities instead of `insecure-dev-auth`.
 
 ### Defaults
 
@@ -81,10 +85,10 @@ sudo snap set spellbook public-storage-url=https://registry.example.com:8080
 sudo snap set spellbook public-registry-url=https://registry.example.com:5000
 ```
 
-For local-only experiments, development bearer tokens can be enabled and an admin username bootstrapped:
+For local-only experiments, development bearer tokens can be enabled and an admin username bootstrapped before the service starts:
 
 ```bash
-sudo snap set spellbook enable-insecure-dev-auth=true
+sudo snap set spellbook insecure-dev-auth=true
 sudo snap set spellbook admin.usernames=admin
 ```
 
@@ -121,6 +125,11 @@ sudo snap set spellbook rate-limit.ip-limit=120
 sudo snap set spellbook rate-limit.ip-window=1m
 sudo snap set spellbook rate-limit.token-limit=5
 sudo snap set spellbook rate-limit.token-window=1m
+
+# Charm archive and upload byte limits
+sudo snap set spellbook limits.max-archive-file-bytes=33554432
+sudo snap set spellbook limits.max-upload-bytes=134217728
+sudo snap set spellbook charmhub.max-artifact-bytes=134217728
 
 # Switch to Postgres
 sudo snap set spellbook database.backend=postgres

@@ -221,6 +221,9 @@ Snap keys use dotted paths that correspond to the environment variable names. Su
 | `insecure-dev-auth` | `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH` | Boolean; development only |
 | `charmhub.url` | `CHARM_REGISTRY_CHARMHUB_URL` | Charmhub API URL |
 | `charmhub.sync-interval` | `CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL` | Sync interval duration |
+| `charmhub.max-artifact-bytes` | `CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES` | Positive integer byte limit for synchronized Charmhub artifact downloads |
+| `limits.max-archive-file-bytes` | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` | Positive integer byte limit for each decompressed charm archive entry |
+| `limits.max-upload-bytes` | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` | Positive integer byte limit for upload request bodies |
 | `rate-limit.ip-limit` | `CHARM_REGISTRY_IP_RATE_LIMIT` | Non-negative integer; `0` disables IP limiting |
 | `rate-limit.ip-window` | `CHARM_REGISTRY_IP_RATE_WINDOW` | Positive duration such as `30s`, `1m`, or `2h` |
 | `rate-limit.token-limit` | `CHARM_REGISTRY_TOKEN_RATE_LIMIT` | Non-negative integer; `0` disables token issuance limiting |

@@ -50,6 +50,9 @@ CHARM_REGISTRY_ADMIN_USERNAMES admin.usernames always
 CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH insecure-dev-auth always
 CHARM_REGISTRY_CHARMHUB_URL charmhub.url always
 CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL charmhub.sync-interval always
+CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES charmhub.max-artifact-bytes always
+CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES limits.max-archive-file-bytes always
+CHARM_REGISTRY_MAX_UPLOAD_BYTES limits.max-upload-bytes always
 CHARM_REGISTRY_IP_RATE_LIMIT rate-limit.ip-limit always
 CHARM_REGISTRY_IP_RATE_WINDOW rate-limit.ip-window always
 CHARM_REGISTRY_TOKEN_RATE_LIMIT rate-limit.token-limit always
