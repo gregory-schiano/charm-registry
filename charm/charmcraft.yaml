@@ -120,6 +120,23 @@ config:
       type: string
       default: 15m
       description: Interval between background Charmhub synchronization scans.
+    charmhub-max-artifact-bytes:
+      type: string
+      default: 64MB
+      description: >-
+        Maximum synchronized Charmhub artifact download size. Accepts bytes or
+        KB, MB, GB suffixes.
+    max-archive-file-bytes:
+      type: string
+      default: 10MB
+      description: >-
+        Maximum decompressed size for each charm archive entry. Accepts bytes
+        or KB, MB, GB suffixes.
+    max-upload-bytes:
+      type: string
+      default: 64MB
+      description: >-
+        Maximum upload request body size. Accepts bytes or KB, MB, GB suffixes.
     enable-insecure-dev-auth:
       type: boolean
       default: false

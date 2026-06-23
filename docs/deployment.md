@@ -127,9 +127,9 @@ sudo snap set spellbook rate-limit.token-limit=5
 sudo snap set spellbook rate-limit.token-window=1m
 
 # Charm archive and upload byte limits
-sudo snap set spellbook limits.max-archive-file-bytes=33554432
-sudo snap set spellbook limits.max-upload-bytes=134217728
-sudo snap set spellbook charmhub.max-artifact-bytes=134217728
+sudo snap set spellbook limits.max-archive-file-bytes=32MB
+sudo snap set spellbook limits.max-upload-bytes=128MB
+sudo snap set spellbook charmhub.max-artifact-bytes=128MB
 
 # Switch to Postgres
 sudo snap set spellbook database.backend=postgres

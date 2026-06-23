@@ -88,9 +88,9 @@ assert_accepts "valid rate limit options" \
 	rate-limit.token-window 30s
 assert_accepts "zero disables limit" rate-limit.ip-limit 0 rate-limit.token-limit 0
 assert_accepts "valid byte limits" \
-	limits.max-archive-file-bytes 33554432 \
-	limits.max-upload-bytes 134217728 \
-	charmhub.max-artifact-bytes 134217728
+	limits.max-archive-file-bytes 32MB \
+	limits.max-upload-bytes 128MB \
+	charmhub.max-artifact-bytes 1GB
 
 assert_rejects "negative IP limit" rate-limit.ip-limit -1
 assert_rejects "non-integer IP limit" rate-limit.ip-limit ten
@@ -100,8 +100,8 @@ assert_rejects "zero IP window" rate-limit.ip-window 0s
 assert_rejects "negative IP window" rate-limit.ip-window -1s
 assert_rejects "missing unit IP window" rate-limit.ip-window 60
 assert_rejects "non-duration token window" rate-limit.token-window minute
-assert_rejects "zero archive file byte limit" limits.max-archive-file-bytes 0
-assert_rejects "negative upload byte limit" limits.max-upload-bytes -1
+assert_rejects "zero archive file byte limit" limits.max-archive-file-bytes 0MB
+assert_rejects "negative upload byte limit" limits.max-upload-bytes -1MB
 assert_rejects "non-integer charmhub artifact byte limit" charmhub.max-artifact-bytes 64MiB
 
 echo "configure hook rate-limit validation tests passed"

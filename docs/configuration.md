@@ -109,6 +109,8 @@ The application requires either OIDC configuration or explicit opt-in to insecur
 | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` | `10485760` (10 MiB) | Max per-entry decompressed charm archive size |
 | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` | `67108864` (64 MiB) | Max upload body size |
 
+Byte-size variables accept raw bytes or an integer with a `KB`, `MB`, or `GB` suffix. Suffixes use binary units: `1KB` is 1024 bytes, `1MB` is 1048576 bytes, and `1GB` is 1073741824 bytes.
+
 The embedded OCI registry server has its own timeouts. Read and write timeouts default to `0` (disabled) so that large image blob transfers are never truncated:
 
 | Variable | Default | Description |
@@ -221,9 +223,9 @@ Snap keys use dotted paths that correspond to the environment variable names. Su
 | `insecure-dev-auth` | `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH` | Boolean; development only |
 | `charmhub.url` | `CHARM_REGISTRY_CHARMHUB_URL` | Charmhub API URL |
 | `charmhub.sync-interval` | `CHARM_REGISTRY_CHARMHUB_SYNC_INTERVAL` | Sync interval duration |
-| `charmhub.max-artifact-bytes` | `CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES` | Positive integer byte limit for synchronized Charmhub artifact downloads |
-| `limits.max-archive-file-bytes` | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` | Positive integer byte limit for each decompressed charm archive entry |
-| `limits.max-upload-bytes` | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` | Positive integer byte limit for upload request bodies |
+| `charmhub.max-artifact-bytes` | `CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES` | Positive byte-size limit for synchronized Charmhub artifact downloads, for example `134217728`, `128MB`, or `1GB` |
+| `limits.max-archive-file-bytes` | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` | Positive byte-size limit for each decompressed charm archive entry, for example `33554432` or `32MB` |
+| `limits.max-upload-bytes` | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` | Positive byte-size limit for upload request bodies, for example `134217728` or `128MB` |
 | `rate-limit.ip-limit` | `CHARM_REGISTRY_IP_RATE_LIMIT` | Non-negative integer; `0` disables IP limiting |
 | `rate-limit.ip-window` | `CHARM_REGISTRY_IP_RATE_WINDOW` | Positive duration such as `30s`, `1m`, or `2h` |
 | `rate-limit.token-limit` | `CHARM_REGISTRY_TOKEN_RATE_LIMIT` | Non-negative integer; `0` disables token issuance limiting |
@@ -236,3 +238,13 @@ that file as `$SNAP/etc/charm-registry/config-env.map`. Add or review snap
 configuration keys there instead of appending ad-hoc `snapctl get` calls to the
 wrapper; this keeps mappings centralized and makes key/env typos (including TLS
 certificate variables) visible in one table.
+
+## Charm configuration
+
+The charm exposes matching size-limit options and passes their string values directly to the Go application, so the same `KB`, `MB`, and `GB` syntax is supported:
+
+| Charm option | Environment variable |
+|--------------|----------------------|
+| `charmhub-max-artifact-bytes` | `CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES` |
+| `max-archive-file-bytes` | `CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES` |
+| `max-upload-bytes` | `CHARM_REGISTRY_MAX_UPLOAD_BYTES` |

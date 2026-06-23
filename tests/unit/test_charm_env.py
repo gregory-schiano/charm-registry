@@ -1,9 +1,9 @@
 # Copyright 2026 gschiano
 # See LICENSE file for licensing details.
 
-"""Unit tests for the charm's ingress-to-environment mapping."""
+"""Unit tests for the charm's environment mapping."""
 
-from charm import public_url_environment
+from charm import public_url_environment, size_limit_environment
 
 
 def test_no_ingress_yields_no_overrides():
@@ -34,4 +34,34 @@ def test_both_ingresses_set_all_three_urls():
         "CHARM_REGISTRY_PUBLIC_API_URL": "https://registry.example.com",
         "CHARM_REGISTRY_PUBLIC_STORAGE_URL": "https://registry.example.com",
         "CHARM_REGISTRY_PUBLIC_REGISTRY_URL": "https://oci.example.com",
+    }
+
+
+def test_size_limits_map_to_registry_environment():
+    env = size_limit_environment(
+        {
+            "charmhub-max-artifact-bytes": "128MB",
+            "max-archive-file-bytes": "32MB",
+            "max-upload-bytes": "1GB",
+        }
+    )
+
+    assert env == {
+        "CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES": "128MB",
+        "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES": "32MB",
+        "CHARM_REGISTRY_MAX_UPLOAD_BYTES": "1GB",
+    }
+
+
+def test_size_limits_skip_empty_values():
+    env = size_limit_environment(
+        {
+            "charmhub-max-artifact-bytes": "",
+            "max-archive-file-bytes": None,
+            "max-upload-bytes": " 128MB ",
+        }
+    )
+
+    assert env == {
+        "CHARM_REGISTRY_MAX_UPLOAD_BYTES": "128MB",
     }

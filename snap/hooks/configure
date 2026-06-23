@@ -18,13 +18,26 @@ validate_non_negative_integer() {
 	esac
 }
 
-validate_positive_integer() {
+validate_positive_byte_size() {
 	key="$1"
 	value="$(config_get "$key")"
+	value="$(printf '%s' "$value" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
 	case "$value" in
 		"") return 0 ;;
-		0 | *[!0-9]*)
-			echo "invalid $key: must be a positive integer" >&2
+		*KB) value="${value%KB}" ;;
+		*MB) value="${value%MB}" ;;
+		*GB) value="${value%GB}" ;;
+	esac
+	case "$value" in
+		"" | *[!0-9]*)
+			echo "invalid $key: must be a positive byte size such as 1048576, 1KB, 32MB, or 1GB" >&2
+			exit 1
+			;;
+	esac
+	case "$value" in
+		*[1-9]*) ;;
+		*)
+			echo "invalid $key: must be a positive byte size such as 1048576, 1KB, 32MB, or 1GB" >&2
 			exit 1
 			;;
 	esac
@@ -55,9 +68,9 @@ validate_rate_limit_config() {
 }
 
 validate_byte_limit_config() {
-	validate_positive_integer limits.max-archive-file-bytes
-	validate_positive_integer limits.max-upload-bytes
-	validate_positive_integer charmhub.max-artifact-bytes
+	validate_positive_byte_size limits.max-archive-file-bytes
+	validate_positive_byte_size limits.max-upload-bytes
+	validate_positive_byte_size charmhub.max-artifact-bytes
 }
 
 generate_cert() {

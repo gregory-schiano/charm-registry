@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -340,9 +341,12 @@ func loadParsedServerTimeouts() (parsedServerTimeouts, error) {
 	if err != nil {
 		return parsedServerTimeouts{}, err
 	}
-	serverMaxHeaderBytes, err := envInt("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
+	serverMaxHeaderBytes, err := envInt64("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", 1<<20)
 	if err != nil {
 		return parsedServerTimeouts{}, err
+	}
+	if serverMaxHeaderBytes > int64(int(^uint(0)>>1)) {
+		return parsedServerTimeouts{}, fmt.Errorf("cannot parse CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES as byte size: value overflows int")
 	}
 	ociReadHeaderTimeout, err := envDuration("CHARM_REGISTRY_OCI_SERVER_READ_HEADER_TIMEOUT", 10*time.Second)
 	if err != nil {
@@ -367,7 +371,7 @@ func loadParsedServerTimeouts() (parsedServerTimeouts, error) {
 		serverWriteTimeout:      serverWriteTimeout,
 		serverIdleTimeout:       serverIdleTimeout,
 		serverShutdownTimeout:   serverShutdownTimeout,
-		serverMaxHeaderBytes:    serverMaxHeaderBytes,
+		serverMaxHeaderBytes:    int(serverMaxHeaderBytes),
 		ociReadHeaderTimeout:    ociReadHeaderTimeout,
 		ociReadTimeout:          ociReadTimeout,
 		ociWriteTimeout:         ociWriteTimeout,
@@ -694,11 +698,55 @@ func envInt64(key string, fallback int64) (int64, error) {
 	if !ok || raw == "" {
 		return fallback, nil
 	}
-	value, err := strconv.ParseInt(raw, 10, 64)
+	value, err := parseByteSize(raw)
 	if err != nil {
-		return 0, fmt.Errorf("cannot parse %s as int64: %w", key, err)
+		return 0, fmt.Errorf("cannot parse %s as byte size: %w", key, err)
 	}
 	return value, nil
+}
+
+func parseByteSize(raw string) (int64, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	fields := strings.Fields(value)
+	switch len(fields) {
+	case 1:
+		value = fields[0]
+	case 2:
+		value = fields[0] + fields[1]
+	default:
+		return 0, fmt.Errorf("expected an integer optionally followed by KB, MB, or GB")
+	}
+
+	value = strings.ToUpper(value)
+	multiplier := int64(1)
+	for _, suffix := range []struct {
+		text       string
+		multiplier int64
+	}{
+		{text: "KB", multiplier: 1 << 10},
+		{text: "MB", multiplier: 1 << 20},
+		{text: "GB", multiplier: 1 << 30},
+	} {
+		if strings.HasSuffix(value, suffix.text) {
+			multiplier = suffix.multiplier
+			value = strings.TrimSuffix(value, suffix.text)
+			break
+		}
+	}
+	if value == "" {
+		return 0, fmt.Errorf("missing numeric value")
+	}
+	number, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if number > math.MaxInt64/multiplier {
+		return 0, fmt.Errorf("value overflows int64")
+	}
+	return number * multiplier, nil
 }
 
 func envDuration(key string, fallback time.Duration) (time.Duration, error) {

@@ -39,6 +39,21 @@ def public_url_environment(
     return env
 
 
+def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
+    """Map charm byte-size config options to workload environment variables."""
+    mapping = {
+        "charmhub-max-artifact-bytes": "CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES",
+        "max-archive-file-bytes": "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES",
+        "max-upload-bytes": "CHARM_REGISTRY_MAX_UPLOAD_BYTES",
+    }
+    env: dict[str, str] = {}
+    for config_key, env_key in mapping.items():
+        value = config.get(config_key)
+        if value is not None and str(value).strip():
+            env[env_key] = str(value).strip()
+    return env
+
+
 class CharmRegistryApp(App):
     """Application runtime with an extra OCI S3 relation."""
 
@@ -78,6 +93,7 @@ class CharmRegistryApp(App):
                 self._oci_ingress.url if self._oci_ingress else None,
             )
         )
+        env.update(size_limit_environment(self.charm_state.config))
         return env
 
     def _oci_s3_environment(

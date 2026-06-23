@@ -2,6 +2,7 @@
 .bin/
 dist/
 build/
+__pycache__/
 
 # Local TLS certificates for development deployments.
 certs/

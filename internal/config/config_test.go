@@ -304,14 +304,15 @@ func TestLoadCustomValues(t *testing.T) {
 	t.Setenv("CHARM_REGISTRY_S3_REGION", "eu-west-1")
 	t.Setenv("CHARM_REGISTRY_S3_USE_PATH_STYLE", "false")
 	t.Setenv("CHARM_REGISTRY_S3_DISABLE_TLS", "true")
-	t.Setenv("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", "2048")
-	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "4096")
-	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "1024")
+	t.Setenv("CHARM_REGISTRY_MAX_JSON_BODY_BYTES", "2KB")
+	t.Setenv("CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES", "4KB")
+	t.Setenv("CHARM_REGISTRY_MAX_UPLOAD_BYTES", "1KB")
 	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES", "512")
 	t.Setenv("CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES", "768")
 	t.Setenv("CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES", "1536")
 	t.Setenv("CHARM_REGISTRY_REQUEST_TIMEOUT", "75s")
 	t.Setenv("CHARM_REGISTRY_SERVER_READ_TIMEOUT", "5s")
+	t.Setenv("CHARM_REGISTRY_SERVER_MAX_HEADER_BYTES", "2MB")
 	t.Setenv("CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH", "true")
 	t.Setenv("CHARM_REGISTRY_OCI_SECRET_KEY", "oci-secret")
 	cfg, err := Load()
@@ -361,7 +362,7 @@ func TestLoadCustomValues(t *testing.T) {
 		ServerWriteTimeout:      30 * time.Second,
 		ServerIdleTimeout:       120 * time.Second,
 		ServerShutdownTimeout:   30 * time.Second,
-		ServerMaxHeaderBytes:    1 << 20,
+		ServerMaxHeaderBytes:    2 << 20,
 		OCIReadHeaderTimeout:    10 * time.Second,
 		OCIReadTimeout:          0,
 		OCIWriteTimeout:         0,
@@ -489,7 +490,29 @@ func TestEnvInt64InvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_INT64", "not-a-number")
 	_, err := envInt64("TEST_INT64", 42)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "cannot parse TEST_INT64 as int64")
+	assert.ErrorContains(t, err, "cannot parse TEST_INT64 as byte size")
+}
+
+func TestEnvInt64AcceptsByteSizeUnits(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  int64
+	}{
+		{name: "bytes", input: "1536", want: 1536},
+		{name: "KB", input: "2KB", want: 2 << 10},
+		{name: "MB lowercase", input: "3mb", want: 3 << 20},
+		{name: "GB with space", input: "4 GB", want: 4 << 30},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_INT64", tt.input)
+			got, err := envInt64("TEST_INT64", 42)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestEnvDurationInvalidFallsBack(t *testing.T) {
