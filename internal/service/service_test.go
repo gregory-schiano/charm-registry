@@ -1758,6 +1758,58 @@ func TestRefreshChannelSwitchIgnoresCurrentRevision(t *testing.T) {
 	assert.Equal(t, 22, result.Results[0].Charm.Revision)
 }
 
+func TestRefreshUsesContextTrackingChannel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	for i := 0; i < 22; i++ {
+		upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+		require.NoError(t, err)
+		_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+		require.NoError(t, err)
+	}
+
+	_, err = svc.CreateRelease(ctx, owner, "my-charm", []core.Release{
+		{
+			Channel:  "latest/stable",
+			Revision: 2,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		},
+		{
+			Channel:  "latest/edge",
+			Revision: 22,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Context: []RefreshContext{{
+			InstanceKey:     "app/0",
+			ID:              pkg.ID,
+			Revision:        2,
+			TrackingChannel: "latest/edge",
+			Base:            &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		}},
+		Actions: []RefreshAction{{
+			Action:      "refresh",
+			InstanceKey: "app/0",
+			ID:          &pkg.ID,
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Nil(t, result.Results[0].Error)
+	require.NotNil(t, result.Results[0].Charm)
+	assert.Equal(t, "latest/edge", result.Results[0].EffectiveChannel)
+	assert.Equal(t, 22, result.Results[0].Charm.Revision)
+}
+
 func TestRefreshWithDirectRevisionAndResourceOverrideWithoutReleaseResources(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

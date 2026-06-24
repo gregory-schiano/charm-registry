@@ -246,8 +246,9 @@ func (s *Service) CreateTracks(
 // are returned as a top-level error.
 func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
 	results := make([]refreshActionResponse, 0, len(request.Actions))
+	contextByInstanceKey := refreshContextsByInstanceKey(request.Context)
 	for _, action := range request.Actions {
-		item, err := s.resolveRefreshAction(ctx, identity, action)
+		item, err := s.resolveRefreshAction(ctx, identity, contextByInstanceKey[action.InstanceKey], action)
 		if err != nil {
 			// Unexpected infrastructure error — propagate so the API layer
 			// returns a top-level 500.
@@ -281,6 +282,7 @@ func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, re
 func (s *Service) resolveRefreshAction(
 	ctx context.Context,
 	identity core.Identity,
+	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (refreshActionResponse, error) {
 	errorResult := func(svcErr *Error) refreshActionResponse {
@@ -291,7 +293,7 @@ func (s *Service) resolveRefreshAction(
 		}
 	}
 
-	pkg, err := s.resolvePackageForRefresh(ctx, action)
+	pkg, err := s.resolvePackageForRefresh(ctx, refreshContext, action)
 	if err != nil {
 		var svcErr *Error
 		if errors.As(err, &svcErr) {
@@ -308,7 +310,7 @@ func (s *Service) resolveRefreshAction(
 		return refreshActionResponse{}, err
 	}
 
-	release, revision, resources, effectiveChannel, redirectChannel, err := s.resolveRefreshSelection(ctx, pkg, action)
+	release, revision, resources, effectiveChannel, redirectChannel, err := s.resolveRefreshSelection(ctx, pkg, refreshContext, action)
 	if err != nil {
 		var svcErr *Error
 		if errors.As(err, &svcErr) {
@@ -334,7 +336,7 @@ func (s *Service) resolveRefreshAction(
 	return item, nil
 }
 
-func (s *Service) resolvePackageForRefresh(ctx context.Context, action RefreshAction) (core.Package, error) {
+func (s *Service) resolvePackageForRefresh(ctx context.Context, refreshContext *RefreshContext, action RefreshAction) (core.Package, error) {
 	if action.Name != nil && *action.Name != "" {
 		pkg, err := s.repo.GetPackageByName(ctx, *action.Name)
 		return pkg, translateRepoError(err, messagePackageNotFound)
@@ -343,15 +345,20 @@ func (s *Service) resolvePackageForRefresh(ctx context.Context, action RefreshAc
 		pkg, err := s.repo.GetPackageByID(ctx, *action.ID)
 		return pkg, translateRepoError(err, messagePackageNotFound)
 	}
+	if refreshContext != nil && refreshContext.ID != "" {
+		pkg, err := s.repo.GetPackageByID(ctx, refreshContext.ID)
+		return pkg, translateRepoError(err, messagePackageNotFound)
+	}
 	return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", "refresh action must include id or name")
 }
 
 func (s *Service) resolveRefreshSelection(
 	ctx context.Context,
 	pkg core.Package,
+	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (core.Release, core.Revision, []core.ResourceRevision, string, string, error) {
-	release, revision, channel, redirect, err := s.resolveReleaseAndRevision(ctx, pkg, action)
+	release, revision, channel, redirect, err := s.resolveReleaseAndRevision(ctx, pkg, refreshContext, action)
 	if err != nil {
 		return core.Release{}, core.Revision{}, nil, "", "", err
 	}
@@ -373,12 +380,13 @@ func (s *Service) resolveRefreshSelection(
 func (s *Service) resolveReleaseAndRevision(
 	ctx context.Context,
 	pkg core.Package,
+	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (core.Release, core.Revision, string, string, error) {
-	requestedChannel := channelOrDefault(action.Channel)
+	requestedChannel := refreshActionChannel(refreshContext, action)
 	channel := normalizeChannel(requestedChannel)
 	redirect := channel
-	base := effectiveRefreshBase(action.Base)
+	base := effectiveRefreshBase(refreshActionBase(refreshContext, action))
 
 	if channel != "" {
 		release, resolvedChannel, err := s.resolveReleaseForActionChannel(ctx, pkg, channel, requestedChannel, base)
@@ -394,6 +402,7 @@ func (s *Service) resolveReleaseAndRevision(
 			)
 			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
 		}
+
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
 		if err != nil {
 			return core.Release{}, core.Revision{}, "", "", err
@@ -446,6 +455,37 @@ func (s *Service) resolveReleaseAndRevision(
 		"base", release.Base,
 	)
 	return release, revision, release.Channel, release.Channel, nil
+}
+
+func refreshContextsByInstanceKey(contexts []RefreshContext) map[string]*RefreshContext {
+	out := make(map[string]*RefreshContext, len(contexts))
+	for index := range contexts {
+		if contexts[index].InstanceKey == "" {
+			continue
+		}
+		out[contexts[index].InstanceKey] = &contexts[index]
+	}
+	return out
+}
+
+func refreshActionChannel(refreshContext *RefreshContext, action RefreshAction) string {
+	if channel := channelOrDefault(action.Channel); channel != "" {
+		return channel
+	}
+	if refreshContext == nil {
+		return ""
+	}
+	return strings.TrimSpace(refreshContext.TrackingChannel)
+}
+
+func refreshActionBase(refreshContext *RefreshContext, action RefreshAction) *core.Base {
+	if action.Base != nil {
+		return action.Base
+	}
+	if refreshContext == nil {
+		return nil
+	}
+	return refreshContext.Base
 }
 
 func (s *Service) resolveReleaseForActionChannel(
