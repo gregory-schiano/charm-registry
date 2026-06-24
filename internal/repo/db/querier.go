@@ -54,6 +54,7 @@ type Querier interface {
 	ListPackagesForAccountWithCollaborations(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountWithCollaborationsRow, error)
 	ListReleases(ctx context.Context, packageID string) ([]ListReleasesRow, error)
 	ListResourceDefinitions(ctx context.Context, packageID string) ([]ResourceDefinition, error)
+	ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error)
 	ListResourceRevisions(ctx context.Context, resourceID string) ([]ResourceRevision, error)
 	ListRevisions(ctx context.Context, packageID string) ([]Revision, error)
 	ListRevisionsByNumbers(ctx context.Context, arg ListRevisionsByNumbersParams) ([]Revision, error)

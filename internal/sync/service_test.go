@@ -44,9 +44,10 @@ type fakeCharmhubClient struct {
 
 type trackingOCIRegistry struct {
 	testutil.OCIRegistry
-	deletedImages   []string
-	deletedPackages []string
-	mirrorErr       error
+	deletedImages    []string
+	deletedPackages  []string
+	mirrorErr        error
+	deletePackageErr error
 }
 
 type syncTestHarness struct {
@@ -162,6 +163,9 @@ func (o *trackingOCIRegistry) DeleteImage(_ context.Context, pkg core.Package, r
 }
 
 func (o *trackingOCIRegistry) DeletePackage(_ context.Context, pkg core.Package) error {
+	if o.deletePackageErr != nil {
+		return o.deletePackageErr
+	}
 	o.deletedPackages = append(o.deletedPackages, pkg.Name)
 	return nil
 }
@@ -875,6 +879,32 @@ func TestRemovingLastCharmhubSyncRuleDeletesPackage(t *testing.T) {
 	assert.Contains(t, oci.deletedPackages, "demo")
 }
 
+func TestCleanupSyncedPackageBestEffortOnOCIError(t *testing.T) {
+	t.Parallel()
+
+	env := newSyncTestHarness(t)
+	fakeClient, oci := newSyncFixture(t, "postgresql-k8s", "upstream-postgresql-k8s")
+	oci.deletePackageErr = fmt.Errorf("registry unavailable")
+	env.sync.charmhub = fakeClient
+	env.sync.oci = oci
+
+	admin := newIdentity("admin-1", "admin")
+	admin.Account.IsAdmin = true
+	_, err := env.sync.AddCharmhubSyncRule(context.Background(), admin, "postgresql-k8s", "latest", nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, env.sync.reconcilePackage(context.Background(), "postgresql-k8s"))
+
+	pkg, err := env.repo.GetPackageByName(context.Background(), "postgresql-k8s")
+	require.NoError(t, err)
+	require.NotNil(t, pkg.Authority)
+	require.Equal(t, charmhubAuthority, *pkg.Authority)
+
+	require.NoError(t, env.sync.cleanupSyncedPackage(context.Background(), "postgresql-k8s"))
+
+	_, err = env.repo.GetPackageByName(context.Background(), "postgresql-k8s")
+	require.ErrorIs(t, err, repo.ErrNotFound)
+}
+
 func TestRemovingOneTrackPrunesOnlyUnreferencedArtifacts(t *testing.T) {
 	t.Parallel()
 
@@ -1307,46 +1337,6 @@ func assertServiceError(t *testing.T, err error, expectedKind registryservice.Er
 // ---------------------------------------------------------------------------
 // Coverage: previously-untested helper functions and Manager methods
 // ---------------------------------------------------------------------------
-
-func TestMergeLinks(t *testing.T) {
-	t.Parallel()
-
-	t.Run("all fields populated", func(t *testing.T) {
-		existing := map[string][]string{
-			"issues": {"https://github.com/example/issues"},
-		}
-		got := mergeLinks(existing, "https://docs.example.com", "https://bugs.example.com", "https://src.example.com", []string{"https://web1.example.com", "https://web2.example.com"})
-		assert.Equal(t, []string{"https://docs.example.com"}, got["docs"])
-		assert.Equal(t, []string{"https://github.com/example/issues", "https://bugs.example.com"}, got["issues"])
-		assert.Equal(t, []string{"https://src.example.com"}, got["source"])
-		assert.ElementsMatch(t, []string{"https://web1.example.com", "https://web2.example.com"}, got["website"])
-	})
-
-	t.Run("empty inputs produce empty map", func(t *testing.T) {
-		got := mergeLinks(nil, "", "", "", nil)
-		assert.Empty(t, got)
-	})
-
-	t.Run("nil existing preserves fields", func(t *testing.T) {
-		got := mergeLinks(nil, "d", "", "", nil)
-		assert.Equal(t, []string{"d"}, got["docs"])
-		_, hasIssues := got["issues"]
-		assert.False(t, hasIssues)
-	})
-}
-
-func TestUniqueAppend(t *testing.T) {
-	t.Parallel()
-
-	got := uniqueAppend([]string{"a", "b"}, "b")
-	assert.Equal(t, []string{"a", "b"}, got, "duplicate should not be appended")
-
-	got = uniqueAppend([]string{"a"}, "b")
-	assert.Equal(t, []string{"a", "b"}, got, "new value should be appended")
-
-	got = uniqueAppend(nil, "x")
-	assert.Equal(t, []string{"x"}, got, "nil slice should work")
-}
 
 func TestNewErrorWithCause(t *testing.T) {
 	t.Parallel()

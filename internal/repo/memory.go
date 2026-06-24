@@ -467,6 +467,27 @@ func (m *Memory) GetUpload(_ context.Context, uploadID string) (core.Upload, err
 	return upload, nil
 }
 
+// DeleteUploadsByObjectKeys is part of the [Repository] interface.
+func (m *Memory) DeleteUploadsByObjectKeys(_ context.Context, objectKeys []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(objectKeys) == 0 {
+		return nil
+	}
+	keys := make(map[string]struct{}, len(objectKeys))
+	for _, key := range objectKeys {
+		if key != "" {
+			keys[key] = struct{}{}
+		}
+	}
+	for uploadID, upload := range m.uploads {
+		if _, ok := keys[upload.ObjectKey]; ok {
+			delete(m.uploads, uploadID)
+		}
+	}
+	return nil
+}
+
 // ApproveUpload is part of the [Repository] interface.
 func (m *Memory) ApproveUpload(_ context.Context, uploadID string, revision *int, errors []core.APIError) error {
 	m.mu.Lock()
@@ -697,6 +718,19 @@ func (m *Memory) ListResourceRevisions(_ context.Context, resourceID string) ([]
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return append([]core.ResourceRevision(nil), m.resourceRevisions[resourceID]...), nil
+}
+
+// ListResourceRevisionObjectKeysByPackage is part of the [Repository] interface.
+func (m *Memory) ListResourceRevisionObjectKeysByPackage(_ context.Context, packageID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []string
+	for _, definition := range m.resourceDefs[packageID] {
+		for _, revision := range m.resourceRevisions[definition.ID] {
+			out = append(out, revision.ObjectKey)
+		}
+	}
+	return out, nil
 }
 
 // GetResourceRevision is part of the [Repository] interface.

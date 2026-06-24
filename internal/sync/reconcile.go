@@ -1226,7 +1226,10 @@ func (s *Service) cleanupSyncedPackage(ctx context.Context, packageName string) 
 		return nil
 	}
 	if err := s.deleteOCIPackage(ctx, pkg); err != nil {
-		return err
+		slog.WarnContext(ctx, "best-effort OCI cleanup failed during synced package removal",
+			"package", pkg.Name,
+			"error", err,
+		)
 	}
 	if err := s.deleteAllResourceArtifacts(ctx, pkg.ID); err != nil {
 		return err
@@ -1538,7 +1541,7 @@ func applyCharmhubPackageMetadata(
 	if len(result.Links) > 0 {
 		pkg.Links = cloneLinks(result.Links)
 	} else {
-		pkg.Links = mergeLinks(pkg.Links, manifest.Docs, manifest.Issues, manifest.Source, charm.ExtractWebsites(manifest.Website))
+		pkg.Links = core.MergeLinks(pkg.Links, manifest.Docs, manifest.Issues, manifest.Source, charm.ExtractWebsites(manifest.Website))
 	}
 	pkg.Website = stringPtr(core.FirstNonEmpty(result.Website, firstLink(pkg.Links["website"])))
 	pkg.Media = make([]core.Media, 0, len(result.Media))

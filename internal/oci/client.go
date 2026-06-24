@@ -12,9 +12,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -354,7 +354,11 @@ func (c *Client) DeletePackage(ctx context.Context, pkg core.Package) error {
 	}
 	repositoryPath := path.Join("/docker/registry/v2/repositories", pkg.OCIProject)
 	if err := c.driver.Delete(ctx, repositoryPath); err != nil {
-		slog.WarnContext(ctx, "best-effort OCI package cleanup failed", "project", pkg.OCIProject, "error", err)
+		var notFound storagedriver.PathNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return fmt.Errorf("cannot delete OCI package artifacts for %s: %w", pkg.Name, err)
 	}
 	return nil
 }

@@ -420,6 +420,26 @@ SELECT id, filename, object_key, size, sha256, sha384, status, kind, created_at,
 FROM uploads WHERE id = ?`, uploadID))
 }
 
+func (s *SQLite) DeleteUploadsByObjectKeys(ctx context.Context, objectKeys []string) error {
+	if len(objectKeys) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(objectKeys))
+	placeholders := make([]string, 0, len(objectKeys))
+	for _, key := range objectKeys {
+		if key == "" {
+			continue
+		}
+		args = append(args, key)
+		placeholders = append(placeholders, "?")
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM uploads WHERE object_key IN ("+strings.Join(placeholders, ",")+")", args...)
+	return err
+}
+
 func (s *SQLite) ApproveUpload(ctx context.Context, uploadID string, revision *int, apiErrors []core.APIError) error {
 	status := "approved"
 	if len(apiErrors) > 0 {
@@ -604,6 +624,27 @@ func (s *SQLite) ListResourceRevisions(ctx context.Context, resourceID string) (
 	}
 	defer rows.Close()
 	return scanResourceRevisions(rows)
+}
+
+func (s *SQLite) ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT rr.object_key
+FROM resource_revisions rr
+JOIN resource_definitions rd ON rd.id = rr.resource_id
+WHERE rd.package_id = ?`, packageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var objectKey string
+		if err := rows.Scan(&objectKey); err != nil {
+			return nil, err
+		}
+		out = append(out, objectKey)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLite) GetResourceRevision(ctx context.Context, resourceID string, revision int) (core.ResourceRevision, error) {

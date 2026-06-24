@@ -523,6 +523,64 @@ func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
 
 }
 
+func TestRepositoryListResourceRevisionObjectKeysByPackage(t *testing.T) {
+	repository := newRepositoryBehaviorTestRepository(t)
+	ctx := context.Background()
+	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-keys", "owner-keys")
+	pkg := createRepositoryBehaviorTestPackage(t, repository, owner, core.Package{
+		ID:   "pkg-keys",
+		Name: "postgresql-k8s",
+	})
+
+	configDef, err := repository.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID:        "res-def-config",
+		PackageID: pkg.ID,
+		Name:      "patroni-config",
+		Type:      "file",
+		CreatedAt: time.Unix(1, 0).UTC(),
+	})
+	require.NoError(t, err)
+	imageDef, err := repository.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID:        "res-def-image",
+		PackageID: pkg.ID,
+		Name:      "postgresql-image",
+		Type:      "oci-image",
+		CreatedAt: time.Unix(2, 0).UTC(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repository.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:         "res-rev-config-1",
+		ResourceID: configDef.ID,
+		Revision:   1,
+		CreatedAt:  time.Unix(3, 0).UTC(),
+		ObjectKey:  "resources/postgresql-k8s/patroni-config/1",
+	}))
+	require.NoError(t, repository.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:         "res-rev-config-2",
+		ResourceID: configDef.ID,
+		Revision:   2,
+		CreatedAt:  time.Unix(4, 0).UTC(),
+		ObjectKey:  "resources/postgresql-k8s/patroni-config/2",
+	}))
+	require.NoError(t, repository.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:             "res-rev-image-1",
+		ResourceID:     imageDef.ID,
+		Revision:       1,
+		CreatedAt:      time.Unix(5, 0).UTC(),
+		OCIImageDigest: "sha256:deadbeef",
+		ObjectKey:      "",
+	}))
+
+	keys, err := repository.ListResourceRevisionObjectKeysByPackage(ctx, pkg.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"resources/postgresql-k8s/patroni-config/1",
+		"resources/postgresql-k8s/patroni-config/2",
+		"",
+	}, keys)
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

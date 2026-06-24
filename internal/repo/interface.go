@@ -40,6 +40,7 @@ type PackageRepo interface {
 
 	CreateUpload(ctx context.Context, upload core.Upload) error
 	GetUpload(ctx context.Context, uploadID string) (core.Upload, error)
+	DeleteUploadsByObjectKeys(ctx context.Context, objectKeys []string) error
 	ApproveUpload(ctx context.Context, uploadID string, revision *int, errors []core.APIError) error
 
 	CreateRevision(ctx context.Context, revision core.Revision) error
@@ -57,6 +58,7 @@ type PackageRepo interface {
 	DeleteResourceRevision(ctx context.Context, resourceID string, revision int) error
 	UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error
 	ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error)
+	ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error)
 	GetResourceRevision(ctx context.Context, resourceID string, revision int) (core.ResourceRevision, error)
 
 	ReplaceRelease(ctx context.Context, packageID string, release core.Release) error

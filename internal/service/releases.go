@@ -377,45 +377,24 @@ func (s *Service) resolveRefreshSelection(
 	return release, revision, resources, channel, redirect, nil
 }
 
+// resolveReleaseAndRevision selects the release/revision a refresh action
+// resolves to. Juju sends channel and revision mutually exclusively, so the
+// precedence is:
+//  1. an explicit action channel resolves the channel tip;
+//  2. an explicit action revision resolves exactly that revision and must not
+//     be shadowed by the unit's tracking-channel;
+//  3. the context tracking-channel resolves the channel tip (plain refresh);
+//  4. otherwise the package default release is used.
 func (s *Service) resolveReleaseAndRevision(
 	ctx context.Context,
 	pkg core.Package,
 	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (core.Release, core.Revision, string, string, error) {
-	requestedChannel := refreshActionChannel(refreshContext, action)
-	channel := normalizeChannel(requestedChannel)
-	redirect := channel
 	base := effectiveRefreshBase(refreshActionBase(refreshContext, action))
 
-	if channel != "" {
-		release, resolvedChannel, err := s.resolveReleaseForActionChannel(ctx, pkg, channel, requestedChannel, base)
-		if err != nil {
-			slog.InfoContext(ctx, "refresh release resolution failed",
-				"package", pkg.Name,
-				"requested_channel", requestedChannel,
-				"normalized_channel", channel,
-				"default_track", stringValue(pkg.DefaultTrack),
-				"base", action.Base,
-				"effective_base", base,
-				"error", err,
-			)
-			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
-		}
-
-		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-		if err != nil {
-			return core.Release{}, core.Revision{}, "", "", err
-		}
-		slog.DebugContext(ctx, "refresh resolved channel",
-			"package", pkg.Name,
-			"package_id", pkg.ID,
-			"requested_channel", requestedChannel,
-			"resolved_channel", resolvedChannel,
-			"revision", release.Revision,
-			"base", release.Base,
-		)
-		return release, revision, resolvedChannel, redirect, nil
+	if requestedChannel := channelOrDefault(action.Channel); requestedChannel != "" {
+		return s.resolveReleaseByChannel(ctx, pkg, normalizeChannel(requestedChannel), requestedChannel, base)
 	}
 
 	if action.Revision != nil && *action.Revision > 0 {
@@ -424,7 +403,6 @@ func (s *Service) resolveReleaseAndRevision(
 			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageRevisionNotFound)
 		}
 		release := core.Release{
-			Channel:        channel,
 			Revision:       revision.Revision,
 			When:           revision.CreatedAt,
 			ExpirationDate: nil,
@@ -433,10 +411,14 @@ func (s *Service) resolveReleaseAndRevision(
 			"package", pkg.Name,
 			"package_id", pkg.ID,
 			"revision", revision.Revision,
-			"requested_channel", requestedChannel,
-			"normalized_channel", channel,
 		)
-		return release, revision, channel, redirect, nil
+		return release, revision, "", "", nil
+	}
+
+	if refreshContext != nil {
+		if trackingChannel := strings.TrimSpace(refreshContext.TrackingChannel); trackingChannel != "" {
+			return s.resolveReleaseByChannel(ctx, pkg, normalizeChannel(trackingChannel), trackingChannel, base)
+		}
 	}
 
 	release, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
@@ -457,6 +439,40 @@ func (s *Service) resolveReleaseAndRevision(
 	return release, revision, release.Channel, release.Channel, nil
 }
 
+func (s *Service) resolveReleaseByChannel(
+	ctx context.Context,
+	pkg core.Package,
+	channel, requestedChannel string,
+	base *core.Base,
+) (core.Release, core.Revision, string, string, error) {
+	release, resolvedChannel, err := s.resolveReleaseForActionChannel(ctx, pkg, channel, requestedChannel, base)
+	if err != nil {
+		slog.InfoContext(ctx, "refresh release resolution failed",
+			"package", pkg.Name,
+			"requested_channel", requestedChannel,
+			"normalized_channel", channel,
+			"default_track", stringValue(pkg.DefaultTrack),
+			"effective_base", base,
+			"error", err,
+		)
+		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
+	}
+
+	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
+	if err != nil {
+		return core.Release{}, core.Revision{}, "", "", err
+	}
+	slog.DebugContext(ctx, "refresh resolved channel",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"requested_channel", requestedChannel,
+		"resolved_channel", resolvedChannel,
+		"revision", release.Revision,
+		"base", release.Base,
+	)
+	return release, revision, resolvedChannel, channel, nil
+}
+
 func refreshContextsByInstanceKey(contexts []RefreshContext) map[string]*RefreshContext {
 	out := make(map[string]*RefreshContext, len(contexts))
 	for index := range contexts {
@@ -466,16 +482,6 @@ func refreshContextsByInstanceKey(contexts []RefreshContext) map[string]*Refresh
 		out[contexts[index].InstanceKey] = &contexts[index]
 	}
 	return out
-}
-
-func refreshActionChannel(refreshContext *RefreshContext, action RefreshAction) string {
-	if channel := channelOrDefault(action.Channel); channel != "" {
-		return channel
-	}
-	if refreshContext == nil {
-		return ""
-	}
-	return strings.TrimSpace(refreshContext.TrackingChannel)
 }
 
 func refreshActionBase(refreshContext *RefreshContext, action RefreshAction) *core.Base {

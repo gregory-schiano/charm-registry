@@ -72,7 +72,15 @@ func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request, identit
 }
 
 func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request, identity core.Identity) {
-	packageID, err := a.svc.UnregisterPackage(r.Context(), identity, chi.URLParam(r, "name"))
+	var (
+		packageID string
+		err       error
+	)
+	if r.URL.Query().Get("force") == "true" {
+		packageID, err = a.svc.PurgePackage(r.Context(), identity, chi.URLParam(r, "name"))
+	} else {
+		packageID, err = a.svc.UnregisterPackage(r.Context(), identity, chi.URLParam(r, "name"))
+	}
 	if err != nil {
 		writeError(w, r, err)
 		return

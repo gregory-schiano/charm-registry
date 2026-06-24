@@ -754,6 +754,90 @@ func TestUnregisterPackageWithRevisions(t *testing.T) {
 
 }
 
+func TestPurgePackageDeletesArtifactsAndMetadata(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	blobs := newTrackingBlobStore()
+	ociRegistry := &trackingOCIRegistry{}
+	svc := New(testConfig(), repository, blobs, ociRegistry)
+	owner := newIdentity("acc-1", "alice")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "purge-charm", "charm", true)
+	require.NoError(t, err)
+	charmUpload, err := svc.CreateUpload(ctx, "purge-charm.charm", buildCharmArchive(t, "purge-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "purge-charm", PushRevisionRequest{UploadID: charmUpload.ID})
+	require.NoError(t, err)
+	resourceUpload, err := svc.CreateUpload(ctx, "config.yaml", []byte("debug: true\n"))
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "purge-charm", "config", PushResourceRequest{
+		UploadID: resourceUpload.ID, Type: "file",
+	})
+	require.NoError(t, err)
+	_, err = svc.OCIImageUploadCredentials(ctx, owner, "purge-charm", "workload-image")
+	require.NoError(t, err)
+	ociUpload, err := svc.CreateUpload(ctx, "blob.json", []byte(`{"Digest":"sha256:test"}`))
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "purge-charm", "workload-image", PushResourceRequest{
+		UploadID: ociUpload.ID, Type: "oci-image",
+	})
+	require.NoError(t, err)
+
+	id, err := svc.PurgePackage(ctx, owner, "purge-charm")
+	require.NoError(t, err)
+
+	assert.Equal(t, pkg.ID, id)
+	assert.ElementsMatch(t, []string{charmUpload.ObjectKey, resourceUpload.ObjectKey}, blobs.deletedKeys())
+	assert.Equal(t, []string{pkg.ID}, ociRegistry.deletedPackageIDs)
+	_, err = svc.GetPackage(ctx, owner, "purge-charm", true)
+	assertServiceError(t, err, ErrorKindNotFound)
+	_, err = blobs.Get(ctx, charmUpload.ObjectKey)
+	require.Error(t, err)
+	_, err = blobs.Get(ctx, resourceUpload.ObjectKey)
+	require.Error(t, err)
+	_, err = repository.GetUpload(ctx, charmUpload.ID)
+	assert.ErrorIs(t, err, repo.ErrNotFound)
+	_, err = repository.GetUpload(ctx, resourceUpload.ID)
+	assert.ErrorIs(t, err, repo.ErrNotFound)
+}
+
+func TestPurgePackageRemovesMetadataEvenWhenBlobCleanupFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := repo.NewMemory()
+	blobs := newTrackingBlobStore()
+	blobs.failDelete = true
+	ociRegistry := &trackingOCIRegistry{}
+	svc := New(testConfig(), repository, blobs, ociRegistry)
+	owner := newIdentity("acc-1", "alice")
+
+	pkg, err := svc.RegisterPackage(ctx, owner, "purge-charm", "charm", true)
+	require.NoError(t, err)
+	charmUpload, err := svc.CreateUpload(ctx, "purge-charm.charm", buildCharmArchive(t, "purge-charm"))
+	require.NoError(t, err)
+	_, err = svc.PushRevision(ctx, owner, "purge-charm", PushRevisionRequest{UploadID: charmUpload.ID})
+	require.NoError(t, err)
+	resourceUpload, err := svc.CreateUpload(ctx, "config.yaml", []byte("debug: true\n"))
+	require.NoError(t, err)
+	_, err = svc.PushResource(ctx, owner, "purge-charm", "config", PushResourceRequest{
+		UploadID: resourceUpload.ID, Type: "file",
+	})
+	require.NoError(t, err)
+
+	id, err := svc.PurgePackage(ctx, owner, "purge-charm")
+	require.NoError(t, err)
+
+	assert.Equal(t, pkg.ID, id)
+	assert.NotEmpty(t, blobs.deletedKeys())
+	_, err = svc.GetPackage(ctx, owner, "purge-charm", true)
+	assertServiceError(t, err, ErrorKindNotFound)
+	_, err = repository.GetUpload(ctx, charmUpload.ID)
+	assert.ErrorIs(t, err, repo.ErrNotFound)
+	_, err = repository.GetUpload(ctx, resourceUpload.ID)
+	assert.ErrorIs(t, err, repo.ErrNotFound)
+}
+
 func TestCreateUploadSetsKindFromFilename(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1810,6 +1894,58 @@ func TestRefreshUsesContextTrackingChannel(t *testing.T) {
 	assert.Equal(t, 22, result.Results[0].Charm.Revision)
 }
 
+func TestRefreshRevisionPinNotShadowedByTrackingChannel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	pkg, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	for i := 0; i < 22; i++ {
+		upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+		require.NoError(t, err)
+		_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+		require.NoError(t, err)
+	}
+
+	_, err = svc.CreateRelease(ctx, owner, "my-charm", []core.Release{
+		{
+			Channel:  "latest/stable",
+			Revision: 2,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		},
+		{
+			Channel:  "latest/edge",
+			Revision: 22,
+			Base:     &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Context: []RefreshContext{{
+			InstanceKey:     "app/0",
+			ID:              pkg.ID,
+			Revision:        2,
+			TrackingChannel: "latest/edge",
+			Base:            &core.Base{Name: "ubuntu", Channel: "24.04", Architecture: "amd64"},
+		}},
+		Actions: []RefreshAction{{
+			Action:      "refresh",
+			InstanceKey: "app/0",
+			ID:          &pkg.ID,
+			Revision:    intPtr(2),
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Nil(t, result.Results[0].Error)
+	require.NotNil(t, result.Results[0].Charm)
+	assert.Equal(t, 2, result.Results[0].Charm.Revision)
+}
+
 func TestRefreshWithDirectRevisionAndResourceOverrideWithoutReleaseResources(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2807,35 +2943,6 @@ func TestTokenAllowsPackage(t *testing.T) {
 
 }
 
-func TestMergeLinks(t *testing.T) {
-	t.Parallel()
-	existing := map[string][]string{"docs": {"https://a.com"}}
-	merged := mergeLinks(existing, "https://b.com", "https://issues.com", "https://src.com", []string{"https://web.com"})
-	assert.Equal(t, []string{"https://a.com", "https://b.com"}, merged["docs"])
-	assert.Equal(t, []string{"https://issues.com"}, merged["issues"])
-	assert.Equal(t, []string{"https://src.com"}, merged["source"])
-	assert.Equal(t, []string{"https://web.com"}, merged["website"])
-
-	// Existing links are not modified
-	assert.Equal(t, []string{"https://a.com"}, existing["docs"])
-
-}
-
-func TestMergeLinksDeduplication(t *testing.T) {
-	t.Parallel()
-	existing := map[string][]string{"docs": {"https://a.com"}}
-	merged := mergeLinks(existing, "https://a.com", "", "", nil)
-	assert.Equal(t, []string{"https://a.com"}, merged["docs"])
-
-}
-
-func TestMergeLinksEmpty(t *testing.T) {
-	t.Parallel()
-	merged := mergeLinks(nil, "", "", "", nil)
-	assert.Empty(t, merged)
-
-}
-
 func TestInfoWithNilResourceRevision(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3121,6 +3228,38 @@ func (s *seekablePayloadStore) Open(_ context.Context, _ string) (io.ReadCloser,
 }
 
 func (s *seekablePayloadStore) Delete(_ context.Context, _ string) error {
+	return nil
+}
+
+type trackingBlobStore struct {
+	*blob.MemoryStore
+	deleted    []string
+	failDelete bool
+}
+
+func newTrackingBlobStore() *trackingBlobStore {
+	return &trackingBlobStore{MemoryStore: blob.NewMemoryStore()}
+}
+
+func (s *trackingBlobStore) Delete(ctx context.Context, key string) error {
+	s.deleted = append(s.deleted, key)
+	if s.failDelete {
+		return fmt.Errorf("blob backend offline")
+	}
+	return s.MemoryStore.Delete(ctx, key)
+}
+
+func (s *trackingBlobStore) deletedKeys() []string {
+	return append([]string(nil), s.deleted...)
+}
+
+type trackingOCIRegistry struct {
+	testutil.OCIRegistry
+	deletedPackageIDs []string
+}
+
+func (o *trackingOCIRegistry) DeletePackage(_ context.Context, pkg core.Package) error {
+	o.deletedPackageIDs = append(o.deletedPackageIDs, pkg.ID)
 	return nil
 }
 

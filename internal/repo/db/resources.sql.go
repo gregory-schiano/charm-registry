@@ -207,6 +207,33 @@ func (q *Queries) ListResourceDefinitions(ctx context.Context, packageID string)
 	return items, nil
 }
 
+const listResourceRevisionObjectKeysByPackage = `-- name: ListResourceRevisionObjectKeysByPackage :many
+SELECT rr.object_key
+FROM resource_revisions rr
+JOIN resource_definitions rd ON rd.id = rr.resource_id
+WHERE rd.package_id = $1
+`
+
+func (q *Queries) ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listResourceRevisionObjectKeysByPackage, packageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listResourceRevisions = `-- name: ListResourceRevisions :many
 SELECT id, resource_id, revision, package_revision, name, type, description,
        filename, created_at, size, sha256, sha384, sha512, sha3_384,

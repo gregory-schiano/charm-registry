@@ -33,7 +33,7 @@ Charm Registry is a single Go binary that runs two HTTP servers: a Charmhub-comp
 | Package | Purpose |
 |---------|---------|
 | `cmd/charm-registry` | Process entrypoint, signal handling, server lifecycle |
-| `cmd/charm-registryctl` | Admin CLI (sync rules only) |
+| `cmd/charm-registryctl` | Admin CLI for sync rules and destructive package unregister operations |
 | `internal/api` | HTTP handlers, chi router, response shaping, OpenAPI spec |
 | `internal/app` | Dependency wiring (repos, blob store, OCI, auth, service) |
 | `internal/service` | Business logic: packages, revisions, releases, resources, tokens, OCI |

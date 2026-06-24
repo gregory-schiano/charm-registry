@@ -688,6 +688,60 @@ func TestMemoryResourceRevisionRoundtrip(t *testing.T) {
 
 }
 
+func TestMemoryListResourceRevisionObjectKeysByPackage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	m := NewMemory()
+
+	configDef, err := m.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID:        "res-def-config",
+		PackageID: "postgresql-k8s",
+		Name:      "patroni-config",
+		Type:      "file",
+		CreatedAt: time.Unix(1, 0).UTC(),
+	})
+	require.NoError(t, err)
+	imageDef, err := m.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+		ID:        "res-def-image",
+		PackageID: "postgresql-k8s",
+		Name:      "postgresql-image",
+		Type:      "oci-image",
+		CreatedAt: time.Unix(2, 0).UTC(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, m.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:         "res-rev-config-1",
+		ResourceID: configDef.ID,
+		Revision:   1,
+		CreatedAt:  time.Unix(3, 0).UTC(),
+		ObjectKey:  "resources/postgresql-k8s/patroni-config/1",
+	}))
+	require.NoError(t, m.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:         "res-rev-config-2",
+		ResourceID: configDef.ID,
+		Revision:   2,
+		CreatedAt:  time.Unix(4, 0).UTC(),
+		ObjectKey:  "resources/postgresql-k8s/patroni-config/2",
+	}))
+	require.NoError(t, m.CreateResourceRevision(ctx, core.ResourceRevision{
+		ID:             "res-rev-image-1",
+		ResourceID:     imageDef.ID,
+		Revision:       1,
+		CreatedAt:      time.Unix(5, 0).UTC(),
+		OCIImageDigest: "sha256:deadbeef",
+		ObjectKey:      "",
+	}))
+
+	keys, err := m.ListResourceRevisionObjectKeysByPackage(ctx, "postgresql-k8s")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"resources/postgresql-k8s/patroni-config/1",
+		"resources/postgresql-k8s/patroni-config/2",
+		"",
+	}, keys)
+}
+
 // ---- Releases --------------------------------------------------------------
 
 func TestMemoryReleaseRoundtrip(t *testing.T) {

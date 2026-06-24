@@ -172,6 +172,14 @@ func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string)
 	return out, nil
 }
 
+func (p *Postgres) ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error) {
+	keys, err := p.queries().ListResourceRevisionObjectKeysByPackage(ctx, packageID)
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 func (p *Postgres) GetResourceRevision(
 	ctx context.Context,
 	resourceID string,

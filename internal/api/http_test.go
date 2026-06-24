@@ -523,6 +523,29 @@ func TestDeletePackage(t *testing.T) {
 
 }
 
+func TestDeletePackageForcePurgesArtifacts(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "force-delete-charm"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	resp = doMultipartUpload(t, handler, buildTestCharmArchive(t, "force-delete-charm"), "force-delete-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/force-delete-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, "DELETE", "/v1/charm/force-delete-charm?force=true", nil, authHeader)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.NotEmpty(t, body["package-id"])
+
+	resp = doRequest(t, handler, "GET", "/v1/charm/force-delete-charm", nil, authHeader)
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+}
+
 func TestCreateTracks(t *testing.T) {
 	t.Parallel()
 	handler := newTestHandler(t, testCfg)

@@ -66,3 +66,9 @@ SELECT id, resource_id, revision, package_revision, name, type, description,
 FROM resource_revisions
 WHERE resource_id = $1
   AND revision    = $2;
+
+-- name: ListResourceRevisionObjectKeysByPackage :many
+SELECT rr.object_key
+FROM resource_revisions rr
+JOIN resource_definitions rd ON rd.id = rr.resource_id
+WHERE rd.package_id = $1;

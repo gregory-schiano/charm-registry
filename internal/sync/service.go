@@ -555,51 +555,6 @@ func extractBases(manifest core.CharmManifest) []core.Base {
 	return bases
 }
 
-func mergeLinks(existing map[string][]string, docs, issues, source any, websites []string) map[string][]string {
-	out := map[string][]string{}
-	for key, values := range existing {
-		out[key] = append([]string(nil), values...)
-	}
-	for _, doc := range linkValues(docs) {
-		out["docs"] = uniqueAppend(out["docs"], doc)
-	}
-	for _, issue := range linkValues(issues) {
-		out["issues"] = uniqueAppend(out["issues"], issue)
-	}
-	for _, sourceLink := range linkValues(source) {
-		out["source"] = uniqueAppend(out["source"], sourceLink)
-	}
-	for _, website := range websites {
-		out["website"] = uniqueAppend(out["website"], website)
-	}
-	return out
-}
-
-func linkValues(raw any) []string {
-	switch value := raw.(type) {
-	case string:
-		if value == "" {
-			return nil
-		}
-		return []string{value}
-	case []string:
-		return value
-	case core.StringList:
-		return []string(value)
-	default:
-		return nil
-	}
-}
-
-func uniqueAppend(values []string, candidate string) []string {
-	for _, value := range values {
-		if value == candidate {
-			return values
-		}
-	}
-	return append(values, candidate)
-}
-
 func mapOrDefault[K comparable, V any](value, fallback map[K]V) map[K]V {
 	if len(value) == 0 {
 		return fallback

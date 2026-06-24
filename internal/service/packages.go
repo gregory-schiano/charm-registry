@@ -230,6 +230,97 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 	return pkg.ID, nil
 }
 
+// PurgePackage deletes a package and all registry-managed artifacts for it.
+//
+// The following errors may be returned:
+// - Authorization, artifact deletion, or repository errors.
+func (s *Service) PurgePackage(ctx context.Context, identity core.Identity, name string) (string, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return "", err
+	}
+	pkg, err := s.repo.GetPackageByName(ctx, name)
+	if err != nil {
+		return "", translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
+	}
+	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManage); err != nil {
+		return "", err
+	}
+	blobKeys, err := s.packageBlobKeys(ctx, pkg.ID)
+	if err != nil {
+		return "", err
+	}
+	// Removing the package metadata is authoritative and must happen
+	// atomically before any external artifact is touched.  If it fails,
+	// nothing has been deleted and the package remains consistent.
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.PackageRepo) error {
+		if err := repository.DeleteUploadsByObjectKeys(ctx, blobKeys); err != nil {
+			return err
+		}
+		return repository.DeletePackage(ctx, pkg.ID)
+	}); err != nil {
+		return "", err
+	}
+	// The package is gone from the registry; artifact cleanup is best-effort.
+	// Any leftover blobs or OCI images are orphaned and GC-able, so a failure
+	// here must not resurrect the (already removed) package metadata.
+	if s.oci != nil {
+		if err := s.oci.DeletePackage(ctx, pkg); err != nil {
+			slog.WarnContext(ctx, "best-effort OCI artifact cleanup after purge failed",
+				"package", pkg.Name, "error", err)
+		}
+	}
+	for _, key := range blobKeys {
+		if err := s.blobs.Delete(ctx, key); err != nil {
+			slog.WarnContext(ctx, "best-effort blob cleanup after purge failed",
+				"package", pkg.Name, "key", key, "error", err)
+		}
+	}
+	slog.InfoContext(ctx, "package purged",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"blob_count", len(blobKeys),
+		"account_id", identity.Account.ID,
+	)
+	AuditLog(ctx, "package_purge", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID, "blob_count", len(blobKeys))
+	return pkg.ID, nil
+}
+
+func (s *Service) packageBlobKeys(ctx context.Context, packageID string) ([]string, error) {
+	seen := map[string]struct{}{}
+	var keys []string
+	add := func(key string) {
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	revisions, err := s.repo.ListRevisions(ctx, packageID, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, revision := range revisions {
+		add(revision.ObjectKey)
+	}
+
+	resourceKeys, err := s.repo.ListResourceRevisionObjectKeysByPackage(ctx, packageID)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range resourceKeys {
+		add(key)
+	}
+	return keys, nil
+}
+
 // SearchPackages searches packages that the caller is allowed to see.
 //
 // The following errors may be returned:

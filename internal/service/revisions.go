@@ -174,7 +174,7 @@ func (s *Service) PushRevision(
 	pkg.Summary = stringPtr(archive.Manifest.Summary)
 	pkg.Description = stringPtr(archive.Manifest.Description)
 	websites := charm.ExtractWebsites(archive.Manifest.Website)
-	pkg.Links = mergeLinks(pkg.Links, archive.Manifest.Docs, archive.Manifest.Issues, archive.Manifest.Source, websites)
+	pkg.Links = core.MergeLinks(pkg.Links, archive.Manifest.Docs, archive.Manifest.Issues, archive.Manifest.Source, websites)
 	if len(websites) > 0 {
 		pkg.Website = &websites[0]
 	}

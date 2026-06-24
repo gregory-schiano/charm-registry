@@ -21,7 +21,7 @@ paths:
     patch:
       summary: Update package metadata
     delete:
-      summary: Unregister an unpublished package
+      summary: Unregister a package; force=true also removes registry-managed artifacts
   /v1/charm/{name}/revisions:
     get:
       summary: List package revisions

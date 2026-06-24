@@ -515,6 +515,27 @@ func TestEnvInt64AcceptsByteSizeUnits(t *testing.T) {
 	}
 }
 
+func TestEnvInt64RejectsNonPositiveByteSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "zero", input: "0"},
+		{name: "negative", input: "-1"},
+		{name: "zero MB", input: "0MB"},
+		{name: "negative MB", input: "-1MB"},
+		{name: "negative GB", input: "-5GB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_INT64", tt.input)
+			_, err := envInt64("TEST_INT64", 42)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestEnvDurationInvalidFallsBack(t *testing.T) {
 	t.Setenv("TEST_DUR", "not-a-duration")
 	_, err := envDuration("TEST_DUR", 10*time.Second)

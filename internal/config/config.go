@@ -743,6 +743,9 @@ func parseByteSize(raw string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if number <= 0 {
+		return 0, fmt.Errorf("byte size must be positive")
+	}
 	if number > math.MaxInt64/multiplier {
 		return 0, fmt.Errorf("value overflows int64")
 	}

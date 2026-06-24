@@ -165,6 +165,44 @@ func TestRunSyncRun(t *testing.T) {
 	assert.Contains(t, stdout.String(), "triggered sync for demo")
 }
 
+func TestRunUnregister(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/charm/demo", r.URL.Path)
+		require.Equal(t, "true", r.URL.Query().Get("force"))
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"package-id":"pkg-1"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "unregister", "demo", "--yes"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "unregistered demo")
+}
+
+func TestRunUnregisterRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", "http://registry.example.test", "--token", "test-token", "unregister", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "refusing to unregister without --yes")
+}
+
 func TestRunReportsAPIConflict(t *testing.T) {
 	t.Parallel()
 

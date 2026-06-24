@@ -44,6 +44,14 @@ func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload,
 	return uploadRowFromSQLC(upload)
 }
 
+func (p *Postgres) DeleteUploadsByObjectKeys(ctx context.Context, objectKeys []string) error {
+	if len(objectKeys) == 0 {
+		return nil
+	}
+	_, err := p.db.Exec(ctx, "DELETE FROM uploads WHERE object_key = ANY($1::text[])", objectKeys)
+	return err
+}
+
 func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision *int, apiErrors []core.APIError) error {
 	status := "approved"
 	if len(apiErrors) > 0 {

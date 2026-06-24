@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -84,12 +85,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return errors.New("usage: charm-registryctl [--url url] [--token token] sync <list|add|remove|run>")
+		return errors.New("usage: charm-registryctl [--url url] [--token token] <sync|unregister>")
 	}
-	if remaining[0] != "sync" {
+	switch remaining[0] {
+	case "sync":
+		return runSync(ctx, cfg, remaining[1:], stdout, stderr)
+	case "unregister":
+		return runUnregister(ctx, cfg, remaining[1:], stdout, stderr)
+	default:
 		return fmt.Errorf("unknown command %q", remaining[0])
 	}
-	return runSync(ctx, cfg, remaining[1:], stdout, stderr)
 }
 
 func runSync(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
@@ -237,6 +242,39 @@ func runSyncRun(ctx context.Context, cfg cliConfig, args []string, stdout, stder
 		return err
 	}
 	fmt.Fprintf(stdout, "triggered sync for %s\n", name)
+	return nil
+}
+
+func runUnregister(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("unregister", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	yes := false
+	fs.BoolVar(&yes, "yes", false, "Confirm destructive charm removal")
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name = args[0]
+		args = args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	switch {
+	case name == "" && fs.NArg() == 1:
+		name = fs.Arg(0)
+	case name != "" && fs.NArg() == 0:
+	case name == "" && fs.NArg() == 0:
+		return errors.New("usage: charm-registryctl unregister <name> --yes")
+	default:
+		return errors.New("usage: charm-registryctl unregister <name> --yes")
+	}
+	if !yes {
+		return errors.New("refusing to unregister without --yes")
+	}
+	path := fmt.Sprintf("/v1/charm/%s?force=true", url.PathEscape(name))
+	if err := doJSON(ctx, cfg, http.MethodDelete, path, nil, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "unregistered %s and removed registry-managed artifacts\n", name)
 	return nil
 }
 

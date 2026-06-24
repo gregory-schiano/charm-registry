@@ -192,6 +192,7 @@ Then use the CLI:
 .bin/charm-registryctl sync add postgresql-k8s --track 14 --base ubuntu@24.04 --arch amd64
 .bin/charm-registryctl sync remove postgresql-k8s --track 14
 .bin/charm-registryctl sync run postgresql-k8s
+.bin/charm-registryctl unregister postgresql-k8s --yes
 ```
 
 You can also pass connection details explicitly:
@@ -206,6 +207,7 @@ Commands:
 - `sync add <name> --track <track> [--base <name@channel> ...] [--arch <arch> ...]` — create a sync rule and enqueue an immediate sync
 - `sync remove <name> --track <track>` — remove the rule and enqueue cleanup/reconciliation
 - `sync run <name>` — trigger an immediate reconciliation for all synchronized tracks of that package
+- `unregister <name> --yes` — delete the package metadata and registry-managed artifacts, including charm archives, resource blobs, and OCI project data
 
 ## Deployment
 
