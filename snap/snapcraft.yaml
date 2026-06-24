@@ -50,3 +50,10 @@ parts:
       charm-registry-wrapper: bin/charm-registry-wrapper
       charm-registry-snap-helpers: bin/charm-registry-snap-helpers
       config-env.map: etc/charm-registry/config-env.map
+    prime:
+      - -install-oci-cert.sh
+  k8s-cert-helper:
+    plugin: dump
+    source: deploy/k8s
+    organize:
+      install-oci-cert.sh: bin/install-oci-cert.sh

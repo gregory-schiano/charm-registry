@@ -12,7 +12,10 @@ type Base struct {
 
 // Relation describes a named charm relation endpoint.
 type Relation struct {
-	Interface string `json:"interface" yaml:"interface"`
+	Interface string `json:"interface"          yaml:"interface"`
+	Limit     int    `json:"limit,omitempty"    yaml:"limit"`
+	Optional  bool   `json:"optional,omitempty" yaml:"optional"`
+	Scope     string `json:"scope,omitempty"    yaml:"scope"`
 }
 
 // Revision describes a published charm revision and its extracted metadata.

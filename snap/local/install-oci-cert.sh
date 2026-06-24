@@ -1,0 +1,1 @@
+../../deploy/k8s/install-oci-cert.sh
