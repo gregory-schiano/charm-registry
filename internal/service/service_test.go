@@ -1719,6 +1719,45 @@ func TestRefreshWithResourceRevisionOverride(t *testing.T) {
 
 }
 
+func TestRefreshChannelSwitchIgnoresCurrentRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newTestService()
+	owner := newIdentity("acc-1", "alice")
+	_, err := svc.RegisterPackage(ctx, owner, "my-charm", "charm", true)
+	require.NoError(t, err)
+
+	for i := 0; i < 22; i++ {
+		upload, err := svc.CreateUpload(ctx, "my-charm.charm", buildCharmArchive(t, "my-charm"))
+		require.NoError(t, err)
+		_, err = svc.PushRevision(ctx, owner, "my-charm", PushRevisionRequest{UploadID: upload.ID})
+		require.NoError(t, err)
+	}
+
+	_, err = svc.CreateRelease(ctx, owner, "my-charm", []core.Release{
+		{Channel: "latest/stable", Revision: 2},
+		{Channel: "latest/edge", Revision: 22},
+	})
+	require.NoError(t, err)
+
+	result, err := svc.ResolveRefresh(ctx, owner, RefreshRequest{
+		Actions: []RefreshAction{{
+			Action:      "refresh",
+			InstanceKey: "app/0",
+			Name:        stringPtr("my-charm"),
+			Revision:    intPtr(2),
+			Channel:     stringPtr("latest/edge"),
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Nil(t, result.Results[0].Error)
+	require.NotNil(t, result.Results[0].Charm)
+	assert.Equal(t, "latest/edge", result.Results[0].EffectiveChannel)
+	assert.Equal(t, 22, result.Results[0].Charm.Revision)
+}
+
 func TestRefreshWithDirectRevisionAndResourceOverrideWithoutReleaseResources(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1748,7 +1787,6 @@ func TestRefreshWithDirectRevisionAndResourceOverrideWithoutReleaseResources(t *
 			ID:          stringPtr(pkg.ID),
 			Name:        stringPtr("my-charm"),
 			Revision:    intPtr(1),
-			Channel:     stringPtr("latest/stable"),
 			ResourceRevisions: []core.ReleaseResourceRef{
 				{Name: "workload-image", Revision: intPtr(1)},
 			},
