@@ -130,7 +130,7 @@ def deployed(
         "JUB_CERTIFICATES_CHARM",
         "self-signed-certificates",
     )
-    certificates_channel = os.environ.get("JUB_CERTIFICATES_CHANNEL", "latest/stable")
+    certificates_channel = os.environ.get("JUB_CERTIFICATES_CHANNEL", "1/stable")
 
     logger.info("Deploying %s as %s", gateway_charm, gateway_app)
     juju.deploy(

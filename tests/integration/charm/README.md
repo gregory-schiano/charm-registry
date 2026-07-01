@@ -39,7 +39,7 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 | `JUB_POSTGRESQL_CHARM` | PostgreSQL charm name | `postgresql-k8s` |
 | `JUB_POSTGRESQL_CHANNEL` | PostgreSQL charm channel | `14/stable` |
 | `JUB_CERTIFICATES_CHARM` | TLS provider charm name | `self-signed-certificates` |
-| `JUB_CERTIFICATES_CHANNEL` | TLS provider charm channel | `latest/stable` |
+| `JUB_CERTIFICATES_CHANNEL` | TLS provider charm channel | `1/stable` |
 | `JUB_API_URL` | Override discovered API URL | `http://<unit-address>:8080` |
 | `JUB_OCI_URL` | Override OCI URL used by functional tests | `http://<unit-address>:5000` |
 
