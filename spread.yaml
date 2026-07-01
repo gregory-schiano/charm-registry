@@ -1,8 +1,8 @@
 project: charm-registry
 
 backends:
-  integration-test:
-    type: integration-test
+  snap-test:
+    type: opcli-minimal
     systems:
       - ubuntu-24.04:
           runner: [ubuntu-latest]
@@ -21,6 +21,10 @@ environment:
 prepare: |
   # Install Go for building the functional-test binary
   snap install go --classic --channel=1.26/stable
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    export GH_TOKEN="${GITHUB_TOKEN}"
+    opcli artifacts fetch --run-id "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --wait
+  fi
 
 restore: |
   if snap list spellbook 2>/dev/null; then
@@ -31,4 +35,4 @@ suites:
   tests/spread/:
     summary: "charm-registry snap integration tests"
     systems: [ubuntu-24.04]
-    backends: [integration-test]
+    backends: [snap-test]
