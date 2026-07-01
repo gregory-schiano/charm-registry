@@ -42,7 +42,7 @@ class TestCharmDeployment:
         assert f"{deployed['database_app']}:database" in relation_status
 
     def test_self_signed_certificates_active(self, deployed: dict[str, Any]):
-        """Self-signed certificates are issued to the ingress applications."""
+        """Self-signed certificates are issued to the Gateway API integrator."""
         juju: jubilant.Juju = deployed["juju"]
         relation_status = juju.cli("status", "--relations")
         task = juju.run(
@@ -55,8 +55,16 @@ class TestCharmDeployment:
         logger.info("CA certificate output:\n%s", task.stdout)
         assert "BEGIN CERTIFICATE" in task.stdout
         assert f"{deployed['certificates_app']}:certificates" in relation_status
-        assert f"{deployed['api_ingress_app']}:certificates" in relation_status
-        assert f"{deployed['oci_ingress_app']}:certificates" in relation_status
+        assert f"{deployed['gateway_app']}:certificates" in relation_status
+
+    def test_gateway_api_ingress_active(self, deployed: dict[str, Any]):
+        """Both ingress-configurator applications are related to Gateway API."""
+        juju: jubilant.Juju = deployed["juju"]
+        relation_status = juju.cli("status", "--relations")
+
+        assert f"{deployed['api_ingress_app']}:gateway-route" in relation_status
+        assert f"{deployed['oci_ingress_app']}:gateway-route" in relation_status
+        assert f"{deployed['gateway_app']}:gateway-route" in relation_status
 
     def test_health_endpoint(self, deployed: dict[str, Any]):
         """GET /healthz returns status=ok."""
