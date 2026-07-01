@@ -25,6 +25,39 @@ class TestCharmDeployment:
         logger.info("Application status: %s %s", app_status.current, app_status.message)
         assert app_status.current == "active"
 
+    def test_postgresql_relation_active(self, deployed: dict[str, Any]):
+        """The deployment uses the PostgreSQL relation instead of SQLite-only mode."""
+        juju: jubilant.Juju = deployed["juju"]
+        status = juju.status()
+        database_status = status.apps[deployed["database_app"]].application_status
+        relation_status = juju.cli("status", "--relations")
+
+        logger.info(
+            "PostgreSQL status: %s %s",
+            database_status.current,
+            database_status.message,
+        )
+        assert database_status.current == "active"
+        assert f"{deployed['app']}:postgresql" in relation_status
+        assert f"{deployed['database_app']}:database" in relation_status
+
+    def test_self_signed_certificates_active(self, deployed: dict[str, Any]):
+        """Self-signed certificates are issued to the ingress applications."""
+        juju: jubilant.Juju = deployed["juju"]
+        relation_status = juju.cli("status", "--relations")
+        task = juju.run(
+            f"{deployed['certificates_app']}/0",
+            "get-ca-certificate",
+            wait=60,
+        )
+        task.raise_on_failure()
+
+        logger.info("CA certificate output:\n%s", task.stdout)
+        assert "BEGIN CERTIFICATE" in task.stdout
+        assert f"{deployed['certificates_app']}:certificates" in relation_status
+        assert f"{deployed['api_ingress_app']}:certificates" in relation_status
+        assert f"{deployed['oci_ingress_app']}:certificates" in relation_status
+
     def test_health_endpoint(self, deployed: dict[str, Any]):
         """GET /healthz returns status=ok."""
         resp = requests.get(f"{deployed['api_url']}/healthz", timeout=15)

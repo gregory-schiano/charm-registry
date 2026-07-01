@@ -97,7 +97,7 @@ The charm and snap integration suites invoke this binary automatically as part o
 
 ## Charm integration tests (Jubilant)
 
-Charm integration tests deploy charm-registry through Juju using [Jubilant](https://github.com/canonical/jubilant), attach the built `app-image` resource, relate the required ingress endpoints, and exercise the deployed charm's API with the shared functional harness.
+Charm integration tests deploy charm-registry through Juju using [Jubilant](https://github.com/canonical/jubilant), attach the built `app-image` resource, relate the required ingress endpoints, PostgreSQL, and self-signed certificates, and exercise the deployed charm's API with the shared functional harness.
 
 ### Prerequisites
 
@@ -121,6 +121,8 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 
 - Uses `charm-ci`/`opcli` artifacts for the charm and `app-image` resource in CI
 - Deploys two `traefik-k8s` apps, one per mandatory ingress relation
+- Deploys `postgresql-k8s` and relates it to `charm-registry:postgresql`
+- Deploys `self-signed-certificates` and relates it to both Traefik `certificates` endpoints
 - Deploys `charm-registry` and relates both ingresses
 - Waits for `active/idle` workload status
 - Runs the shared functional-test binary against the deployed endpoint

@@ -2,7 +2,8 @@
 
 Jubilant-driven integration tests for charm-registry. These tests deploy the
 built charm with Juju, attach the built `app-image` resource, relate the
-mandatory ingress endpoints, and exercise the shared functional test harness.
+mandatory ingress endpoints, PostgreSQL, and self-signed certificates, then
+exercise the shared functional test harness.
 
 ## Prerequisites
 
@@ -30,6 +31,10 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 | `JUB_APP_IMAGE` | Local fallback image resource when not using opcli fixtures | _(opcli fixture)_ |
 | `JUB_INGRESS_CHARM` | Ingress charm name | `traefik-k8s` |
 | `JUB_INGRESS_CHANNEL` | Ingress charm channel | `latest/stable` |
+| `JUB_POSTGRESQL_CHARM` | PostgreSQL charm name | `postgresql-k8s` |
+| `JUB_POSTGRESQL_CHANNEL` | PostgreSQL charm channel | `14/stable` |
+| `JUB_CERTIFICATES_CHARM` | TLS provider charm name | `self-signed-certificates` |
+| `JUB_CERTIFICATES_CHANNEL` | TLS provider charm channel | `latest/stable` |
 | `JUB_API_URL` | Override discovered API URL | `http://<unit-address>:8080` |
 | `JUB_OCI_URL` | Override OCI URL used by functional tests | `http://<unit-address>:5000` |
 
@@ -37,7 +42,7 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 
 | Test Class | What it verifies |
 |---|---|
-| `TestCharmDeployment` | Charm deploys with its OCI resource, reaches active status, and health/ready/root endpoints respond |
+| `TestCharmDeployment` | Charm deploys with its OCI resource, PostgreSQL, and self-signed TLS integrations, reaches active status, and health/ready/root endpoints respond |
 | `TestFunctionalScenarios` | All shared Go functional scenarios pass against the deployed charm |
 
 ## Architecture
@@ -52,7 +57,11 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 │  │              │ oci-ingress  ├──────────────────┤  │
 │  │              │◄─────────────│ ingress-oci      │  │
 │  └──────────────┘              │ (traefik-k8s)    │  │
-│                                └──────────────────┘  │
+│         ▲                      └──────────────────┘  │
+│         │ postgresql                   ▲ certificates│
+│  ┌──────────────┐       ┌──────────────────────────┐ │
+│  │postgresql-k8s│       │self-signed-certificates  │ │
+│  └──────────────┘       └──────────────────────────┘ │
 └──────────────────────────────────────────────────────┘
           ▲
           │ HTTP
@@ -64,7 +73,9 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 Both ingress relations are mandatory: the charm derives its public API,
 storage, and OCI registry URLs from them and stays blocked until both are
 related. Two Traefik applications are deployed because each relation publishes
-a route keyed on the same model/app name.
+a route keyed on the same model/app name. PostgreSQL verifies the charm's
+database relation path, and self-signed certificates exercise TLS termination
+on both ingress applications.
 
 ## Design Decisions
 

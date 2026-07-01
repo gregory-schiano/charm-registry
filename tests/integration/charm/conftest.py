@@ -114,13 +114,26 @@ def deployed(
     app = "charm-registry"
     api_ingress_app = "ingress-api"
     oci_ingress_app = "ingress-oci"
+    database_app = "postgresql"
+    certificates_app = "self-signed-certificates"
     ingress_charm = os.environ.get("JUB_INGRESS_CHARM", "traefik-k8s")
     ingress_channel = os.environ.get("JUB_INGRESS_CHANNEL", "latest/stable")
+    postgresql_charm = os.environ.get("JUB_POSTGRESQL_CHARM", "postgresql-k8s")
+    postgresql_channel = os.environ.get("JUB_POSTGRESQL_CHANNEL", "14/stable")
+    certificates_charm = os.environ.get(
+        "JUB_CERTIFICATES_CHARM",
+        "self-signed-certificates",
+    )
+    certificates_channel = os.environ.get("JUB_CERTIFICATES_CHANNEL", "latest/stable")
 
     logger.info("Deploying %s as %s", ingress_charm, api_ingress_app)
     juju.deploy(ingress_charm, api_ingress_app, channel=ingress_channel, trust=True)
     logger.info("Deploying %s as %s", ingress_charm, oci_ingress_app)
     juju.deploy(ingress_charm, oci_ingress_app, channel=ingress_channel, trust=True)
+    logger.info("Deploying %s as %s", postgresql_charm, database_app)
+    juju.deploy(postgresql_charm, database_app, channel=postgresql_channel, trust=True)
+    logger.info("Deploying %s as %s", certificates_charm, certificates_app)
+    juju.deploy(certificates_charm, certificates_app, channel=certificates_channel)
 
     logger.info("Deploying %s from %s", app, charm_file)
     juju.deploy(
@@ -136,9 +149,18 @@ def deployed(
 
     juju.integrate(f"{app}:ingress", f"{api_ingress_app}:ingress")
     juju.integrate(f"{app}:oci-ingress", f"{oci_ingress_app}:ingress")
+    juju.integrate(f"{app}:postgresql", f"{database_app}:database")
+    juju.integrate(
+        f"{certificates_app}:certificates",
+        f"{api_ingress_app}:certificates",
+    )
+    juju.integrate(
+        f"{certificates_app}:certificates",
+        f"{oci_ingress_app}:certificates",
+    )
 
     logger.info("Waiting for active/idle deployment")
-    juju.wait(jubilant.all_active, timeout=15 * 60, delay=10, successes=3)
+    juju.wait(jubilant.all_active, timeout=30 * 60, delay=10, successes=3)
     time.sleep(10)
 
     status = juju.status()
@@ -154,6 +176,10 @@ def deployed(
         "juju": juju,
         "app": app,
         "unit": f"{app}/0",
+        "api_ingress_app": api_ingress_app,
+        "oci_ingress_app": oci_ingress_app,
+        "database_app": database_app,
+        "certificates_app": certificates_app,
         "api_url": api_url,
         "oci_url": oci_url,
     }
