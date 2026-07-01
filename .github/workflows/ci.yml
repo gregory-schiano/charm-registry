@@ -149,10 +149,11 @@ jobs:
         run: |
           .bin/charm-registry &
           echo $! > /tmp/charm-registry.pid
-          for i in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
               exit 0
             fi
+            echo "Waiting for server (${attempt}/30)"
             sleep 1
           done
           echo "::error::Server did not become healthy within 30s"
@@ -173,34 +174,22 @@ jobs:
             kill "$SERVER_PID" 2>/dev/null || true
           fi
 
-  charm-build:
-    name: Charm Pack
+  artifact-build:
+    name: Build charm, rock, and snap artifacts
     needs: [build]
-    uses: canonical/data-platform-workflows/.github/workflows/build_charm.yaml@v49
+    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@main
+    permissions:
+      actions: read
+      contents: read
+      packages: write
     with:
-      artifact-prefix: charm-registry-charm
-      path-to-charm-directory: charm
-
-  rock-build:
-    name: Rock Pack
-    needs: [build]
-    uses: canonical/data-platform-workflows/.github/workflows/build_rock.yaml@v49
-    with:
-      artifact-prefix: charm-registry-rock
-      path-to-rock-directory: .
-
-  snap-build:
-    name: Snap Pack
-    needs: [build]
-    uses: canonical/data-platform-workflows/.github/workflows/build_snap.yaml@v49
-    with:
-      artifact-prefix: charm-registry-snap
-      path-to-snap-project-directory: .
+      working-directory: .
+      upload-image: artifact
 
   required-status-checks:
     name: Required status checks
     runs-on: ubuntu-latest
-    needs: [actionlint, lint, security, test, build, integration-smoke, charm-build, rock-build, snap-build]
+    needs: [actionlint, lint, security, test, build, integration-smoke, artifact-build]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -214,9 +203,7 @@ jobs:
           check_job test "${{ needs.test.result }}"
           check_job build "${{ needs.build.result }}"
           check_job integration-smoke "${{ needs.integration-smoke.result }}"
-          check_job charm-build "${{ needs.charm-build.result }}"
-          check_job rock-build "${{ needs.rock-build.result }}"
-          check_job snap-build "${{ needs.snap-build.result }}"
+          check_job artifact-build "${{ needs.artifact-build.result }}"
           if [ -n "$FAILED" ]; then
             echo "::error::One or more required jobs failed or were skipped:$FAILED"
             exit 1

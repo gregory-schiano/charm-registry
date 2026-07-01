@@ -15,6 +15,10 @@ issues: https://github.com/gregory-schiano/charm-registry/issues
 grade: devel
 confinement: strict
 
+platforms:
+  amd64:
+  arm64:
+
 apps:
   charm-registry:
     command: bin/charm-registry-wrapper
