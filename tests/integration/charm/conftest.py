@@ -1,7 +1,7 @@
 # conftest.py — Jubilant charm integration test fixtures.
 #
 # Creates a temporary Juju model via jubilant, packs the local charm,
-# deploys it with required relations (PostgreSQL, S3-integrator, Traefik
+# deploys it with required relations (PostgreSQL, S3-integrator, Traefik OCI
 # ingress), and tears the model down after the test session.
 #
 # Prerequisites (checked once at session start):
@@ -140,10 +140,8 @@ def deployed(juju, charm_file, functional_test_binary):
     pg_channel = os.environ.get("JUB_POSTGRES_CHANNEL", "14/stable")
     ingress_charm = os.environ.get("JUB_TRAEFIK_CHARM", "traefik-k8s")
     ingress_channel = os.environ.get("JUB_TRAEFIK_CHANNEL", "latest/stable")
-    # Two traefik apps: one fronting the API/storage endpoints, one fronting
-    # the embedded OCI registry. Both ingress relations are mandatory and are
-    # the sole source of the workload's public URLs.
-    api_ingress_app = "ingress-api"
+    # The charm declares a mandatory ingress relation for the embedded OCI
+    # registry. The API endpoint is exercised directly through the unit address.
     oci_ingress_app = "ingress-oci"
     s3_app_name = os.environ.get("JUB_S3_INTEGRATOR", "s3-integrator")
     s3_channel = os.environ.get("JUB_S3_CHANNEL", "latest/stable")
@@ -153,9 +151,12 @@ def deployed(juju, charm_file, functional_test_binary):
     logger.info("Deploying %s (channel: %s)", pg_app, pg_channel)
     juju.deploy(pg_app, channel=pg_channel, trust=True)
 
-    logger.info("Deploying %s as %s and %s (channel: %s)",
-                ingress_charm, api_ingress_app, oci_ingress_app, ingress_channel)
-    juju.deploy(ingress_charm, api_ingress_app, channel=ingress_channel, trust=True)
+    logger.info(
+        "Deploying %s as %s (channel: %s)",
+        ingress_charm,
+        oci_ingress_app,
+        ingress_channel,
+    )
     juju.deploy(ingress_charm, oci_ingress_app, channel=ingress_channel, trust=True)
 
     # S3-integrator: optional when env vars not supplied.
@@ -187,7 +188,6 @@ def deployed(juju, charm_file, functional_test_binary):
     # --- Create relations ---
 
     juju.integrate(f"{app}:postgresql", f"{pg_app}:database")
-    juju.integrate(f"{app}:ingress", f"{api_ingress_app}:ingress")
     juju.integrate(f"{app}:oci-ingress", f"{oci_ingress_app}:ingress")
 
     if s3_configured:

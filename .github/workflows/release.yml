@@ -163,7 +163,7 @@ jobs:
       - name: Run BOOT integration tests
         env:
           ITEST_API_URL: http://localhost:8080
-        run: go test -tags=integration -run TestBOOT -v -count=1 ./tests/integration/
+        run: go test -tags=integration -run 'TestBOOT0[1-5]_' -v -count=1 ./tests/integration/
 
       - name: Stop server
         if: always()

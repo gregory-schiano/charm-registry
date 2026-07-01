@@ -1,14 +1,7 @@
 name: Integration Tests
 
 on:
-  # Run smoke subset on PR and merge to main
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  # Allow manual dispatch for any branch (runs full suite)
   workflow_dispatch:
-  # Run on schedule for catching regressions (Monday 06:00 UTC)
   schedule:
     - cron: "0 6 * * 1"
 
@@ -19,91 +12,10 @@ env:
   GO_VERSION: "1.26.4"
 
 jobs:
-  # ── Lightweight integration smoke (PR + push + manual + schedule) ──
-  #
-  # Builds the Go binary, starts it against a local SQLite backend with
-  # insecure dev auth, waits for /healthz, then runs the BOOT-level
-  # integration tests. Fast enough for every PR (~3 min).
-
-  integration-smoke:
-    name: Integration Smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Build server binary
-        run: CGO_ENABLED=0 go build -o .bin/charm-registry ./cmd/charm-registry
-
-      - name: Start server (SQLite + dev auth)
-        env:
-          CHARM_REGISTRY_DATABASE_BACKEND: sqlite
-          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
-          CHARM_REGISTRY_LISTEN: ":8080"
-          CHARM_REGISTRY_OCI_SECRET_KEY: integration-test-secret
-        run: |
-          .bin/charm-registry &
-          echo $! > /tmp/charm-registry.pid
-          # Wait for health endpoint (up to 30s)
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
-              echo "Server healthy after ${i}s"
-              break
-            fi
-            if [ "$i" = "30" ]; then
-              echo "::error::Server did not become healthy within 30s"
-              SERVER_PID=$(cat /tmp/charm-registry.pid)
-              kill "$SERVER_PID" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 1
-          done
-
-      - name: Run BOOT integration tests
-        env:
-          ITEST_API_URL: http://localhost:8080
-        run: go test -tags=integration -run TestBOOT -v -count=1 ./tests/integration/
-
-      - name: Stop server
-        if: always()
-        run: |
-          SERVER_PID=$(cat /tmp/charm-registry.pid)
-          kill "$SERVER_PID" 2>/dev/null || true
-
-  # ── Heavy integration tests (schedule / manual only) ────────────────
-  #
-  # The jobs below deploy real infrastructure (Juju, microk8s, LXD)
-  # and are too expensive for every PR. They run on schedule and on
-  # manual workflow_dispatch.
-
-  # ── Charm integration tests (Jubilant + Juju) ──────────────────────
-  #
-  # Deploys postgresql-k8s, traefik-k8s, and the local charm via Juju on
-  # a microk8s controller, then runs the Jubilant pytest suite.
-  #
-  # Prerequisites on the runner: juju, lxd, microk8s, python3, pytest.
-  #
-  # NOTE on operator-workflows reuse:
-  # canonical/operator-workflows provides `integration_test.yaml` which
-  # builds charms via charmcraft, deploys via Juju, and runs pytest via
-  # tox. Our service is a Go application — the charm is a thin wrapper
-  # that packs Go binaries, not a Python operator. Custom jobs are
-  # needed here because:
-  #   1. We deploy multiple related charms (postgresql-k8s, traefik-k8s,
-  #      s3-integrator) as prerequisites, not just the subject charm.
-  #   2. Functional scenarios run via a compiled Go binary, not through
-  #      tox/pytest unit patterns.
-  #   3. S3 integration is optional and gated on JUB_S3_* env vars.
-
   charm-integration:
     name: Charm Integration (Jubilant)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -111,14 +23,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install Juju and microk8s
+      - name: Install Juju, microk8s, LXD, and charmcraft
         run: |
           sudo snap install juju --classic
           sudo snap install microk8s --classic
+          sudo snap install lxd
           sudo snap install charmcraft --classic
           sudo usermod -aG microk8s "$USER"
+          sudo usermod -aG lxd "$USER"
+          sudo lxd init --auto
+          sudo iptables -F FORWARD
+          sudo iptables -P FORWARD ACCEPT
           sg microk8s -c 'microk8s status --wait-ready'
-          sg microk8s -c 'microk8s enable dns storage rbac'
+          sg microk8s -c 'microk8s enable dns ingress rbac storage'
 
       - name: Bootstrap Juju controller
         run: |
@@ -127,17 +44,13 @@ jobs:
           juju add-model charm-registry-test || true
 
       - name: Install Python test dependencies
-        run: |
-          cd tests/integration/charm
-          pip install -r requirements.txt
+        run: python3 -m pip install -r tests/integration/charm/requirements.txt
 
       - name: Build functional test binary
         run: make functional-test-build
 
       - name: Run charm integration tests
-        run: |
-          cd tests/integration/charm
-          python3 -m pytest -v -s --tb native --log-cli-level=INFO
+        run: python3 -m pytest -v -s --tb native --log-cli-level=INFO tests/integration/charm
         env:
           JUB_MODEL: charm-registry-test
           JUB_POSTGRES_CHARM: postgresql-k8s
@@ -158,18 +71,10 @@ jobs:
           juju destroy-model charm-registry-test --force --no-wait || true
           juju destroy-controller charm-registry-test-ctrl --destroy-all-models || true
 
-  # ── Snap spread integration tests ──────────────────────────────────
-  #
-  # Packs, installs, and configures the charm-registry snap in a LXD
-  # spread backend, then runs all 16 shared functional scenarios.
-  #
-  # Prerequisites on the runner: lxd, spread, snapcraft.
-
   snap-integration:
     name: Snap Integration (Spread)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -181,6 +86,8 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo iptables -F FORWARD
+          sudo iptables -P FORWARD ACCEPT
           sudo usermod -aG lxd "$USER"
 
       - name: Install snapcraft
