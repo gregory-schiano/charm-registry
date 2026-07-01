@@ -1,28 +1,25 @@
-# Charm Integration Tests (Jubilant)
+# Charm Integration Tests
 
 Jubilant-driven integration tests for charm-registry. These tests deploy the
-charm with Juju, exercise the shared functional test harness, and verify
-restart/persistence behaviour through unit reschedule.
+built charm with Juju, attach the built `app-image` resource, relate the
+mandatory ingress endpoints, and exercise the shared functional test harness.
 
 ## Prerequisites
 
 - `juju` CLI 3.x+ installed on PATH
-- `charmcraft` installed on PATH
+- a built charm and `app-image` resource from `charm-ci`, or `JUB_APP_IMAGE`
+  plus `charmcraft` for local fallback packing
 - A bootstrapped Juju controller (k8s or LXD)
-- Python packages: `pip install jubilant pytest requests`
+- Python packages from `requirements.txt` plus `opcli`
 
 ## Running
 
 ```sh
-# Via Makefile (recommended):
-make charm-integration-test
+# Via tox (recommended, from repo root):
+uv tool run tox -c charm/tox.ini -e integration
 
 # Directly:
-cd tests/integration/charm
-python3 -m pytest -v -s --tb native
-
-# Via tox (from charm/):
-cd charm && tox run -e integration
+JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/charm
 ```
 
 ## Environment Variables
@@ -30,27 +27,18 @@ cd charm && tox run -e integration
 | Variable | Description | Default |
 |---|---|---|
 | `JUB_MODEL` | Reuse an existing Juju model | _(creates temp model)_ |
-| `JUB_POSTGRES_CHARM` | PostgreSQL charm name | `postgresql-k8s` |
-| `JUB_POSTGRES_CHANNEL` | PostgreSQL charm channel | `14/stable` |
-| `JUB_TRAEFIK_CHARM` | Ingress charm name | `traefik-k8s` |
-| `JUB_TRAEFIK_CHANNEL` | Ingress charm channel | `latest/stable` |
-| `JUB_S3_INTEGRATOR` | S3 charm name | `s3-integrator` |
-| `JUB_S3_CHANNEL` | S3 charm channel | `latest/stable` |
-| `JUB_S3_ENDPOINT` | S3 endpoint URL | _(S3 tests skipped)_ |
-| `JUB_S3_BUCKET` | S3 bucket name | `charm-registry-test` |
-| `JUB_S3_REGION` | S3 region | `us-east-1` |
-| `JUB_S3_ACCESS_KEY` | S3 access key | _(required for S3)_ |
-| `JUB_S3_SECRET_KEY` | S3 secret key | _(required for S3)_ |
+| `JUB_APP_IMAGE` | Local fallback image resource when not using opcli fixtures | _(opcli fixture)_ |
+| `JUB_INGRESS_CHARM` | Ingress charm name | `traefik-k8s` |
+| `JUB_INGRESS_CHANNEL` | Ingress charm channel | `latest/stable` |
 | `JUB_API_URL` | Override discovered API URL | `http://<unit-address>:8080` |
-| `JUB_OCI_URL` | Override discovered OCI URL | `http://<traefik-address>:80` |
+| `JUB_OCI_URL` | Override OCI URL used by functional tests | `http://<unit-address>:5000` |
 
 ## Test Structure
 
 | Test Class | What it verifies |
 |---|---|
-| `TestCharmDeployment` | Charm deploys, reaches active/idle, health/ready/root endpoints respond |
-| `TestFunctionalScenarios` | All 16 shared Go functional scenarios pass against the deployed charm |
-| `TestRestartPersistence` | Health recovers after unit reschedule; registered packages persist across restarts |
+| `TestCharmDeployment` | Charm deploys with its OCI resource, reaches active status, and health/ready/root endpoints respond |
+| `TestFunctionalScenarios` | All shared Go functional scenarios pass against the deployed charm |
 
 ## Architecture
 
@@ -58,13 +46,10 @@ cd charm && tox run -e integration
 ┌──────────────────────────────────────────────────────┐
 │                      Juju Model                      │
 │                                                      │
-│  ┌──────────────┐  postgresql  ┌──────────────────┐  │
-│  │charm-registry│◄─────────────│ postgresql-k8s   │  │
-│  │ (Go service) │  s3/oci-s3   ├──────────────────┤  │
-│  │              │◄─────────────│ s3-integrator    │  │
-│  │              │  ingress     ├──────────────────┤  │
-│  │              │◄─────────────│ ingress-api      │  │
-│  │              │  oci-ingress │ (traefik-k8s)    │  │
+│  ┌──────────────┐   ingress    ┌──────────────────┐  │
+│  │charm-registry│◄─────────────│ ingress-api      │  │
+│  │              │              │ (traefik-k8s)    │  │
+│  │              │ oci-ingress  ├──────────────────┤  │
 │  │              │◄─────────────│ ingress-oci      │  │
 │  └──────────────┘              │ (traefik-k8s)    │  │
 │                                └──────────────────┘  │
@@ -72,22 +57,22 @@ cd charm && tox run -e integration
           ▲
           │ HTTP
           ▼
-   functional-test binary (16 scenarios)
-   + direct health/persistence assertions
+   functional-test binary
+   + direct health/readiness assertions
 ```
 
 Both ingress relations are mandatory: the charm derives its public API,
 storage, and OCI registry URLs from them and stays blocked until both are
-related. Two traefik applications are deployed because each relation
-publishes a route keyed on the same model/app name.
+related. Two Traefik applications are deployed because each relation publishes
+a route keyed on the same model/app name.
 
 ## Design Decisions
 
 - **Juju-native deployment**: The Go functional-test
   binary runs as a separate process, not inside any container.
 - **Session-scoped deployment**: The charm is deployed once per pytest session.
-  Tests share the same running model to avoid repeated pack/deploy overhead.
-- **Graceful degradation**: Missing S3 credentials skip S3 scenarios; unreachable
-  endpoints produce `pytest.skip` rather than hard failures for setup issues.
+  Tests share the same running model to avoid repeated deploy overhead.
+- **Artifact-backed deploys**: In CI, `opcli` provides the charm file and
+  `app-image` resource built by `canonical/charm-ci`.
 - **Jubilant over pytest-operator**: Jubilant wraps the Juju CLI with a clean
   Python API, avoids websocket issues, and does not require async.

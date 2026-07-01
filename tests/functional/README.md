@@ -29,7 +29,7 @@ All parameters are supplied via environment variables:
 |---|---|---|
 | `FTEST_API_URL` | Base URL of the charm-registry API | `http://localhost:8080` |
 | `FTEST_OCI_URL` | Base URL of the OCI registry | `https://localhost:15000` |
-| `FTEST_OCI_CERT_PATH` | Path to OCI registry CA cert PEM | _(empty)_ |
+| `FTEST_OCI_CERT_PATH` | Path to OCI registry CA cert PEM; optional for plain HTTP OCI URLs | _(empty)_ |
 | `FTEST_ADMIN_SUBJECT` | Dev-auth subject | `admin` |
 | `FTEST_ADMIN_USER` | Dev-auth username | `admin` |
 
@@ -77,7 +77,7 @@ make functional-test
 | `resources/revision-lifecycle` | Upload resource file, push revision, list revisions with field validation |
 | `resources/download` | Push resource + download via /api/v1/resources/download, verify content integrity |
 | `sync/list-rules` | List Charmhub sync rules, verify response shape |
-| `sync/add-delete-rule` | Add sync rule → verify in list → delete → verify removal |
+| `sync/add-delete-rule` | Add sync rule → verify in list → delete → verify deletion transition |
 | `oci/registry-v2` | OCI registry /v2/ base and /v2/_catalog endpoints reachable |
 
 ## Design decisions

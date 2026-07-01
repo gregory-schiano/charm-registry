@@ -220,6 +220,9 @@ func (c *Client) OCITLSClient() (*http.Client, error) {
 	if c.ociTLS != nil {
 		return c.ociTLS, nil
 	}
+	if strings.HasPrefix(c.cfg.OCIURL, "http://") {
+		return c.http, nil
+	}
 	if c.cfg.OCICertPath == "" {
 		return nil, fmt.Errorf("FTEST_OCI_CERT_PATH not set; cannot build TLS client")
 	}

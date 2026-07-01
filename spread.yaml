@@ -1,6 +1,14 @@
 project: charm-registry
 
 backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04:
+          runner: [ubuntu-latest]
+          cpu: 4
+          memory: 8
+          disk: 20
   snap-test:
     type: opcli-minimal
     systems:
@@ -17,6 +25,8 @@ environment:
   FTEST_OCI_CERT_PATH: "/var/snap/spellbook/common/certs/oci.crt"
   FTEST_ADMIN_SUBJECT: admin
   FTEST_ADMIN_USER: admin
+  CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
+  OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
 
 prepare: |
   # Install Go for building the functional-test binary
@@ -41,3 +51,11 @@ suites:
     summary: "charm-registry snap integration tests"
     systems: [ubuntu-24.04]
     backends: [snap-test]
+
+integration-suites:
+  tests/integration/charm/:
+    summary: "charm-registry charm integration tests"
+    working-dir: charm
+    backends: [integration-test]
+    environment:
+      TOX_ENV: integration

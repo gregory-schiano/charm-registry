@@ -97,39 +97,37 @@ The charm and snap integration suites invoke this binary automatically as part o
 
 ## Charm integration tests (Jubilant)
 
-Charm integration tests deploy charm-registry through Juju using [Jubilant](https://github.com/canonical/jubilant), exercise the deployed charm's endpoints, and verify restart/persistence behavior through Juju unit reschedule.
+Charm integration tests deploy charm-registry through Juju using [Jubilant](https://github.com/canonical/jubilant), attach the built `app-image` resource, relate the required ingress endpoints, and exercise the deployed charm's API with the shared functional harness.
 
 ### Prerequisites
 
 - `juju` CLI with a bootstrapped controller (microk8s or LXD)
-- `charmcraft`
-- Python 3 with `jubilant` and `pytest`
+- `charmcraft` for local fallback packing
+- Python 3 with `jubilant`, `pytest`, and `opcli`
 
 ### Running
 
 ```bash
-make charm-pack              # Pack the charm first
-make charm-integration-test  # Run the Jubilant suite
+uv tool run tox -c charm/tox.ini -e integration
 ```
 
 Or directly:
 
 ```bash
-cd tests/integration/charm
-python3 -m pytest -v -s --tb native
+JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/charm
 ```
 
 ### What it covers
 
-- Deploys `postgresql-k8s`, two `traefik-k8s` apps (one per mandatory ingress relation), and optionally `s3-integrator`
-- Deploys the local `charm-registry` charm and relates both ingresses
+- Uses `charm-ci`/`opcli` artifacts for the charm and `app-image` resource in CI
+- Deploys two `traefik-k8s` apps, one per mandatory ingress relation
+- Deploys `charm-registry` and relates both ingresses
 - Waits for `active/idle` workload status
 - Runs the shared functional-test binary against the deployed endpoint
-- Verifies data persists across Juju unit reschedule
 
 ### CI
 
-The charm integration suite runs in `.github/workflows/integration.yml` on a schedule and manual dispatch, using microk8s on a GitHub Actions runner. A lightweight smoke subset (server boot + health checks against a SQLite-backed binary) also runs on every pull request, and the release workflow requires it before publishing.
+The charm integration suite runs in `.github/workflows/integration.yml` through `canonical/charm-ci` on pull requests, pushes to `main`, scheduled runs, and manual dispatch.
 
 ## Snap integration tests (spread)
 
@@ -139,7 +137,7 @@ Snap integration tests use [spread](https://github.com/snapcore/spread) to insta
 
 - `spread` CLI
 - `snapcraft`
-- LXD or QEMU backend
+- `charm-ci` opcli-minimal backend in CI, or a local spread backend
 
 ### Running
 
@@ -150,7 +148,7 @@ make snap-integration-test   # Run the spread suite
 
 ### Systems
 
-Currently targets `ubuntu-24.04-amd64` on LXD and QEMU backends (configured in `spread.yaml`).
+Currently targets `ubuntu-24.04-amd64` through the `snap-test` backend configured in `spread.yaml`.
 
 ### What it covers
 
