@@ -28,16 +28,16 @@ prepare: |
       # Use any pre-built snap already present.
       true
     else
-      echo "SKIP: no snapcraft available and no pre-built .snap found"
-      exit 0
+      echo "FAIL: no snapcraft available and no pre-built .snap found"
+      exit 1
     fi
   fi
 
   # Locate the .snap file (packed or pre-existing).
   SNAP_PATH="$(ls -1t "$PROJECT_DIR"/spellbook_*.snap 2>/dev/null | head -1)"
   if [ -z "$SNAP_PATH" ]; then
-    echo "SKIP: no .snap file found in $PROJECT_DIR"
-    exit 0
+    echo "FAIL: no .snap file found in $PROJECT_DIR"
+    exit 1
   fi
 
   # Install the snap locally with dangerous confinement acceptance.
@@ -64,7 +64,7 @@ prepare: |
     fi
     if [ "$i" -eq 60 ]; then
       echo "FAIL: charm-registry did not become healthy within 60s"
-      snap logs charm-registry.charm-registry -n 50
+      snap logs "$SNAP_NAME.charm-registry" -n 50
       exit 1
     fi
     sleep 1

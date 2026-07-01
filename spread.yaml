@@ -1,8 +1,8 @@
 project: charm-registry
 
 backends:
-  snap-test:
-    type: opcli-minimal
+  integration-test:
+    type: integration-test
     systems:
       - ubuntu-24.04:
           runner: [ubuntu-latest]
@@ -31,4 +31,4 @@ suites:
   tests/spread/:
     summary: "charm-registry snap integration tests"
     systems: [ubuntu-24.04]
-    backends: [snap-test]
+    backends: [integration-test]
