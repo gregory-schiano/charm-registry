@@ -35,8 +35,24 @@ extensions:
 
 # uncomment the sections you need and adjust according to your requirements.
 parts:
+  go-deps:
+    plugin: nil
+    build-snaps:
+    - go/1.26/stable
+    override-build: |
+      mkdir -p "$CRAFT_PART_INSTALL/bin"
+      ln -sf /snap/go/current/bin/go "$CRAFT_PART_INSTALL/bin/go"
+      ln -sf /snap/go/current/bin/gofmt "$CRAFT_PART_INSTALL/bin/gofmt"
+    stage:
+    - bin/go
+    - bin/gofmt
+    prime:
+    - -bin/go
+    - -bin/gofmt
 
   go-framework/install-app:
+    after:
+    - go-deps
     # Match go.mod's toolchain requirement.
     build-snaps:
     - go/1.26/stable

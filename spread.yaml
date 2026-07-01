@@ -22,6 +22,11 @@ prepare: |
   # Install Go for building the functional-test binary
   snap install go --classic --channel=1.26/stable
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    export UV_TOOL_BIN_DIR=/usr/local/bin
+    export UV_TOOL_DIR=/usr/local/share/uv-tools
+    if ! command -v opcli >/dev/null 2>&1; then
+      uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" --quiet
+    fi
     export GH_TOKEN="${GITHUB_TOKEN}"
     opcli artifacts fetch --run-id "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --wait
   fi
