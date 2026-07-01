@@ -1,6 +1,7 @@
 package functional
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -145,8 +146,11 @@ func ScenarioDevAuthWhoami(c *Client) ScenarioResult {
 	if err != nil {
 		return fail(name, "decode /v1/whoami: %v", err)
 	}
-	if body["account"] == nil || body["account"] == "" {
-		return fail(name, "/v1/whoami: expected non-empty account field, got %v", body)
+	if body["id"] == nil || body["id"] == "" {
+		return fail(name, "/v1/whoami: expected non-empty id field, got %v", body)
+	}
+	if body["username"] != c.cfg.AdminUsername {
+		return fail(name, "/v1/whoami: expected username %q, got %v", c.cfg.AdminUsername, body["username"])
 	}
 	return pass(name)
 }
@@ -176,7 +180,16 @@ func ScenarioTokenIssueExchangeRevoke(c *Client) ScenarioResult {
 	}
 
 	// Exchange
-	resp2, err := c.DoRequest("POST", "/v1/tokens/exchange", "", "Bearer "+macaroonStr)
+	macaroonsHeader := base64.URLEncoding.EncodeToString([]byte("[" + macaroonStr + "]"))
+	resp2, err := c.DoRequestRaw(
+		"POST",
+		"/v1/tokens/exchange",
+		map[string]string{
+			"Content-Type": "application/json",
+			"Macaroons":    macaroonsHeader,
+		},
+		strings.NewReader("{}"),
+	)
 	if err != nil {
 		return fail(name, "POST /v1/tokens/exchange: %v", err)
 	}
@@ -426,9 +439,9 @@ func ScenarioReleaseChannel(c *Client) ScenarioResult {
 	if err != nil {
 		return fail(name, "decode releases: %v", err)
 	}
-	released, ok := listBody["released"].([]any)
-	if !ok || len(released) == 0 {
-		return fail(name, "expected at least one release entry")
+	channelMap, ok := listBody["channel-map"].([]any)
+	if !ok || len(channelMap) == 0 {
+		return fail(name, "expected at least one channel-map entry")
 	}
 	return pass(name)
 }

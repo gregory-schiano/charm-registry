@@ -47,6 +47,8 @@ prepare: |
 
   # Configure snap settings: enable dev-auth and set public URLs.
   snap set "$SNAP_NAME" \
+    admin.subjects="$FTEST_ADMIN_SUBJECT" \
+    admin.usernames="$FTEST_ADMIN_USER" \
     insecure-dev-auth=true \
     oci.secret-key=integration-test-oci-secret \
     public-api-url="http://localhost:8080" \
