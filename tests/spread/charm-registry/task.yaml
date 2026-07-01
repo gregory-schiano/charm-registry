@@ -15,26 +15,28 @@ environment:
 prepare: |
   set -euo pipefail
 
+  find_snap() {
+    find "$PROJECT_DIR" -maxdepth 3 -type f -name 'spellbook_*.snap' | sort | head -1
+  }
+
   # Build the functional-test binary from source.
   cd "$PROJECT_DIR"
   go build -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
 
-  # Pack the snap if not already built.
-  if [ ! -f "$SNAP_FILE" ]; then
+  # Use a pre-built snap from charm-ci artifacts, or pack locally as a fallback.
+  SNAP_PATH="$(find_snap)"
+  if [ -z "$SNAP_PATH" ]; then
     if command -v snapcraft >/dev/null 2>&1; then
       cd "$PROJECT_DIR"
       snapcraft pack
-    elif ls "$PROJECT_DIR"/spellbook_*.snap >/dev/null 2>&1; then
-      # Use any pre-built snap already present.
-      true
     else
       echo "FAIL: no snapcraft available and no pre-built .snap found"
       exit 1
     fi
+    SNAP_PATH="$(find_snap)"
   fi
 
   # Locate the .snap file (packed or pre-existing).
-  SNAP_PATH="$(ls -1t "$PROJECT_DIR"/spellbook_*.snap 2>/dev/null | head -1)"
   if [ -z "$SNAP_PATH" ]; then
     echo "FAIL: no .snap file found in $PROJECT_DIR"
     exit 1
