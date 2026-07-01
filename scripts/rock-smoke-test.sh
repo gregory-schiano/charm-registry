@@ -19,6 +19,16 @@ fi
 echo "=== Rock smoke test: $ROCK ==="
 echo ""
 
+list_rock_layer_files() {
+    local layer
+
+    while IFS= read -r layer; do
+        [ -n "$layer" ] || continue
+        tar xf "$ROCK" -O "$layer" 2>/dev/null | tar tzf - 2>/dev/null || \
+            tar xf "$ROCK" -O "$layer" 2>/dev/null | tar tf - 2>/dev/null || true
+    done < <(tar tf "$ROCK" | grep -E '^(\./)?blobs/sha256/|\.tar(\.gz)?$' || true)
+}
+
 # --- 1. Basic file info ---
 echo "--- File info ---"
 ls -lh "$ROCK"
@@ -38,10 +48,11 @@ if ! command -v skopeo >/dev/null 2>&1; then
     echo ""
 
     # Check for the manifest
-    if tar tf "$ROCK" | grep -q "manifest.json"; then
+    manifest_path="$(tar tf "$ROCK" | grep -E '(^|/)manifest\.json$' | head -1 || true)"
+    if [ -n "$manifest_path" ]; then
         echo "--- OCI manifest ---"
-        tar xf "$ROCK" -O manifest.json 2>/dev/null | python3 -m json.tool 2>/dev/null || \
-            tar xf "$ROCK" -O manifest.json 2>/dev/null
+        tar xf "$ROCK" -O "$manifest_path" 2>/dev/null | python3 -m json.tool 2>/dev/null || \
+            tar xf "$ROCK" -O "$manifest_path" 2>/dev/null || true
         echo ""
     fi
 
@@ -50,17 +61,7 @@ if ! command -v skopeo >/dev/null 2>&1; then
     FOUND_SERVER=false
     FOUND_CLI=false
 
-    for layer in $(tar tf "$ROCK" | grep '\.tar$' | grep -v manifest); do
-        contents=$(tar xf "$ROCK" -O "$layer" 2>/dev/null | tar tf - 2>/dev/null || true)
-        if echo "$contents" | grep -q "charm-registry$"; then
-            FOUND_SERVER=true
-            echo "  [OK] charm-registry server binary found in $layer"
-        fi
-        if echo "$contents" | grep -q "charm-registryctl$"; then
-            FOUND_CLI=true
-            echo "  [OK] charm-registryctl CLI binary found in $layer"
-        fi
-    done
+    ALL_FILES="$(list_rock_layer_files)"
 else
     echo "--- OCI inspection (skopeo) ---"
     skopeo inspect "oci-archive:${ROCK}" 2>&1 | python3 -m json.tool 2>/dev/null || \
@@ -76,30 +77,24 @@ else
     FOUND_SERVER=false
     FOUND_CLI=false
 
-    # List files in the rock layers
-    ALL_FILES=$(skopeo layers "oci-archive:${ROCK}" 2>/dev/null | tr '\n' ' ' || tar tf "$ROCK")
+    ALL_FILES="$(list_rock_layer_files)"
+fi
 
-    if echo "$ALL_FILES" | grep -q "charm-registry"; then
-        FOUND_SERVER=true
-        echo "  [OK] charm-registry binary referenced in rock"
-    fi
-    if echo "$ALL_FILES" | grep -q "charm-registryctl"; then
-        FOUND_CLI=true
-        echo "  [OK] charm-registryctl binary referenced in rock"
-    fi
+if echo "$ALL_FILES" | grep -Eq '(^|/)charm-registry$'; then
+    FOUND_SERVER=true
+    echo "  [OK] charm-registry server binary found in rock layer"
+fi
+if echo "$ALL_FILES" | grep -Eq '(^|/)charm-registryctl$'; then
+    FOUND_CLI=true
+    echo "  [OK] charm-registryctl CLI binary found in rock layer"
 fi
 
 echo ""
 
 # --- 3. Pebble layer check ---
 echo "--- Checking for Pebble service layer ---"
-if tar tf "$ROCK" | grep -q "pebble"; then
+if echo "$ALL_FILES" | grep -q "pebble"; then
     echo "  [OK] Pebble layer definitions found"
-    # Try to extract and show the Pebble layer
-    for pebble_layer in $(tar tf "$ROCK" | grep "pebble/layers/" 2>/dev/null || true); do
-        echo "  Layer file: $pebble_layer"
-        tar xf "$ROCK" -O "$pebble_layer" 2>/dev/null | head -20 || true
-    done
 else
     echo "  [WARN] No Pebble layer found — go-framework extension should auto-generate one"
 fi
