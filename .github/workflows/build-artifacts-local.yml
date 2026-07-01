@@ -108,11 +108,23 @@ jobs:
 
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
         run: |
-          opcli artifacts build \
-            --${{ matrix.type }} ${{ matrix.name }} \
-            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
+          for attempt in 1 2 3; do
+            if opcli artifacts build \
+              --${{ matrix.type }} ${{ matrix.name }} \
+              --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )); then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            if [ "${{ matrix.type }}" = "rock" ]; then
+              rockcraft clean || true
+            fi
+            sleep $(( attempt * 30 ))
+          done
         env:
           CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
+          ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
           OPCLI_ROCK_UPLOAD: ${{ inputs.upload-image }}
 
       - name: Upload ${{ matrix.type }} ${{ matrix.name }}

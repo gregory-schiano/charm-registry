@@ -5,8 +5,7 @@ name: charm-registry
 license: Apache-2.0
 # see https://documentation.ubuntu.com/rockcraft/latest/explanation/bases/
 # for more information about bases and using 'bare' bases for chiselled rocks
-base: bare # as an alternative, an ubuntu base can be used
-build-base: ubuntu@24.04 # build-base is required when the base is bare
+base: ubuntu@24.04
 version: '0.1' # just for humans. Semantic versioning is recommended
 summary: Private charm registry for Juju and charmcraft workflows
 description: |
@@ -59,6 +58,7 @@ parts:
     build-environment:
     - CGO_ENABLED: "0"
     - GOTOOLCHAIN: local
+
 #    organize:
 #    # if the main package is in the base directory and the rockcraft name
 #    # attribute is equal to the go module name, the name of the server will
