@@ -27,6 +27,7 @@ jobs:
       working-directory: .
       upload-image: artifact
       charmcraft-channel: latest/edge
+      rockcraft-channel: latest/edge
       test-timeout-minutes: 90
 
   required-status-checks:

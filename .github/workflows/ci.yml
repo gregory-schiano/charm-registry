@@ -186,6 +186,7 @@ jobs:
       working-directory: .
       upload-image: artifact
       charmcraft-channel: latest/edge
+      rockcraft-channel: latest/edge
 
   required-status-checks:
     name: Required status checks
