@@ -1,21 +1,20 @@
-project: charm-registry-summary
+project: charm-registry
 
 backends:
-  lxd:
+  snap-test:
+    type: opcli-minimal
     systems:
-      - ubuntu-24.04-amd64
-  qemu:
-    systems:
-      - ubuntu-24.04-amd64
+      - ubuntu-24.04:
+          runner: [ubuntu-latest]
 
 path: /home/test/charm-registry
 
 environment:
   PROJECT_DIR: /home/test/charm-registry
-  SNAP_NAME: charm-registry
+  SNAP_NAME: spellbook
   FTEST_API_URL: "http://localhost:8080"
   FTEST_OCI_URL: "https://127.0.0.1:5000"
-  FTEST_OCI_CERT_PATH: "/var/snap/charm-registry/common/certs/oci.crt"
+  FTEST_OCI_CERT_PATH: "/var/snap/spellbook/common/certs/oci.crt"
   FTEST_ADMIN_SUBJECT: admin
   FTEST_ADMIN_USER: admin
 
@@ -24,18 +23,12 @@ prepare: |
   snap install go --classic --channel=1.26/stable
 
 restore: |
-  if snap list charm-registry 2>/dev/null; then
-    snap remove --purge charm-registry
+  if snap list spellbook 2>/dev/null; then
+    snap remove --purge spellbook
   fi
 
 suites:
-  tests/spread/charm-registry:
+  tests/spread/:
     summary: "charm-registry snap integration tests"
-    systems: [ubuntu-24.04-amd64]
-    prepare: |
-      # Build the functional-test binary from source
-      cd "$PROJECT_DIR"
-      go build -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
-
-    restore: |
-      rm -f "$PROJECT_DIR/.bin/functional-test"
+    systems: [ubuntu-24.04]
+    backends: [snap-test]

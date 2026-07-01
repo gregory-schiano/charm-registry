@@ -93,7 +93,7 @@ class CharmRegistryApp(App):
                 self._oci_ingress.url if self._oci_ingress else None,
             )
         )
-        env.update(size_limit_environment(self.charm_state.config))
+        env.update(size_limit_environment(self._charm_state.user_defined_config))
         return env
 
     def _oci_s3_environment(
@@ -160,7 +160,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         self.framework.observe(oci_ingress.on.revoked, self._on_ingress_revoked)
         return oci_ingress
 
-    def restart(self, *, rerun_migrations: bool = False) -> None:
+    def restart(self, rerun_migrations: bool = False) -> None:
         """Restart the workload and publish OCI ingress requirements."""
         super().restart(rerun_migrations=rerun_migrations)
         if self._oci_ingress:
@@ -187,7 +187,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         self,
         requires: dict[str, typing.Any],
         charm_state: typing.Any,
-    ) -> typing.Iterator[str]:
+    ) -> typing.Generator[typing.Any, None, None]:
         """Return missing required storage integrations."""
         yield from super()._missing_required_storage_integrations(requires, charm_state)
         if self._oci_s3 and not self._oci_s3.to_relation_data():
@@ -198,7 +198,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         self,
         requires: dict[str, typing.Any],
         charm_state: typing.Any,
-    ) -> typing.Iterator[str]:
+    ) -> typing.Generator[typing.Any, None, None]:
         """Return missing required non-storage integrations."""
         yield from super()._missing_required_other_integrations(requires, charm_state)
         # Both ingresses are mandatory: they are the sole source of the public

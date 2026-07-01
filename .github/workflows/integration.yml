@@ -1,116 +1,43 @@
 name: Integration Tests
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1"
 
 permissions:
+  actions: read
   contents: read
-
-env:
-  GO_VERSION: "1.26.4"
+  packages: write
 
 jobs:
-  charm-integration:
-    name: Charm Integration (Jubilant)
+  integration-test:
+    name: Charm-CI Integration
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@main
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    with:
+      working-directory: .
+      upload-image: artifact
+      test-timeout-minutes: 90
+
+  required-status-checks:
+    name: Required Integration Test Status Checks
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    needs: [integration-test]
+    if: always() && !cancelled()
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install Juju, microk8s, LXD, and charmcraft
+      - name: Check integration test status
         run: |
-          sudo snap install juju --classic
-          sudo snap install microk8s --classic
-          sudo snap install lxd
-          sudo snap install charmcraft --classic
-          sudo usermod -aG microk8s "$USER"
-          sudo usermod -aG lxd "$USER"
-          sudo lxd init --auto
-          sudo iptables -F FORWARD
-          sudo iptables -P FORWARD ACCEPT
-          sg microk8s -c 'microk8s status --wait-ready'
-          sg microk8s -c 'microk8s enable dns ingress rbac storage'
-
-      - name: Bootstrap Juju controller
-        run: |
-          sudo snap install juju-wait --classic || true
-          juju bootstrap microk8s charm-registry-test-ctrl
-          juju add-model charm-registry-test || true
-
-      - name: Install Python test dependencies
-        run: python3 -m pip install -r tests/integration/charm/requirements.txt
-
-      - name: Build functional test binary
-        run: make functional-test-build
-
-      - name: Run charm integration tests
-        run: python3 -m pytest -v -s --tb native --log-cli-level=INFO tests/integration/charm
-        env:
-          JUB_MODEL: charm-registry-test
-          JUB_POSTGRES_CHARM: postgresql-k8s
-          JUB_POSTGRES_CHANNEL: 14/stable
-          JUB_TRAEFIK_CHARM: traefik-k8s
-          JUB_TRAEFIK_CHANNEL: latest/stable
-          FTEST_API_URL: http://localhost:8080
-
-      - name: Collect Juju status on failure
-        if: failure()
-        run: |
-          juju status -m charm-registry-test || true
-          juju debug-log --replay --no-log -m charm-registry-test || true
-
-      - name: Tear down Juju environment
-        if: always()
-        run: |
-          juju destroy-model charm-registry-test --force --no-wait || true
-          juju destroy-controller charm-registry-test-ctrl --destroy-all-models || true
-
-  snap-integration:
-    name: Snap Integration (Spread)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install LXD
-        run: |
-          sudo snap install lxd
-          sudo lxd init --auto
-          sudo iptables -F FORWARD
-          sudo iptables -P FORWARD ACCEPT
-          sudo usermod -aG lxd "$USER"
-
-      - name: Install snapcraft
-        run: sudo snap install snapcraft --classic
-
-      - name: Install spread
-        run: |
-          go install github.com/snapcore/spread/cmd/spread@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Build functional test binary
-        run: make functional-test-build
-
-      - name: Pack snap
-        run: sg lxd -c 'make snap-pack'
-
-      - name: Run spread tests
-        run: sg lxd -c 'spread -v ./tests/spread/...'
-
-      - name: Collect snap logs on failure
-        if: failure()
-        run: |
-          echo "=== snap services ==="
-          snap services charm-registry || true
-          echo "=== snap logs ==="
-          snap logs charm-registry || true
+          result="${{ needs.integration-test.result }}"
+          if [ "$result" != "success" ]; then
+            echo "::error::Integration tests failed or were skipped: ${result}"
+            exit 1
+          fi

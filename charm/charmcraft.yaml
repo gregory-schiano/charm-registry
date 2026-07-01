@@ -1,50 +1,86 @@
-# This file configures Charmcraft.
-# See https://juju.is/docs/sdk/charmcraft-config for guidance.
-# For questions or help, visit https://matrix.to/#/#12-factor-charms:ubuntu.com 
-
 name: charm-registry
-
-type: charm
-
-base: ubuntu@24.04
-
-# the platforms this charm should be built on and run on.
-# you can check your architecture with `dpkg --print-architecture`
-platforms:
-  amd64:
-  arm64:
-  # ppc64el:
-  # s390x:
-
-# (Required)
 summary: Private charm registry for Juju and charmcraft workflows
+description: 'Go-based private charm registry with Charmhub-compatible APIs,
 
-# (Required)
-description: |
-  Go-based private charm registry with Charmhub-compatible APIs,
   PostgreSQL metadata storage, S3-backed artifact storage, and an
+
   embedded OCI registry for charm resource workflows.
 
-extensions:
-  - go-framework
+  '
+base: ubuntu@24.04
+platforms:
+  amd64:
+    build-on:
+    - amd64
+    build-for:
+    - amd64
+  arm64:
+    build-on:
+    - arm64
+    build-for:
+    - arm64
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+    - astral-uv
+    - rustup
+    override-build: 'rustup default stable
 
+      craftctl default'
+type: charm
+charm-libs:
+- lib: traefik-k8s.ingress
+  version: '2'
+- lib: observability-libs.juju_topology
+  version: '0'
+- lib: grafana-k8s.grafana_dashboard
+  version: '0'
+- lib: loki-k8s.loki_push_api
+  version: '1'
+- lib: data-platform-libs.data_interfaces
+  version: '0'
+- lib: prometheus-k8s.prometheus_scrape
+  version: '0'
+- lib: redis-k8s.redis
+  version: '0'
+- lib: data-platform-libs.s3
+  version: '0'
+- lib: saml-integrator.saml
+  version: '0'
+- lib: tempo-coordinator-k8s.tracing
+  version: '0'
+- lib: smtp-integrator.smtp
+  version: '0'
+- lib: openfga-k8s.openfga
+  version: '1'
+- lib: hydra.oauth
+  version: '0'
+- lib: squid-forward-proxy.http_proxy
+  version: '0'
+actions:
+  rotate-secret-key:
+    description: Rotate the secret key. Users will be forced to log in again. This
+      might be useful if a security breach occurs.
+assumes:
+- k8s-api
+containers:
+  app:
+    resource: app-image
+peers:
+  secret-storage:
+    interface: secret-storage
+provides:
+  metrics-endpoint:
+    interface: prometheus_scrape
+  grafana-dashboard:
+    interface: grafana_dashboard
 requires:
-#   mysql:
-#     interface: mysql_client
-#     optional: false
-#     limit: 1
   postgresql:
     interface: postgresql_client
     optional: true
     limit: 1
-#   mongodb:
-#     interface: mongodb_client
-#     optional: false
-#     limit: 1
-#   redis:
-#     interface: redis
-#     optional: false
-#     limit: 1
   s3:
     interface: s3
     optional: true
@@ -53,30 +89,6 @@ requires:
     interface: s3
     optional: true
     limit: 1
-#   saml:
-#     interface: saml
-#     optional: false
-#     limit: 1
-#   rabbitmq:
-#     interface: rabbitmq
-#     optional: false
-#     limit: 1
-#   tracing:
-#     interface: tracing
-#     optional: true
-#     limit: 1
-#   smtp:
-#     interface: smtp
-#     optional: false
-#     limit: 1
-#   openfga:
-#     interface: openfga
-#     optional: false
-#     limit: 1
-#   http-proxy:
-#     interface: http_proxy
-#     optional: true
-#     limit: 1
   openid:
     interface: oauth
     optional: true
@@ -85,16 +97,23 @@ requires:
     interface: ingress
     optional: false
     limit: 1
-
+  logging:
+    interface: loki_push_api
+  ingress:
+    interface: ingress
+    limit: 1
+resources:
+  app-image:
+    type: oci-image
+    description: go application image.
 config:
   options:
     oci-internal-url:
       type: string
       default: http://127.0.0.1:5000
-      description: >-
-        URL used by the registry process to reach its embedded OCI listener.
-        Plain HTTP by default: the workload serves without TLS and relies on
-        the ingress relations for TLS termination.
+      description: 'URL used by the registry process to reach its embedded OCI listener.
+        Plain HTTP by default: the workload serves without TLS and relies on the ingress
+        relations for TLS termination.'
     oci-s3-prefix:
       type: string
       default: oci
@@ -122,20 +141,17 @@ config:
     charmhub-max-artifact-bytes:
       type: string
       default: 64MB
-      description: >-
-        Maximum synchronized Charmhub artifact download size. Accepts bytes or
-        KB, MB, GB suffixes.
+      description: Maximum synchronized Charmhub artifact download size. Accepts bytes
+        or KB, MB, GB suffixes.
     max-archive-file-bytes:
       type: string
       default: 10MB
-      description: >-
-        Maximum decompressed size for each charm archive entry. Accepts bytes
-        or KB, MB, GB suffixes.
+      description: Maximum decompressed size for each charm archive entry. Accepts
+        bytes or KB, MB, GB suffixes.
     max-upload-bytes:
       type: string
       default: 64MB
-      description: >-
-        Maximum upload request body size. Accepts bytes or KB, MB, GB suffixes.
+      description: Maximum upload request body size. Accepts bytes or KB, MB, GB suffixes.
     enable-insecure-dev-auth:
       type: boolean
       default: false
@@ -149,3 +165,35 @@ config:
     admin-usernames:
       type: string
       description: Comma-separated OIDC username values that should be registry admins.
+    app-port:
+      type: int
+      default: 8080
+      description: Default port where the application will listen on.
+    metrics-port:
+      type: int
+      default: 8080
+      description: Port where the prometheus metrics will be scraped.
+    metrics-path:
+      type: string
+      default: /metrics
+      description: Path where the prometheus metrics will be scraped.
+    app-secret-key:
+      type: string
+      description: Long secret you can use for sessions, csrf or any other thing where
+        you need a random secret shared by all units
+    app-secret-key-id:
+      type: secret
+      description: 'This configuration is similar to `app-secret-key`, but instead
+        accepts a Juju user secret ID. The secret should contain a single key, "value",
+        which maps to the actual application secret key. To create the secret, run
+        the following command: `juju add-secret my-app-secret-key value=<secret-string>
+        && juju grant-secret my-app-secret-key my-app`, and use the output secret
+        ID to configure this option.'
+    openid-redirect-path:
+      type: string
+      description: The path that the user will be redirected upon completing login.
+      default: /callback
+    openid-scopes:
+      type: string
+      description: A list of scopes with spaces in between.
+      default: openid profile email

@@ -1,3 +1,13 @@
+[project]
+name = "charm-registry"
+version = "0.1.0"
+description = "Private charm registry 12-factor charm"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "ops==2.23.2",
+    "paas-charm==1.11.2",
+]
+
 # Testing tools configuration
 [tool.coverage.run]
 branch = true

@@ -9,7 +9,10 @@ rocks:
 charms:
   - name: charm-registry
     charmcraft-yaml: charm/charmcraft.yaml
-    resources: {}
+    resources:
+      app-image:
+        type: oci-image
+        rock: charm-registry
     platforms:
       - arch: amd64
       - arch: arm64
