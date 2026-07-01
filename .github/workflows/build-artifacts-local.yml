@@ -36,13 +36,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Get workflow version
+      - name: Set opcli version
         id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: build-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "sha=main" >> "$GITHUB_OUTPUT"
 
       - name: Install uv
         run: sudo snap install astral-uv --classic
@@ -161,8 +157,8 @@ jobs:
 
       - name: Merge build manifests
         run: |
-          opcli artifacts collect \
-            $(find ./partial-artifacts -name "artifacts.build.yaml" | sort | tr '\n' ' ')
+          mapfile -t partials < <(find ./partial-artifacts -name "artifacts.build.yaml" | sort)
+          opcli artifacts collect "${partials[@]}"
 
       - name: Upload build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
