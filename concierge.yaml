@@ -1,0 +1,21 @@
+juju:
+  channel: 3.6/stable
+  model-defaults:
+    test-mode: "true"
+    automatically-retry-hooks: "false"
+
+providers:
+  lxd:
+    enable: true
+  microk8s:
+    channel: 1.34-strict
+    enable: true
+    bootstrap: true
+    addons:
+      - hostpath-storage
+      - dns
+      - rbac
+
+host:
+  snaps:
+    rockcraft:
