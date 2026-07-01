@@ -2,10 +2,18 @@
 name = "charm-registry"
 version = "0.1.0"
 description = "Private charm registry 12-factor charm"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
+    "jsonschema==4.26.0",
     "ops==2.23.2",
     "paas-charm==1.11.2",
+]
+
+[dependency-groups]
+charmlibs-pydeps = [
+    "cosl==1.9.2",
+    "email-validator==2.3.0",
+    "pydantic==2.13.3",
 ]
 
 # Testing tools configuration
