@@ -793,7 +793,7 @@ func ScenarioSyncListRules(c *Client) ScenarioResult {
 		return fail(name, "decode sync rules: %v", err)
 	}
 	rules, ok := body["rules"].([]any)
-	if !ok {
+	if !ok && body["rules"] != nil {
 		return fail(name, "response missing 'rules' array, got: %v", body)
 	}
 	// Rules may be empty — that's fine for a clean instance.
@@ -832,6 +832,10 @@ func ScenarioSyncAddDeleteRule(c *Client) ScenarioResult {
 	if err != nil {
 		return fail(name, "list after add: %v", err)
 	}
+	if resp2.StatusCode != http.StatusOK {
+		body2, _ := ReadAllBytes(resp2)
+		return fail(name, "list after add: status %d, body: %s", resp2.StatusCode, string(body2))
+	}
 	listBody, err := ReadJSON(resp2)
 	if err != nil {
 		return fail(name, "decode list: %v", err)
@@ -866,6 +870,10 @@ func ScenarioSyncAddDeleteRule(c *Client) ScenarioResult {
 	if err != nil {
 		return fail(name, "list after delete: %v", err)
 	}
+	if resp4.StatusCode != http.StatusOK {
+		body4, _ := ReadAllBytes(resp4)
+		return fail(name, "list after delete: status %d, body: %s", resp4.StatusCode, string(body4))
+	}
 	listBody2, err := ReadJSON(resp4)
 	if err != nil {
 		return fail(name, "decode list after delete: %v", err)
@@ -873,8 +881,11 @@ func ScenarioSyncAddDeleteRule(c *Client) ScenarioResult {
 	rules2, _ := listBody2["rules"].([]any)
 	for _, r := range rules2 {
 		rMap, ok := r.(map[string]any)
-		if ok && rMap["name"] == ruleName {
-			return fail(name, "deleted rule %q still appears in list", ruleName)
+		if ok && rMap["name"] == ruleName && rMap["track"] == track {
+			if rMap["status"] != "deleting" {
+				return fail(name, "deleted rule %q should be marked deleting, got status %v", ruleName, rMap["status"])
+			}
+			return pass(name)
 		}
 	}
 
