@@ -31,7 +31,7 @@ environment:
 prepare: |
   # Install Go for building the functional-test binary
   snap install go --classic --channel=1.26/stable
-  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+  if [ -n "${GITHUB_RUN_ID:-}" ] && [ "${SPREAD_BACKEND:-}" != "integration-test-ci" ]; then
     export UV_TOOL_BIN_DIR=/usr/local/bin
     export UV_TOOL_DIR=/usr/local/share/uv-tools
     if ! command -v opcli >/dev/null 2>&1; then
