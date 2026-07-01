@@ -1,0 +1,9 @@
+charm_file     = "/home/ubuntu/charm-registry_ubuntu-26.04-amd64.charm"
+app_image      = "ghcr.io/example/charm-registry:replace-me"
+app_secret_key = "replace-with-a-generated-secret"
+
+# Canonical Kubernetes default GatewayClass.
+gateway_class = "ck-gateway"
+
+api_hostname = "api.charm-registry.test"
+oci_hostname = "oci.charm-registry.test"
