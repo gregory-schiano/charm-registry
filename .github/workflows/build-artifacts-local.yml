@@ -1,0 +1,172 @@
+name: Build Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      upload-image:
+        type: string
+        default: "artifact"
+      build-timeout-minutes:
+        type: number
+        default: 60
+      charmcraft-channel:
+        type: string
+        default: "latest/edge"
+      rockcraft-channel:
+        type: string
+        default: "latest/stable"
+
+jobs:
+  build-matrix:
+    name: Build matrix
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      opcli-sha: ${{ steps.workflow-version.outputs.sha }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Get workflow version
+        id: workflow-version
+        uses: canonical/get-workflow-version-action@v1
+        with:
+          repository-name: canonical/charm-ci
+          file-name: build-artifacts.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${{ steps.workflow-version.outputs.sha }}"
+
+      - name: Generate build matrix
+        id: matrix
+        run: |
+          matrix=$(opcli artifacts matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Build matrix: $matrix"
+
+  build:
+    name: "Build ${{ matrix.type }} ${{ matrix.name }} (${{ matrix.arch }})"
+    needs: build-matrix
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: ${{ inputs.build-timeout-minutes }}
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.build-matrix.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${{ needs.build-matrix.outputs.opcli-sha }}"
+
+      - name: Install LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd waitready
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+          sudo chmod 0666 /var/snap/lxd/common/lxd/unix.socket
+          if sudo iptables -nL DOCKER-USER 2>/dev/null; then
+            sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+          if sudo ip6tables -nL DOCKER-USER 2>/dev/null; then
+            sudo ip6tables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo ip6tables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+
+      - name: Install charmcraft
+        if: matrix.type == 'charm'
+        run: sudo snap install charmcraft --classic --channel=${{ inputs.charmcraft-channel }}
+
+      - name: Install rockcraft
+        if: matrix.type == 'rock'
+        run: sudo snap install rockcraft --classic --channel=${{ inputs.rockcraft-channel }}
+
+      - name: Install snapcraft
+        if: matrix.type == 'snap'
+        run: sudo snap install snapcraft --classic
+
+      - name: Build ${{ matrix.type }} ${{ matrix.name }}
+        run: |
+          opcli artifacts build \
+            --${{ matrix.type }} ${{ matrix.name }} \
+            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
+        env:
+          CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
+          OPCLI_ROCK_UPLOAD: ${{ inputs.upload-image }}
+
+      - name: Upload ${{ matrix.type }} ${{ matrix.name }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: built-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
+          path: ${{ inputs.working-directory }}/**/*.${{ matrix.type }}
+          if-no-files-found: error
+
+      - name: Upload partial build manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
+          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          if-no-files-found: error
+
+  collect:
+    name: Collect artifacts
+    needs: [build-matrix, build]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${{ needs.build-matrix.outputs.opcli-sha }}"
+
+      - name: Download build partials
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifacts-build-*
+          path: ${{ inputs.working-directory }}/partial-artifacts/
+
+      - name: Merge build manifests
+        run: |
+          opcli artifacts collect \
+            $(find ./partial-artifacts -name "artifacts.build.yaml" | sort | tr '\n' ' ')
+
+      - name: Upload build manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifacts-build
+          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          if-no-files-found: error

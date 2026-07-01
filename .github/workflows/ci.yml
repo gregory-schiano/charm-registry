@@ -177,7 +177,7 @@ jobs:
   artifact-build:
     name: Build charm, rock, and snap artifacts
     needs: [build]
-    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@main
+    uses: ./.github/workflows/build-artifacts-local.yml
     permissions:
       actions: read
       contents: read

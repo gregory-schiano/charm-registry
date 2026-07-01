@@ -17,7 +17,7 @@ permissions:
 jobs:
   integration-test:
     name: Charm-CI Integration
-    uses: canonical/charm-ci/.github/workflows/integration-test.yml@main
+    uses: ./.github/workflows/integration-test-local.yml
     secrets: inherit
     permissions:
       actions: read
