@@ -142,6 +142,8 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
           sudo usermod -aG lxd "$USER"
 
       - name: Install charmcraft
@@ -167,6 +169,8 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
           sudo usermod -aG lxd "$USER"
 
       - name: Install rockcraft
@@ -204,6 +208,8 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
           sudo usermod -aG lxd "$USER"
 
       - name: Pack snap
