@@ -1,11 +1,11 @@
 output "deployment_mode" {
   description = "Deployment mode used by this stack."
-  value       = "hybrid-local-artifact"
+  value       = "provider-first"
 }
 
 output "model_name" {
   description = "Juju model reference used by CLI debug commands."
-  value       = local.model_cli
+  value       = local.model_name
 }
 
 output "model_uuid" {
@@ -37,10 +37,10 @@ output "ingress" {
 output "post_apply_debug_commands" {
   description = "Useful commands after terraform apply."
   value = [
-    "juju status -m ${local.model_cli} --relations --color=false",
-    "juju wait-for application -m ${local.model_cli} ${var.app_name} --timeout=${var.wait_timeout}",
-    "juju debug-log -m ${local.model_cli} --include ${var.app_name} --limit 200",
-    "juju debug-log -m ${local.model_cli} --include gateway-api-integrator --limit 200",
+    "juju status -m ${local.model_name} --relations --color=false",
+    "juju wait-for application -m ${local.model_name} ${var.app_name} --timeout=${var.wait_timeout}",
+    "juju debug-log -m ${local.model_name} --include ${var.app_name} --limit 200",
+    "juju debug-log -m ${local.model_name} --include gateway-api-integrator --limit 200",
     "kubectl get gateway -n ${var.model_name} -o wide",
     "kubectl get httproutes -n ${var.model_name} -o wide",
     "kubectl get svc -n ${var.model_name} -o wide",

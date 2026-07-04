@@ -8,10 +8,9 @@ This stack mirrors the charm integration test deployment:
 - two `ingress-configurator` applications, one for each ingress relation
 - `self-signed-certificates` on channel `1/stable`
 
-The deployment mode is **hybrid local artifact**: Terraform manages the model,
-Charmhub applications, and relations through the Juju provider, while a small
-Terraform-owned Juju CLI bridge deploys or refreshes the unpublished local
-`.charm` artifact.
+The deployment mode is **provider-first**: Terraform manages the model,
+Charmhub applications, resources, configuration, and relations through the Juju
+provider. The `charm-registry` charm is deployed from Charmhub.
 
 ## Prerequisites
 
@@ -20,8 +19,8 @@ Terraform-owned Juju CLI bridge deploys or refreshes the unpublished local
    `sudo k8s get load-balancer.cidrs`
 3. Accepted GatewayClass, usually `ck-gateway`:
    `kubectl get gatewayclass`
-4. A built `.charm` stored somewhere the Juju CLI can read.
-5. An `app-image` OCI reference reachable from the Kubernetes cluster.
+4. The `charm-registry` charm published to Charmhub.
+5. Optional: an `app-image` OCI override reachable from the Kubernetes cluster.
 
 ## Usage
 
@@ -41,9 +40,5 @@ create_model = false
 model_name   = "your-model"
 ```
 
-If the Juju CLI needs a controller-qualified model for the local charm bridge,
-also set:
-
-```hcl
-juju_model_cli = "your-controller:your-model"
-```
+If the Juju CLI needs a controller-qualified model, use the
+`-m <controller>:<model>` form in the debug commands instead.

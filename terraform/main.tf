@@ -20,7 +20,6 @@ data "juju_model" "this" {
 locals {
   model_uuid = var.create_model ? juju_model.this[0].uuid : data.juju_model.this[0].uuid
   model_name = var.model_name
-  model_cli  = coalesce(var.juju_model_cli, var.model_name)
 
   app_config = merge(
     {
@@ -30,6 +29,10 @@ locals {
     },
     var.extra_app_config,
   )
+
+  app_resources = var.app_image == null ? {} : {
+    "app-image" = var.app_image
+  }
 }
 
 module "gateway" {
@@ -101,14 +104,17 @@ module "certificates" {
 }
 
 module "app" {
-  source = "./modules/local-charm-application"
+  source = "./modules/charmhub-application"
 
-  app_name     = var.app_name
-  app_image    = var.app_image
-  charm_file   = var.charm_file
-  config       = local.app_config
-  model_name   = local.model_cli
-  wait_timeout = var.wait_timeout
+  name  = var.app_name
+  model = local.model_name
+  charm = {
+    name     = var.app_charm_name
+    channel  = var.app_channel
+    revision = var.app_revision
+  }
+  config    = local.app_config
+  resources = local.app_resources
 
   depends_on = [
     juju_model.this,

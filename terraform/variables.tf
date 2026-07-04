@@ -10,12 +10,6 @@ variable "model_name" {
   default     = "charm-registry"
 }
 
-variable "juju_model_cli" {
-  description = "Optional Juju CLI model reference for the local charm bridge, for example controller:model."
-  type        = string
-  default     = null
-}
-
 variable "cloud_name" {
   description = "Juju cloud used when creating the model."
   type        = string
@@ -38,20 +32,36 @@ variable "model_config" {
   }
 }
 
-variable "charm_file" {
-  description = "Full path to the locally built charm-registry .charm artifact."
-  type        = string
-}
-
 variable "app_image" {
-  description = "OCI image reference for the charm-registry app-image resource."
+  description = "Optional OCI image override for the charm-registry app-image resource. Leave null to use the Charmhub-published resource."
   type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "app_name" {
   description = "Juju application name for charm-registry."
   type        = string
   default     = "charm-registry"
+}
+
+variable "app_charm_name" {
+  description = "Charmhub charm name for charm-registry."
+  type        = string
+  default     = "charm-registry"
+}
+
+variable "app_channel" {
+  description = "Charmhub channel for charm-registry."
+  type        = string
+  default     = "latest/edge"
+}
+
+variable "app_revision" {
+  description = "Optional Charmhub revision for charm-registry."
+  type        = number
+  default     = null
+  nullable    = true
 }
 
 variable "app_secret_key" {
@@ -121,7 +131,7 @@ variable "certificates_channel" {
 }
 
 variable "wait_timeout" {
-  description = "Timeout used by the local charm bridge and recommended waits."
+  description = "Timeout used by recommended Juju wait commands."
   type        = string
   default     = "30m"
 }
