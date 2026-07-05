@@ -59,3 +59,6 @@ integration-suites:
     backends: [integration-test]
     environment:
       TOX_ENV: integration
+  tests/integration/terraform/:
+    summary: "charm-registry Terraform deployment tests"
+    backends: [integration-test]
