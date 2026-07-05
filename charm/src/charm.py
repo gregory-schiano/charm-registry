@@ -8,12 +8,10 @@ import logging
 import typing
 
 import ops
-
+import paas_charm.go
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from paas_charm.app import App
 from paas_charm.s3 import PaaSS3RelationData, PaaSS3Requirer
-
-import paas_charm.go
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +43,22 @@ def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str,
         "charmhub-max-artifact-bytes": "CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES",
         "max-archive-file-bytes": "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES",
         "max-upload-bytes": "CHARM_REGISTRY_MAX_UPLOAD_BYTES",
+    }
+    env: dict[str, str] = {}
+    for config_key, env_key in mapping.items():
+        value = config.get(config_key)
+        if value is not None and str(value).strip():
+            env[env_key] = str(value).strip()
+    return env
+
+
+def rate_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
+    """Map charm rate-limit config options to workload environment variables."""
+    mapping = {
+        "rate-limit-ip-limit": "CHARM_REGISTRY_IP_RATE_LIMIT",
+        "rate-limit-ip-window": "CHARM_REGISTRY_IP_RATE_WINDOW",
+        "rate-limit-token-limit": "CHARM_REGISTRY_TOKEN_RATE_LIMIT",
+        "rate-limit-token-window": "CHARM_REGISTRY_TOKEN_RATE_WINDOW",
     }
     env: dict[str, str] = {}
     for config_key, env_key in mapping.items():
@@ -94,6 +108,7 @@ class CharmRegistryApp(App):
             )
         )
         env.update(size_limit_environment(self._charm_state.user_defined_config))
+        env.update(rate_limit_environment(self._charm_state.user_defined_config))
         return env
 
     def _oci_s3_environment(

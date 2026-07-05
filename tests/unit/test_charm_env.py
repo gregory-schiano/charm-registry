@@ -3,7 +3,7 @@
 
 """Unit tests for the charm's environment mapping."""
 
-from charm import public_url_environment, size_limit_environment
+from charm import public_url_environment, rate_limit_environment, size_limit_environment
 
 
 def test_no_ingress_yields_no_overrides():
@@ -64,4 +64,22 @@ def test_size_limits_skip_empty_values():
 
     assert env == {
         "CHARM_REGISTRY_MAX_UPLOAD_BYTES": "128MB",
+    }
+
+
+def test_rate_limits_map_to_registry_environment():
+    env = rate_limit_environment(
+        {
+            "rate-limit-ip-limit": 0,
+            "rate-limit-ip-window": "30s",
+            "rate-limit-token-limit": 10,
+            "rate-limit-token-window": "2m",
+        }
+    )
+
+    assert env == {
+        "CHARM_REGISTRY_IP_RATE_LIMIT": "0",
+        "CHARM_REGISTRY_IP_RATE_WINDOW": "30s",
+        "CHARM_REGISTRY_TOKEN_RATE_LIMIT": "10",
+        "CHARM_REGISTRY_TOKEN_RATE_WINDOW": "2m",
     }

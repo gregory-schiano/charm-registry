@@ -85,6 +85,22 @@ config:
       type: string
       default: 64MB
       description: Maximum upload request body size. Accepts bytes or KB, MB, GB suffixes.
+    rate-limit-ip-limit:
+      type: int
+      default: 30
+      description: Maximum requests per IP per window. Set to 0 to disable IP limiting.
+    rate-limit-ip-window:
+      type: string
+      default: 1m
+      description: Window for per-IP request rate limiting. Accepts durations such as 30s, 1m, or 2h.
+    rate-limit-token-limit:
+      type: int
+      default: 5
+      description: Maximum token issuances per identity per window. Set to 0 to disable token limiting.
+    rate-limit-token-window:
+      type: string
+      default: 1m
+      description: Window for token issuance rate limiting. Accepts durations such as 30s, 1m, or 2h.
     enable-insecure-dev-auth:
       type: boolean
       default: false

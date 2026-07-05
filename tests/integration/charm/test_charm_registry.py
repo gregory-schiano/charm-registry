@@ -20,7 +20,7 @@ class TestCharmDeployment:
         """Application reports active status in Juju."""
         juju: jubilant.Juju = deployed["juju"]
         status = juju.status()
-        app_status = status.apps[deployed["app"]].application_status
+        app_status = status.apps[deployed["app"]].app_status
 
         logger.info("Application status: %s %s", app_status.current, app_status.message)
         assert app_status.current == "active"
@@ -29,7 +29,7 @@ class TestCharmDeployment:
         """The deployment uses the PostgreSQL relation instead of SQLite-only mode."""
         juju: jubilant.Juju = deployed["juju"]
         status = juju.status()
-        database_status = status.apps[deployed["database_app"]].application_status
+        database_status = status.apps[deployed["database_app"]].app_status
         relation_status = juju.cli("status", "--relations")
 
         logger.info(
@@ -51,9 +51,10 @@ class TestCharmDeployment:
             wait=60,
         )
         task.raise_on_failure()
+        ca_certificate = task.results.get("ca-certificate", "")
 
-        logger.info("CA certificate output:\n%s", task.stdout)
-        assert "BEGIN CERTIFICATE" in task.stdout
+        logger.info("CA certificate output:\n%s", ca_certificate)
+        assert "BEGIN CERTIFICATE" in ca_certificate
         assert f"{deployed['certificates_app']}:certificates" in relation_status
         assert f"{deployed['gateway_app']}:certificates" in relation_status
 
