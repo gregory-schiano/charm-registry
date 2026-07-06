@@ -1,4 +1,4 @@
 output "id" {
   description = "Integration resource ID."
-  value       = juju_integration.this.id
+  value       = terraform_data.this.id
 }

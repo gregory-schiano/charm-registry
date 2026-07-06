@@ -129,7 +129,10 @@ module "app_api_ingress" {
   application_a = { name = var.app_name, endpoint = "ingress" }
   application_b = { name = "ingress-api", endpoint = "ingress" }
 
-  depends_on = [module.app, module.api_ingress]
+  depends_on = [
+    juju_model.this,
+    data.juju_model.this,
+  ]
 }
 
 module "app_oci_ingress" {
@@ -139,7 +142,10 @@ module "app_oci_ingress" {
   application_a = { name = var.app_name, endpoint = "oci-ingress" }
   application_b = { name = "ingress-oci", endpoint = "ingress" }
 
-  depends_on = [module.app, module.oci_ingress]
+  depends_on = [
+    juju_model.this,
+    data.juju_model.this,
+  ]
 }
 
 module "app_postgresql" {
@@ -149,7 +155,10 @@ module "app_postgresql" {
   application_a = { name = var.app_name, endpoint = "postgresql" }
   application_b = { name = "postgresql", endpoint = "database" }
 
-  depends_on = [module.app, module.postgresql]
+  depends_on = [
+    juju_model.this,
+    data.juju_model.this,
+  ]
 }
 
 module "gateway_certificates" {
@@ -159,7 +168,10 @@ module "gateway_certificates" {
   application_a = { name = "self-signed-certificates", endpoint = "certificates" }
   application_b = { name = "gateway-api-integrator", endpoint = "certificates" }
 
-  depends_on = [module.certificates, module.gateway]
+  depends_on = [
+    juju_model.this,
+    data.juju_model.this,
+  ]
 }
 
 module "api_gateway_route" {
@@ -169,7 +181,7 @@ module "api_gateway_route" {
   application_a = { name = "ingress-api", endpoint = "gateway-route" }
   application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
 
-  depends_on = [module.gateway_certificates, module.api_ingress]
+  depends_on = [module.gateway_certificates]
 }
 
 module "oci_gateway_route" {
@@ -179,5 +191,5 @@ module "oci_gateway_route" {
   application_a = { name = "ingress-oci", endpoint = "gateway-route" }
   application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
 
-  depends_on = [module.gateway_certificates, module.oci_ingress]
+  depends_on = [module.gateway_certificates]
 }
