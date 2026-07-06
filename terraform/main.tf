@@ -175,7 +175,6 @@ module "gateway_certificates" {
     juju_model.this,
     data.juju_model.this,
     module.certificates,
-    module.gateway,
   ]
 }
 
