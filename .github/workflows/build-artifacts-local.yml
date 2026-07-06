@@ -108,19 +108,53 @@ jobs:
 
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
         run: |
-          for attempt in 1 2 3; do
+          clean_rockcraft_state() {
+            rockcraft clean --all || rockcraft clean || true
+            rm -rf \
+              "${HOME}/.cache/rockcraft" \
+              "${HOME}/.local/state/rockcraft" \
+              "${HOME}/snap/rockcraft/common/cache" \
+              "${HOME}/snap/rockcraft/common/state" || true
+            if command -v lxc >/dev/null 2>&1; then
+              projects=$(lxc project list --format csv 2>/dev/null | cut -d, -f1 || true)
+              printf '%s\n' "$projects" | while IFS= read -r project; do
+                [ -n "$project" ] || continue
+                instances=$(lxc list --project "$project" --format csv -c n 2>/dev/null || true)
+                printf '%s\n' "$instances" | while IFS= read -r instance; do
+                  case "$instance" in
+                    *rockcraft*|*craft*)
+                      lxc delete --project "$project" --force "$instance" || true
+                      ;;
+                  esac
+                done
+                images=$(lxc image list --project "$project" --format csv -c f 2>/dev/null || true)
+                printf '%s\n' "$images" | while IFS= read -r fingerprint; do
+                  [ -n "$fingerprint" ] || continue
+                  lxc image delete --project "$project" "$fingerprint" || true
+                done
+              done
+            fi
+          }
+
+          if [ "${{ matrix.type }}" = "rock" ]; then
+            attempts=4
+          else
+            attempts=3
+          fi
+
+          for attempt in $(seq 1 "$attempts"); do
             if opcli artifacts build \
               --${{ matrix.type }} ${{ matrix.name }} \
               --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )); then
               exit 0
             fi
-            if [ "$attempt" = "3" ]; then
+            if [ "$attempt" = "$attempts" ]; then
               exit 1
             fi
             if [ "${{ matrix.type }}" = "rock" ]; then
-              rockcraft clean || true
+              clean_rockcraft_state
             fi
-            sleep $(( attempt * 30 ))
+            sleep $(( attempt * 60 ))
           done
         env:
           CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
