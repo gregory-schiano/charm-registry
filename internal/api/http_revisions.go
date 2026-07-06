@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -10,6 +11,16 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
+
+// uploadErrorStatus maps an upload failure to an HTTP status: 413 when the
+// request exceeded the configured body-size limit, otherwise the fallback.
+func uploadErrorStatus(err error, fallback int) int {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return fallback
+}
 
 func (a *API) handleListRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var revision *int
@@ -74,7 +85,7 @@ func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request, iden
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxUploadBytes)
 	reader, err := r.MultipartReader()
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
+		writeJSON(w, uploadErrorStatus(err, http.StatusBadRequest), uploadResultResponse{Successful: false})
 		return
 	}
 	var uploadID *string
@@ -84,7 +95,7 @@ func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request, iden
 			break
 		}
 		if partErr != nil {
-			writeJSON(w, http.StatusBadRequest, uploadResultResponse{Successful: false})
+			writeJSON(w, uploadErrorStatus(partErr, http.StatusBadRequest), uploadResultResponse{Successful: false})
 			return
 		}
 		if part.FormName() != "binary" || part.FileName() == "" {
@@ -95,7 +106,7 @@ func (a *API) handleUnscannedUpload(w http.ResponseWriter, r *http.Request, iden
 		upload, uploadErr := a.svc.CreateUploadStream(r.Context(), part.FileName(), part)
 		_ = part.Close()
 		if uploadErr != nil {
-			writeJSON(w, http.StatusInternalServerError, uploadResultResponse{Successful: false})
+			writeJSON(w, uploadErrorStatus(uploadErr, http.StatusInternalServerError), uploadResultResponse{Successful: false})
 			return
 		}
 		uploadID = &upload.ID

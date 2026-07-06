@@ -29,6 +29,15 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// LocalBlob is an optional capability implemented by stores that keep blobs on
+// the local filesystem. Callers needing random access (for example zip parsing)
+// can read a blob in place via its path instead of buffering it in memory.
+type LocalBlob interface {
+	// LocalPath returns the on-disk path for a key, and whether a local path is
+	// available for this store.
+	LocalPath(key string) (string, bool)
+}
+
 type MemoryStore struct {
 	mu   sync.RWMutex
 	data map[string][]byte
@@ -158,6 +167,16 @@ func (s *FileStore) Delete(_ context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+// LocalPath implements [LocalBlob], returning the on-disk path for a key so
+// callers can read the blob in place. It returns false when the key is invalid.
+func (s *FileStore) LocalPath(key string) (string, bool) {
+	path, err := s.path(key)
+	if err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 func (s *FileStore) path(key string) (string, error) {

@@ -191,4 +191,5 @@ type Upload struct {
 	Revision           *int32
 	Errors             json.RawMessage
 	CreatedByAccountID *string
+	Sha512             string
 }

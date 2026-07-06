@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,27 +38,32 @@ type syncAdminService interface {
 
 // API is the HTTP handler for the registry.
 type API struct {
-	cfg          config.Config
-	svc          *service.Service
-	sync         syncAdminService
-	auth         *auth.Authenticator
-	tokenLimiter *slidingWindowLimiter
-	ipLimiter    *slidingWindowLimiter
+	cfg            config.Config
+	svc            *service.Service
+	sync           syncAdminService
+	auth           *auth.Authenticator
+	tokenLimiter   *slidingWindowLimiter
+	ipLimiter      *slidingWindowLimiter
+	trustedProxies []*net.IPNet
 }
 
 // New builds the HTTP handler for the registry API.
 func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, authenticator *auth.Authenticator) http.Handler {
+	// Errors are ignored because the entries were already validated by
+	// config.Load; an empty slice safely means "trust no proxy".
+	trustedProxies, _ := cfg.TrustedProxyNets()
 	api := &API{
-		cfg:          cfg,
-		svc:          svc,
-		sync:         syncSvc,
-		auth:         authenticator,
-		tokenLimiter: newSlidingWindowLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
-		ipLimiter:    newSlidingWindowLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
+		cfg:            cfg,
+		svc:            svc,
+		sync:           syncSvc,
+		auth:           authenticator,
+		tokenLimiter:   newSlidingWindowLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
+		ipLimiter:      newSlidingWindowLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
+		trustedProxies: trustedProxies,
 	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
-	router.Use(chimiddleware.RealIP)
+	router.Use(api.realIP)
 	router.Use(api.logRequests)
 	router.Use(chimiddleware.Timeout(cfg.RequestTimeout))
 	router.Use(chimiddleware.Recoverer)
@@ -246,15 +252,26 @@ func (a *API) logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		ww := chimiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
 		slog.InfoContext(r.Context(), "http request",
 			"request_id", chimiddleware.GetReqID(r.Context()),
 			"method", r.Method,
 			"path", r.URL.Path,
-			"status", ww.Status(),
+			"status", status,
 			"bytes", ww.BytesWritten(),
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote_addr", r.RemoteAddr,
 		)
+		// Label on the matched route pattern (e.g. /v1/charm/{name}), not the raw
+		// path, to keep metric cardinality bounded.
+		routePattern := chi.RouteContext(r.Context()).RoutePattern()
+		if routePattern == "" {
+			routePattern = "unmatched"
+		}
+		requestsTotal.WithLabelValues(r.Method, routePattern, strconv.Itoa(status)).Inc()
 	})
 }
 
@@ -439,9 +456,9 @@ func parseResourceDownloadFilename(filename string) (string, string, int, error)
 
 func (api *API) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Use r.RemoteAddr which has already been populated by
-		// chimiddleware.RealIP from trusted proxy headers. Reading
-		// X-Forwarded-For directly would allow spoofing.
+		// r.RemoteAddr has been normalized to the client IP by the realIP
+		// middleware, which only honours forwarded headers from trusted
+		// proxies. Reading X-Forwarded-For here would allow spoofing.
 		ip := strings.TrimSpace(r.RemoteAddr)
 		if ip == "" {
 			ip = "unknown"
@@ -452,4 +469,72 @@ func (api *API) rateLimit(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// realIP normalizes r.RemoteAddr to the effective client IP used for rate
+// limiting and logging. Forwarded headers (X-Forwarded-For, X-Real-IP,
+// True-Client-IP) are honoured ONLY when the direct peer is a configured
+// trusted proxy; for any other peer the real transport address is used and
+// forwarded headers are ignored. This stops clients from spoofing their source
+// IP to evade per-IP rate limiting — unlike chi's RealIP, which trusts the
+// headers from every caller.
+func (a *API) realIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = a.clientIP(r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP resolves the client IP for a request. When the direct peer is a
+// trusted proxy it walks X-Forwarded-For right-to-left and returns the first
+// address that is not itself a trusted proxy, falling back to X-Real-IP then
+// True-Client-IP. For untrusted peers it returns the bare peer address.
+func (a *API) clientIP(r *http.Request) string {
+	peer := hostFromRemoteAddr(r.RemoteAddr)
+	if !a.isTrustedProxy(peer) {
+		return peer
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			if candidate == "" || net.ParseIP(candidate) == nil {
+				continue
+			}
+			if a.isTrustedProxy(candidate) {
+				continue
+			}
+			return candidate
+		}
+	}
+	for _, header := range []string{"X-Real-IP", "True-Client-IP"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" && net.ParseIP(value) != nil {
+			return value
+		}
+	}
+	return peer
+}
+
+func (a *API) isTrustedProxy(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, network := range a.trustedProxies {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostFromRemoteAddr strips the port (and any surrounding whitespace) from a
+// RemoteAddr, returning the bare host/IP. RemoteAddr without a port is returned
+// as-is.
+func hostFromRemoteAddr(remoteAddr string) string {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }

@@ -10,6 +10,7 @@ type Upload struct {
 	Size       int64      `json:"size"`
 	SHA256     string     `json:"sha256"`
 	SHA384     string     `json:"sha384"`
+	SHA512     string     `json:"sha512,omitempty"`
 	Status     string     `json:"status"`
 	Kind       string     `json:"kind"`
 	CreatedAt  time.Time  `json:"created-at"`

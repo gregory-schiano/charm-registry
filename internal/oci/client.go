@@ -490,12 +490,11 @@ func repositoryProject(rawPath string) (string, bool) {
 	if len(parts) < 4 || parts[0] != "v2" {
 		return "", false
 	}
+	// The loop starts at index 2, so parts[1] is always a real project segment
+	// preceding the API keyword (blobs/manifests/tags/referrers).
 	for idx := 2; idx < len(parts); idx++ {
 		switch parts[idx] {
 		case "blobs", "manifests", "tags", "referrers":
-			if idx == 1 {
-				return "", false
-			}
 			return parts[1], true
 		}
 	}

@@ -1,11 +1,11 @@
 -- name: CreateUpload :exec
 INSERT INTO uploads (
-    id, filename, object_key, size, sha256, sha384,
+    id, filename, object_key, size, sha256, sha384, sha512,
     status, kind, created_at, approved_at, revision, errors
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- name: GetUpload :one
-SELECT id, filename, object_key, size, sha256, sha384,
+SELECT id, filename, object_key, size, sha256, sha384, sha512,
        status, kind, created_at, approved_at, revision, errors
 FROM uploads
 WHERE id = $1;

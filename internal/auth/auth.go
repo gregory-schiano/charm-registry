@@ -100,12 +100,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 		if storeToken.RevokedAt != nil || storeToken.ValidUntil.Before(time.Now().UTC()) {
 			return Claims{}, nil, fmt.Errorf("cannot authenticate: token revoked or expired")
 		}
-		// Upgrade SHA-256 tokens to bcrypt on successful auth.
-		if storeToken.HashScheme == TokenHashSchemeSHA256 {
-			bcryptHash, _ := bcryptHashToken(secret)
-			tokenPrefix := TokenPrefixFromRaw(secret)
-			_ = a.tokenStore.UpdateTokenHashScheme(r.Context(), storeToken.SessionID, bcryptHash, tokenPrefix, TokenHashSchemeBcrypt)
-		}
+		a.upgradeTokenHash(r.Context(), storeToken, secret)
 		return Claims{
 			Subject:     account.Subject,
 			Username:    account.Username,
@@ -153,18 +148,28 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, raw string) (Clai
 	if storeToken.RevokedAt != nil || storeToken.ValidUntil.Before(time.Now().UTC()) {
 		return Claims{}, nil, fmt.Errorf("cannot authenticate: token revoked or expired")
 	}
-	// Upgrade SHA-256 tokens to bcrypt on successful auth.
-	if storeToken.HashScheme == TokenHashSchemeSHA256 {
-		bcryptHash, _ := bcryptHashToken(raw)
-		tokenPrefix := TokenPrefixFromRaw(raw)
-		_ = a.tokenStore.UpdateTokenHashScheme(ctx, storeToken.SessionID, bcryptHash, tokenPrefix, TokenHashSchemeBcrypt)
-	}
+	a.upgradeTokenHash(ctx, storeToken, raw)
 	return Claims{
 		Subject:     account.Subject,
 		Username:    account.Username,
 		DisplayName: account.DisplayName,
 		Email:       account.Email,
 	}, &storeToken, nil
+}
+
+// upgradeTokenHash rehashes a legacy SHA-256 store token to bcrypt after a
+// successful verification. It is best-effort: if hashing fails the upgrade is
+// skipped so a failed rehash never overwrites the stored hash with an empty
+// value (which would brick the token).
+func (a *Authenticator) upgradeTokenHash(ctx context.Context, token core.StoreToken, raw string) {
+	if token.HashScheme != TokenHashSchemeSHA256 {
+		return
+	}
+	bcryptHash, err := bcryptHashToken(raw)
+	if err != nil {
+		return
+	}
+	_ = a.tokenStore.UpdateTokenHashScheme(ctx, token.SessionID, bcryptHash, TokenPrefixFromRaw(raw), TokenHashSchemeBcrypt)
 }
 
 // HashToken returns the SHA-256 hash for a raw store token.

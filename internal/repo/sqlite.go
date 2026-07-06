@@ -407,16 +407,16 @@ func (s *SQLite) CreateUpload(ctx context.Context, upload core.Upload) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO uploads (id, filename, object_key, size, sha256, sha384, status, kind, created_at, approved_at, revision, errors)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		upload.ID, upload.Filename, upload.ObjectKey, upload.Size, upload.SHA256, upload.SHA384, upload.Status,
+INSERT INTO uploads (id, filename, object_key, size, sha256, sha384, sha512, status, kind, created_at, approved_at, revision, errors)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		upload.ID, upload.Filename, upload.ObjectKey, upload.Size, upload.SHA256, upload.SHA384, upload.SHA512, upload.Status,
 		upload.Kind, upload.CreatedAt, upload.ApprovedAt, upload.Revision, errorsJSON)
 	return err
 }
 
 func (s *SQLite) GetUpload(ctx context.Context, uploadID string) (core.Upload, error) {
 	return scanUpload(s.db.QueryRowContext(ctx, `
-SELECT id, filename, object_key, size, sha256, sha384, status, kind, created_at, approved_at, revision, errors
+SELECT id, filename, object_key, size, sha256, sha384, sha512, status, kind, created_at, approved_at, revision, errors
 FROM uploads WHERE id = ?`, uploadID))
 }
 
@@ -951,7 +951,7 @@ func scanUpload(scanner interface{ Scan(dest ...any) error }) (core.Upload, erro
 		revision   sql.NullInt64
 		errorsJSON string
 	)
-	err := scanner.Scan(&upload.ID, &upload.Filename, &upload.ObjectKey, &upload.Size, &upload.SHA256, &upload.SHA384, &upload.Status, &upload.Kind, &upload.CreatedAt, &approvedAt, &revision, &errorsJSON)
+	err := scanner.Scan(&upload.ID, &upload.Filename, &upload.ObjectKey, &upload.Size, &upload.SHA256, &upload.SHA384, &upload.SHA512, &upload.Status, &upload.Kind, &upload.CreatedAt, &approvedAt, &revision, &errorsJSON)
 	if sqlNotFound(err) {
 		return core.Upload{}, ErrNotFound
 	}

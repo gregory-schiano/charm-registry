@@ -24,6 +24,7 @@ func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
 		Size:       upload.Size,
 		Sha256:     upload.SHA256,
 		Sha384:     upload.SHA384,
+		Sha512:     upload.SHA512,
 		Status:     upload.Status,
 		Kind:       upload.Kind,
 		CreatedAt:  upload.CreatedAt,

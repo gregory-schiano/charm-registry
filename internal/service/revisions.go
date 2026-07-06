@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/charm"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -38,6 +39,7 @@ func (s *Service) CreateUploadStream(ctx context.Context, filename string, paylo
 	uploadID := uuid.NewString()
 	sha256sum := sha256.New()
 	sha384sum := sha512.New384()
+	sha512sum := sha512.New()
 	tmp, err := os.CreateTemp("", "charm-registry-upload-*")
 	if err != nil {
 		return core.Upload{}, err
@@ -47,7 +49,9 @@ func (s *Service) CreateUploadStream(ctx context.Context, filename string, paylo
 		_ = os.Remove(tmp.Name())
 	}()
 	key := filepath.ToSlash(filepath.Join("uploads", uploadID, filename))
-	size, err := io.Copy(io.MultiWriter(tmp, sha256sum, sha384sum), payload)
+	// Hash the payload in the single streaming pass so resource publishing can
+	// reuse these digests without re-reading the blob.
+	size, err := io.Copy(io.MultiWriter(tmp, sha256sum, sha384sum, sha512sum), payload)
 	if err != nil {
 		return core.Upload{}, err
 	}
@@ -64,6 +68,7 @@ func (s *Service) CreateUploadStream(ctx context.Context, filename string, paylo
 		Size:      size,
 		SHA256:    hex.EncodeToString(sha256sum.Sum(nil)),
 		SHA384:    hex.EncodeToString(sha384sum.Sum(nil)),
+		SHA512:    hex.EncodeToString(sha512sum.Sum(nil)),
 		Status:    "pending",
 		Kind:      detectUploadKind(filename),
 		CreatedAt: now,
@@ -83,6 +88,41 @@ func (s *Service) CreateUploadStream(ctx context.Context, filename string, paylo
 // AuthorizeUpload verifies that the caller may create an upload placeholder.
 func (s *Service) AuthorizeUpload(identity core.Identity) error {
 	return s.requirePermission(identity, permAccountRegisterPackage)
+}
+
+// parseUploadArchive parses a charm archive from blob storage using random
+// access from disk instead of buffering the whole archive in memory. When the
+// blob store keeps files locally (filesystem backend) it parses in place with
+// zero copy; otherwise it streams the blob to a temp file first.
+func (s *Service) parseUploadArchive(ctx context.Context, upload core.Upload) (core.CharmArchive, error) {
+	if local, ok := s.blobs.(blob.LocalBlob); ok {
+		if path, ok := local.LocalPath(upload.ObjectKey); ok {
+			return charm.ParseArchiveFile(path, upload.Size, s.cfg.MaxArchiveFileBytes)
+		}
+	}
+	reader, _, err := s.blobs.Open(ctx, upload.ObjectKey)
+	if err != nil {
+		return core.CharmArchive{}, err
+	}
+	defer reader.Close()
+	tmp, err := os.CreateTemp("", "charm-registry-parse-*")
+	if err != nil {
+		return core.CharmArchive{}, err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	size, err := io.Copy(tmp, reader)
+	if err != nil {
+		_ = tmp.Close()
+		return core.CharmArchive{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return core.CharmArchive{}, err
+	}
+	if upload.Size > 0 {
+		size = upload.Size
+	}
+	return charm.ParseArchiveFile(tmpName, size, s.cfg.MaxArchiveFileBytes)
 }
 
 // PushRevision publishes a charm revision from a prior upload.
@@ -111,11 +151,7 @@ func (s *Service) PushRevision(
 	if err != nil {
 		return "", translateRepoError(err, messageUploadNotFound)
 	}
-	payload, err := s.blobs.Get(ctx, upload.ObjectKey)
-	if err != nil {
-		return "", err
-	}
-	archive, err := charm.ParseArchiveWithMaxFileSize(payload, s.cfg.MaxArchiveFileBytes)
+	archive, err := s.parseUploadArchive(ctx, upload)
 	if err != nil {
 		slog.InfoContext(ctx, "revision upload rejected",
 			"package", pkg.Name,

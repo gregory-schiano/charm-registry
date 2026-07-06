@@ -3,12 +3,18 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// minOCISecretKeyLength is the minimum accepted length for the OCI secret key.
+// The key is stretched with PBKDF2, but a hard floor rejects trivially weak
+// values that would otherwise be brute-forceable.
+const minOCISecretKeyLength = 16
 
 const (
 	DatabaseBackendAuto     = "auto"
@@ -48,6 +54,7 @@ type Config struct {
 	AdminSubjects           []string
 	AdminEmails             []string
 	AdminUsernames          []string
+	TrustedProxies          []string
 	EnableInsecureDevAuth   bool
 	OCIListenAddress        string
 	OCIInternalURL          string
@@ -182,6 +189,7 @@ func Load() (Config, error) {
 		AdminSubjects:           envCSVFallback("CHARM_REGISTRY_ADMIN_SUBJECTS", "APP_ADMIN_SUBJECTS"),
 		AdminEmails:             envCSVFallback("CHARM_REGISTRY_ADMIN_EMAILS", "APP_ADMIN_EMAILS"),
 		AdminUsernames:          envCSVFallback("CHARM_REGISTRY_ADMIN_USERNAMES", "APP_ADMIN_USERNAMES"),
+		TrustedProxies:          envCSVFallback("CHARM_REGISTRY_TRUSTED_PROXIES", "APP_TRUSTED_PROXIES"),
 		EnableInsecureDevAuth:   parsed.enableInsecureDevAuth,
 		OCIListenAddress:        envFallback("CHARM_REGISTRY_OCI_LISTEN", "APP_OCI_LISTEN", ":5000"),
 		OCIInternalURL:          strings.TrimRight(envFallback("CHARM_REGISTRY_OCI_INTERNAL_URL", "APP_OCI_INTERNAL_URL", "https://127.0.0.1:5000"), "/"),
@@ -456,42 +464,87 @@ func validateConfig(cfg Config) (Config, error) {
 	if err := validateOCIConfig(cfg); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxJSONBodyBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_JSON_BODY_BYTES must be greater than zero")
+	if err := validateLimits(cfg); err != nil {
+		return Config{}, err
 	}
-	if cfg.MaxArchiveFileBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
-	}
-	if cfg.MaxUploadBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_UPLOAD_BYTES must be greater than zero")
-	}
-	if cfg.CharmhubMaxResponseBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES must be greater than zero")
-	}
-	if cfg.CharmhubMaxArtifactBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES must be greater than zero")
-	}
-	if cfg.OCIMaxManifestBytes <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES must be greater than zero")
-	}
-	if cfg.RequestTimeout <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_REQUEST_TIMEOUT must be greater than zero")
-	}
-
-	if cfg.IPRateLimit < 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_LIMIT must be >= 0 (0 means unlimited)")
-	}
-	if cfg.TokenRateLimit < 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_LIMIT must be >= 0 (0 means unlimited)")
-	}
-	if cfg.IPRateWindow <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_WINDOW must be greater than zero")
-	}
-	if cfg.TokenRateWindow <= 0 {
-		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_WINDOW must be greater than zero")
+	if _, err := parseTrustedProxies(cfg.TrustedProxies); err != nil {
+		return Config{}, fmt.Errorf("cannot load config: CHARM_REGISTRY_TRUSTED_PROXIES: %w", err)
 	}
 
 	return cfg, nil
+}
+
+func validateLimits(cfg Config) error {
+	if cfg.MaxJSONBodyBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_JSON_BODY_BYTES must be greater than zero")
+	}
+	if cfg.MaxArchiveFileBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES must be greater than zero")
+	}
+	if cfg.MaxUploadBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_MAX_UPLOAD_BYTES must be greater than zero")
+	}
+	if cfg.CharmhubMaxResponseBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_RESPONSE_BYTES must be greater than zero")
+	}
+	if cfg.CharmhubMaxArtifactBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES must be greater than zero")
+	}
+	if cfg.OCIMaxManifestBytes <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_MAX_MANIFEST_BYTES must be greater than zero")
+	}
+	if cfg.RequestTimeout <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_REQUEST_TIMEOUT must be greater than zero")
+	}
+	if cfg.IPRateLimit < 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_LIMIT must be >= 0 (0 means unlimited)")
+	}
+	if cfg.TokenRateLimit < 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_LIMIT must be >= 0 (0 means unlimited)")
+	}
+	if cfg.IPRateWindow <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_IP_RATE_WINDOW must be greater than zero")
+	}
+	if cfg.TokenRateWindow <= 0 {
+		return fmt.Errorf("cannot load config: CHARM_REGISTRY_TOKEN_RATE_WINDOW must be greater than zero")
+	}
+	return nil
+}
+
+// TrustedProxyNets parses the configured trusted proxy entries into networks.
+// Callers use these to decide whether to honour forwarded client-IP headers.
+func (c Config) TrustedProxyNets() ([]*net.IPNet, error) {
+	return parseTrustedProxies(c.TrustedProxies)
+}
+
+// parseTrustedProxies converts IP or CIDR entries into networks. A bare IP is
+// treated as a single-host network (/32 or /128).
+func parseTrustedProxies(entries []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR %q: %w", entry, err)
+			}
+			nets = append(nets, network)
+			continue
+		}
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP address %q", entry)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return nets, nil
 }
 
 func validateBackendConfig(cfg Config) error {
@@ -545,6 +598,12 @@ func validateAuthConfig(cfg Config) error {
 func validateOCIConfig(cfg Config) error {
 	if cfg.OCISecretKey == "" {
 		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_SECRET_KEY is required")
+	}
+	if len(cfg.OCISecretKey) < minOCISecretKeyLength {
+		return fmt.Errorf(
+			"cannot load config: CHARM_REGISTRY_OCI_SECRET_KEY must be at least %d characters",
+			minOCISecretKeyLength,
+		)
 	}
 	if cfg.ResolvedOCIStorageBackend() == StorageBackendS3 && cfg.OCIStorageBucket == "" {
 		return fmt.Errorf("cannot load config: CHARM_REGISTRY_OCI_S3_BUCKET is required")

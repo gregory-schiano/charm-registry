@@ -209,7 +209,7 @@ func runSyncRemove(ctx context.Context, cfg cliConfig, args []string, stdout, st
 	default:
 		return errors.New("usage: charm-registryctl sync remove <name> --track <track>")
 	}
-	path := fmt.Sprintf("/v1/admin/charmhub-sync/%s/%s", name, track)
+	path := fmt.Sprintf("/v1/admin/charmhub-sync/%s/%s", url.PathEscape(name), url.PathEscape(track))
 	if err := doJSON(ctx, cfg, http.MethodDelete, path, nil, nil); err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func runSyncRun(ctx context.Context, cfg cliConfig, args []string, stdout, stder
 	default:
 		return errors.New("usage: charm-registryctl sync run <name>")
 	}
-	path := fmt.Sprintf("/v1/admin/charmhub-sync/%s/run", name)
+	path := fmt.Sprintf("/v1/admin/charmhub-sync/%s/run", url.PathEscape(name))
 	if err := doJSON(ctx, cfg, http.MethodPost, path, nil, nil); err != nil {
 		return err
 	}

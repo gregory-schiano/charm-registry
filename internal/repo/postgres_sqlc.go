@@ -210,6 +210,7 @@ func uploadRowFromSQLC(item sqlcdb.GetUploadRow) (core.Upload, error) {
 		Size:      item.Size,
 		SHA256:    item.Sha256,
 		SHA384:    item.Sha384,
+		SHA512:    item.Sha512,
 		Status:    item.Status,
 		Kind:      item.Kind,
 		CreatedAt: item.CreatedAt,

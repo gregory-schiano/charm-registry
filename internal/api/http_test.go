@@ -304,9 +304,9 @@ func TestSlidingWindowLimiterDeletesEmptyKeys(t *testing.T) {
 	assert.Equal(t, 1, tsLen, "should have exactly one timestamp from the fresh Allow call")
 }
 
-// TestRateLimitUsesRemoteAddrNotSpoofedHeader verifies the middleware uses
-// r.RemoteAddr (set by chimiddleware.RealIP) instead of X-Forwarded-For,
-// preventing spoofed bypass of rate limits.
+// TestRateLimitUsesRemoteAddrNotSpoofedHeader verifies that, with no trusted
+// proxies configured, the rate limiter keys on the transport peer address and
+// ignores X-Forwarded-For, preventing a spoofed bypass of rate limits.
 func TestRateLimitUsesRemoteAddrNotSpoofedHeader(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{
@@ -338,6 +338,58 @@ func TestRateLimitUsesRemoteAddrNotSpoofedHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "should reject despite spoofed header")
+}
+
+// TestRateLimitHonorsTrustedProxyForwardedFor verifies that when the direct
+// peer is a configured trusted proxy, the client IP from X-Forwarded-For is
+// used for rate limiting (so distinct real clients get distinct buckets), while
+// spoofed headers from an untrusted peer are ignored.
+func TestRateLimitHonorsTrustedProxyForwardedFor(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           1,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0,
+		TrustedProxies:        []string{"10.0.0.0/8"},
+	}
+	handler := newTestHandler(t, cfg)
+
+	// Two requests arriving via the trusted proxy but from different real
+	// clients must each get their own bucket (both allowed under a limit of 1).
+	for _, clientIP := range []string{"203.0.113.5", "203.0.113.6"} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "10.1.2.3:4444" // trusted proxy
+		req.Header.Set("X-Forwarded-For", clientIP)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "client %s should get its own bucket", clientIP)
+	}
+
+	// A second request for the same forwarded client is rate-limited.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "10.1.2.3:4444"
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "repeat client should be limited")
+
+	// A spoofed X-Forwarded-For from an UNtrusted peer is ignored: the limiter
+	// keys on the peer address, so the second such request is limited even
+	// though the forwarded client IP differs.
+	for i, xff := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "192.0.2.50:5555" // untrusted peer
+		req.Header.Set("X-Forwarded-For", xff)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if i == 0 {
+			assert.Equal(t, http.StatusOK, rec.Code)
+		} else {
+			assert.Equal(t, http.StatusTooManyRequests, rec.Code, "untrusted peer cannot spoof a new bucket")
+		}
+	}
 }
 
 // TestRateLimitTrimsWhitespace verifies that whitespace in RemoteAddr
@@ -706,7 +758,7 @@ func TestUnscannedUploadHonorsBodySizeBoundary(t *testing.T) {
 	handler = newTestHandler(t, cfg)
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
 }
 
 func TestCharmDownloadInvalidFilename(t *testing.T) {

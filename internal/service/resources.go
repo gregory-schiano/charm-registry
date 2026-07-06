@@ -3,8 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha512"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,10 +86,6 @@ func (s *Service) PushResource(
 			return "", translateRepoError(err, messagePackageRevisionNotFound)
 		}
 	}
-	payload, err := s.blobs.Get(ctx, upload.ObjectKey)
-	if err != nil {
-		return "", err
-	}
 	existing, err := s.repo.ListResourceRevisions(ctx, resourceDef.ID)
 	if err != nil {
 		return "", err
@@ -101,31 +95,37 @@ func (s *Service) PushResource(
 		revisionNumber = existing[0].Revision + 1
 	}
 	now := s.now()
-	sha512sum := sha512.Sum512(payload)
-	sha3384sum := sha512.Sum384(payload)
+	resourceType := core.FirstNonEmpty(req.Type, resourceDef.Type)
+	// Reuse the digests computed during the streaming upload instead of
+	// re-reading and re-hashing the whole blob. SHA3384 mirrors the historical
+	// value, which has always stored the SHA-384 digest in this field.
 	resourceRevision := core.ResourceRevision{
 		ID:              uuid.NewString(),
 		ResourceID:      resourceDef.ID,
 		Name:            resourceDef.Name,
-		Type:            core.FirstNonEmpty(req.Type, resourceDef.Type),
+		Type:            resourceType,
 		Description:     resourceDef.Description,
 		Filename:        core.FirstNonEmpty(resourceDef.Filename, upload.Filename),
 		Revision:        revisionNumber,
 		CreatedAt:       now,
-		Size:            int64(len(payload)),
+		Size:            upload.Size,
 		SHA256:          upload.SHA256,
 		SHA384:          upload.SHA384,
-		SHA512:          hex.EncodeToString(sha512sum[:]),
-		SHA3384:         hex.EncodeToString(sha3384sum[:]),
+		SHA512:          upload.SHA512,
+		SHA3384:         upload.SHA384,
 		ObjectKey:       upload.ObjectKey,
 		Bases:           req.Bases,
 		Architectures:   req.Architectures,
 		PackageRevision: req.PackageRevision,
 	}
-	// OCI image resources are the only resource type whose upload payload is a descriptor
-	// for an OCI registry artifact rather than the downloadable artifact itself. Keep the
-	// special case local until another resource type needs distinct publish semantics.
-	if resourceRevision.Type == "oci-image" {
+	// OCI image resources are the only resource type whose upload payload is a
+	// descriptor for an OCI registry artifact rather than the downloadable
+	// artifact itself. Read that (small) descriptor to extract the image digest.
+	if resourceType == "oci-image" {
+		payload, err := s.blobs.Get(ctx, upload.ObjectKey)
+		if err != nil {
+			return "", err
+		}
 		var descriptor struct {
 			Digest string `json:"Digest"`
 		}

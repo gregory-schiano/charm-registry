@@ -222,7 +222,7 @@ func NewWithLimits(baseURL string, maxAPIResponseBytes, maxArtifactBytes int64) 
 	if maxArtifactBytes <= 0 {
 		maxArtifactBytes = defaultMaxArtifactBytes
 	}
-	return &Client{
+	client := &Client{
 		baseURL:             strings.TrimRight(baseURL, "/"),
 		maxAPIResponseBytes: maxAPIResponseBytes,
 		maxArtifactBytes:    maxArtifactBytes,
@@ -230,6 +230,28 @@ func NewWithLimits(baseURL string, maxAPIResponseBytes, maxArtifactBytes int64) 
 			Timeout: defaultHTTPTimeout,
 		},
 	}
+	// Install the redirect policy once at construction. It depends only on the
+	// immutable baseURL, so it is safe to share across concurrent requests — the
+	// sync worker downloads artifacts in parallel on this single client. Setting
+	// it per-request (as before) is a data race on http.Client.CheckRedirect.
+	client.http.CheckRedirect = client.checkRedirect
+	return client
+}
+
+// checkRedirect limits redirect hops and confirms every redirect target is an
+// allowed Charmhub host, blocking hops to private/reserved addresses.
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("too many redirects for artifact download")
+	}
+	redirectHost := req.URL.Hostname()
+	if isAllowedDownloadHost(redirectHost, c.baseURL) {
+		return nil
+	}
+	if isPrivateHost(redirectHost) {
+		return fmt.Errorf("redirect to private/reserved address blocked: %s", redirectHost)
+	}
+	return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
 }
 
 func (c *Client) GetChannel(ctx context.Context, name, channel string) (PackageChannel, error) {
@@ -462,21 +484,8 @@ func (c *Client) openArtifact(ctx context.Context, artifactURL string) (*http.Re
 		return nil, err
 	}
 
-	// Limit redirect hops and validate redirect targets.
-	c.http.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("too many redirects for artifact download")
-		}
-		redirectHost := req.URL.Hostname()
-		if isAllowedDownloadHost(redirectHost, c.baseURL) {
-			return nil
-		}
-		if isPrivateHost(redirectHost) {
-			return fmt.Errorf("redirect to private/reserved address blocked: %s", redirectHost)
-		}
-		return fmt.Errorf("redirect to disallowed host blocked: %s", redirectHost)
-	}
-
+	// Redirect hops and targets are validated by the client-wide CheckRedirect
+	// policy installed in NewWithLimits.
 	return c.http.Do(req)
 }
 

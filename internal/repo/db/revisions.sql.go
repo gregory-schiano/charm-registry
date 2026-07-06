@@ -107,9 +107,9 @@ func (q *Queries) CreateRevision(ctx context.Context, arg CreateRevisionParams) 
 
 const createUpload = `-- name: CreateUpload :exec
 INSERT INTO uploads (
-    id, filename, object_key, size, sha256, sha384,
+    id, filename, object_key, size, sha256, sha384, sha512,
     status, kind, created_at, approved_at, revision, errors
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type CreateUploadParams struct {
@@ -119,6 +119,7 @@ type CreateUploadParams struct {
 	Size       int64
 	Sha256     string
 	Sha384     string
+	Sha512     string
 	Status     string
 	Kind       string
 	CreatedAt  time.Time
@@ -135,6 +136,7 @@ func (q *Queries) CreateUpload(ctx context.Context, arg CreateUploadParams) erro
 		arg.Size,
 		arg.Sha256,
 		arg.Sha384,
+		arg.Sha512,
 		arg.Status,
 		arg.Kind,
 		arg.CreatedAt,
@@ -247,7 +249,7 @@ func (q *Queries) GetRevisionByNumber(ctx context.Context, arg GetRevisionByNumb
 }
 
 const getUpload = `-- name: GetUpload :one
-SELECT id, filename, object_key, size, sha256, sha384,
+SELECT id, filename, object_key, size, sha256, sha384, sha512,
        status, kind, created_at, approved_at, revision, errors
 FROM uploads
 WHERE id = $1
@@ -260,6 +262,7 @@ type GetUploadRow struct {
 	Size       int64
 	Sha256     string
 	Sha384     string
+	Sha512     string
 	Status     string
 	Kind       string
 	CreatedAt  time.Time
@@ -278,6 +281,7 @@ func (q *Queries) GetUpload(ctx context.Context, id string) (GetUploadRow, error
 		&i.Size,
 		&i.Sha256,
 		&i.Sha384,
+		&i.Sha512,
 		&i.Status,
 		&i.Kind,
 		&i.CreatedAt,

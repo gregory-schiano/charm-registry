@@ -81,6 +81,7 @@ OCI S3 variables fall back to the main S3 variables when not set explicitly.
 | `CHARM_REGISTRY_ADMIN_SUBJECTS` | — | Comma-separated OIDC subjects with admin access |
 | `CHARM_REGISTRY_ADMIN_EMAILS` | — | Comma-separated emails with admin access |
 | `CHARM_REGISTRY_ADMIN_USERNAMES` | — | Comma-separated usernames with admin access |
+| `CHARM_REGISTRY_TRUSTED_PROXIES` | — | Comma-separated IPs/CIDRs of trusted proxies. Forwarded client-IP headers (`X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`) are honoured only for requests arriving from these peers; otherwise the transport peer address is used for rate limiting. Set to your ingress range when running behind a proxy. |
 | `CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH` | `false` | Accept insecure dev bearer tokens. **Never use in production.** |
 
 The application requires either OIDC configuration or explicit opt-in to insecure dev auth. If neither is set, it refuses to start.
