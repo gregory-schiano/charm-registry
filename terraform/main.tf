@@ -132,6 +132,7 @@ module "app_api_ingress" {
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.api_ingress,
   ]
 }
 
@@ -145,6 +146,7 @@ module "app_oci_ingress" {
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.oci_ingress,
   ]
 }
 
@@ -158,6 +160,7 @@ module "app_postgresql" {
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.postgresql,
   ]
 }
 
@@ -171,6 +174,8 @@ module "gateway_certificates" {
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.certificates,
+    module.gateway,
   ]
 }
 
@@ -181,7 +186,10 @@ module "api_gateway_route" {
   application_a = { name = "ingress-api", endpoint = "gateway-route" }
   application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
 
-  depends_on = [module.gateway_certificates]
+  depends_on = [
+    module.api_ingress,
+    module.gateway_certificates,
+  ]
 }
 
 module "oci_gateway_route" {
@@ -191,5 +199,8 @@ module "oci_gateway_route" {
   application_a = { name = "ingress-oci", endpoint = "gateway-route" }
   application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
 
-  depends_on = [module.gateway_certificates]
+  depends_on = [
+    module.oci_ingress,
+    module.gateway_certificates,
+  ]
 }

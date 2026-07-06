@@ -27,10 +27,7 @@ registry_url="${CHARM_REGISTRY_PUBLIC_REGISTRY_URL:-https://localhost:5000}"
 registry_host="${registry_url#*://}"
 registry_host="${registry_host%%/*}"
 cert_file="${CHARM_REGISTRY_K8S_OCI_CA_FILE:-${ROOT_DIR}/certs/oci.crt}"
-certs_root="${CHARM_REGISTRY_K8S_CONTAINERD_CERTS_DIR:-/ck8s/k8s-containerd/etc/containerd/certs.d}"
-target_dir="${certs_root}/${registry_host}"
-target_ca="${target_dir}/ca.crt"
-target_hosts="${target_dir}/hosts.toml"
+certs_root="${CHARM_REGISTRY_K8S_CONTAINERD_CERTS_DIR:-}"
 
 if [[ -z "${registry_host}" ]]; then
 	echo "ERROR: cannot derive registry host from CHARM_REGISTRY_PUBLIC_REGISTRY_URL=${registry_url}" >&2
@@ -45,21 +42,34 @@ if [[ ! -f "${cert_file}" ]]; then
 	exit 1
 fi
 
-sudo mkdir -p "${target_dir}"
-sudo cp "${cert_file}" "${target_ca}"
-sudo chmod 0644 "${target_ca}"
-cat <<EOF | sudo tee "${target_hosts}" >/dev/null
+install_cert_for_root() {
+	local root="$1"
+	local target_dir="${root}/${registry_host}"
+	local target_ca="${target_dir}/ca.crt"
+	local target_hosts="${target_dir}/hosts.toml"
+
+	sudo mkdir -p "${target_dir}"
+	sudo cp "${cert_file}" "${target_ca}"
+	sudo chmod 0644 "${target_ca}"
+	cat <<EOF | sudo tee "${target_hosts}" >/dev/null
 server = "${registry_url}"
 
 [host."${registry_url}"]
   capabilities = ["pull", "resolve"]
   ca = "${target_ca}"
 EOF
+	echo "Installed OCI registry CA for ${registry_host} into ${target_dir}"
+}
+
+if [[ -n "${certs_root}" ]]; then
+	install_cert_for_root "${certs_root}"
+else
+	install_cert_for_root /ck8s/k8s-containerd/etc/containerd/certs.d
+	install_cert_for_root /var/snap/k8s/common/etc/containerd/certs.d
+fi
 
 if snap services k8s 2>/dev/null | grep -q '^k8s\.containerd'; then
 	sudo snap restart k8s.containerd
 else
 	echo "WARNING: k8s.containerd snap service not found; restart your Kubernetes containerd manually." >&2
 fi
-
-echo "Installed OCI registry CA for ${registry_host} into ${target_dir}"
