@@ -11,7 +11,7 @@ on:
         default: "artifact"
       build-timeout-minutes:
         type: number
-        default: 60
+        default: 120
       charmcraft-channel:
         type: string
         default: "latest/edge"
@@ -109,7 +109,7 @@ jobs:
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
         run: |
           clean_rockcraft_state() {
-            rockcraft clean --all || rockcraft clean || true
+            rockcraft clean || true
             rm -rf \
               "${HOME}/.cache/rockcraft" \
               "${HOME}/.local/state/rockcraft" \
@@ -137,24 +137,40 @@ jobs:
           }
 
           if [ "${{ matrix.type }}" = "rock" ]; then
-            attempts=4
+            attempts=6
           else
             attempts=3
           fi
 
           for attempt in $(seq 1 "$attempts"); do
-            if opcli artifacts build \
+            build_log="$(mktemp)"
+            set +e
+            opcli artifacts build \
               --${{ matrix.type }} ${{ matrix.name }} \
-              --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )); then
+              --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )) \
+              2>&1 | tee "$build_log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              rm -f "$build_log"
               exit 0
             fi
             if [ "$attempt" = "$attempts" ]; then
+              rm -f "$build_log"
               exit 1
             fi
+            sleep_seconds=$(( attempt * 60 ))
             if [ "${{ matrix.type }}" = "rock" ]; then
               clean_rockcraft_state
+              if grep -q "expected digest .* got .*\\|Failed to cut requested chisel slices" "$build_log"; then
+                # Chisel can read a newly published InRelease while archive.ubuntu.com
+                # still serves the previous Packages/deb content. This upstream race
+                # can last tens of minutes, so short immediate retries are ineffective.
+                sleep_seconds=600
+              fi
             fi
-            sleep $(( attempt * 60 ))
+            rm -f "$build_log"
+            sleep "$sleep_seconds"
           done
         env:
           CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS: "1"
