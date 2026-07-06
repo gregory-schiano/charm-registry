@@ -10,10 +10,8 @@ This stack mirrors the charm integration test deployment:
 
 The deployment mode is **provider-first**: Terraform manages the model,
 Charmhub applications, resources, and configuration through the Juju provider.
-Relations are still Terraform-owned, but the relation module shells out to
-`juju integrate` after both applications exist because the provider can wait for
-active application status before creating the relations that make some charms
-active. The `charm-registry` charm is deployed from Charmhub.
+Relations are managed with the provider-native `juju_integration` resource. The
+`charm-registry` charm is deployed from Charmhub.
 
 ## Prerequisites
 

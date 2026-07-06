@@ -18,9 +18,3 @@ variable "application_b" {
     endpoint = string
   })
 }
-
-variable "wait_seconds" {
-  description = "Maximum time to wait for both applications to exist before integrating them."
-  type        = number
-  default     = 600
-}
