@@ -25,6 +25,7 @@ type Client struct {
 const (
 	defaultMaxAPIResponseBytes = 4 << 20
 	defaultMaxArtifactBytes    = 64 << 20
+	defaultHTTPTimeout         = 5 * time.Minute
 )
 
 type APIError struct {
@@ -226,7 +227,7 @@ func NewWithLimits(baseURL string, maxAPIResponseBytes, maxArtifactBytes int64) 
 		maxAPIResponseBytes: maxAPIResponseBytes,
 		maxArtifactBytes:    maxArtifactBytes,
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: defaultHTTPTimeout,
 		},
 	}
 }

@@ -18,6 +18,20 @@ DEPENDENCIES = {
 }
 
 
+def transient_sync_error(rule: dict) -> bool:
+    message = str(rule.get("last-sync-error") or "").lower()
+    return any(
+        marker in message
+        for marker in (
+            "client.timeout",
+            "context deadline exceeded",
+            "timeout",
+            "connection reset",
+            "temporarily unavailable",
+        )
+    )
+
+
 def request(
     base_url: str, method: str, path: str, token: str, body: dict | None = None
 ) -> tuple[int, dict]:
@@ -94,6 +108,19 @@ def main() -> int:
             if state == "ok":
                 continue
             if state in {"error", "delete-error"}:
+                if transient_sync_error(rule):
+                    status, payload = request(
+                        args.registry_url,
+                        "POST",
+                        f"/v1/admin/charmhub-sync/{name}/run",
+                        args.token,
+                    )
+                    if status not in {202, 404}:
+                        raise RuntimeError(
+                            f"sync retry {name} failed with HTTP {status}: {payload}"
+                        )
+                    pending.append(f"{name}:{track}:{state}:retrying")
+                    continue
                 raise RuntimeError(f"sync failed for {name}:{track}: {rule}")
             pending.append(f"{name}:{track}:{state}")
         if not pending:
