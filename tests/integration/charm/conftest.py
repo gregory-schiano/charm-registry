@@ -171,6 +171,7 @@ def deployed(
             "app-secret-key": "integration-test-secret",
             "enable-insecure-dev-auth": True,
             "rate-limit-ip-limit": 0,
+            "rate-limit-token-limit": 0,
         },
     )
 

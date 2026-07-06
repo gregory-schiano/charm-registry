@@ -18,7 +18,9 @@ DEPENDENCIES = {
 }
 
 
-def request(base_url: str, method: str, path: str, token: str, body: dict | None = None) -> tuple[int, dict]:
+def request(
+    base_url: str, method: str, path: str, token: str, body: dict | None = None
+) -> tuple[int, dict]:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(
         base_url.rstrip("/") + path,
