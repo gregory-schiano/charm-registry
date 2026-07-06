@@ -63,5 +63,7 @@ integration-suites:
     summary: "charm-registry Terraform deployment tests"
     working-dir: charm
     backends: [integration-test]
+    warn-timeout: 10m
+    kill-timeout: 45m
     environment:
       TOX_ENV: integration
