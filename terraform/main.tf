@@ -187,7 +187,6 @@ module "api_gateway_route" {
 
   depends_on = [
     module.api_ingress,
-    module.gateway_certificates,
   ]
 }
 
@@ -200,6 +199,5 @@ module "oci_gateway_route" {
 
   depends_on = [
     module.oci_ingress,
-    module.gateway_certificates,
   ]
 }
