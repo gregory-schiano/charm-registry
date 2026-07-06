@@ -38,8 +38,8 @@ locals {
 module "gateway" {
   source = "./modules/charmhub-application"
 
-  name  = "gateway-api-integrator"
-  model = local.model_name
+  name       = "gateway-api-integrator"
+  model_uuid = local.model_uuid
   charm = {
     name    = "gateway-api-integrator"
     channel = var.gateway_channel
@@ -53,8 +53,8 @@ module "gateway" {
 module "api_ingress" {
   source = "./modules/charmhub-application"
 
-  name  = "ingress-api"
-  model = local.model_name
+  name       = "ingress-api"
+  model_uuid = local.model_uuid
   charm = {
     name    = "ingress-configurator"
     channel = var.ingress_configurator_channel
@@ -68,8 +68,8 @@ module "api_ingress" {
 module "oci_ingress" {
   source = "./modules/charmhub-application"
 
-  name  = "ingress-oci"
-  model = local.model_name
+  name       = "ingress-oci"
+  model_uuid = local.model_uuid
   charm = {
     name    = "ingress-configurator"
     channel = var.ingress_configurator_channel
@@ -85,8 +85,8 @@ module "oci_ingress" {
 module "postgresql" {
   source = "./modules/charmhub-application"
 
-  name  = "postgresql"
-  model = local.model_name
+  name       = "postgresql"
+  model_uuid = local.model_uuid
   charm = {
     name    = "postgresql-k8s"
     channel = var.postgresql_channel
@@ -97,8 +97,8 @@ module "postgresql" {
 module "certificates" {
   source = "./modules/charmhub-application"
 
-  name  = "self-signed-certificates"
-  model = local.model_name
+  name       = "self-signed-certificates"
+  model_uuid = local.model_uuid
   charm = {
     name    = "self-signed-certificates"
     channel = var.certificates_channel
@@ -108,8 +108,8 @@ module "certificates" {
 module "app" {
   source = "./modules/charmhub-application"
 
-  name  = var.app_name
-  model = local.model_name
+  name       = var.app_name
+  model_uuid = local.model_uuid
   charm = {
     name     = var.app_charm_name
     channel  = var.app_channel
@@ -127,13 +127,14 @@ module "app" {
 module "app_api_ingress" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = var.app_name, endpoint = "ingress" }
-  application_b = { name = "ingress-api", endpoint = "ingress" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.app.name, endpoint = "ingress" }
+  application_b = { name = module.api_ingress.name, endpoint = "ingress" }
 
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.app,
     module.api_ingress,
   ]
 }
@@ -141,13 +142,14 @@ module "app_api_ingress" {
 module "app_oci_ingress" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = var.app_name, endpoint = "oci-ingress" }
-  application_b = { name = "ingress-oci", endpoint = "ingress" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.app.name, endpoint = "oci-ingress" }
+  application_b = { name = module.oci_ingress.name, endpoint = "ingress" }
 
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.app,
     module.oci_ingress,
   ]
 }
@@ -155,13 +157,14 @@ module "app_oci_ingress" {
 module "app_postgresql" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = var.app_name, endpoint = "postgresql" }
-  application_b = { name = "postgresql", endpoint = "database" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.app.name, endpoint = "postgresql" }
+  application_b = { name = module.postgresql.name, endpoint = "database" }
 
   depends_on = [
     juju_model.this,
     data.juju_model.this,
+    module.app,
     module.postgresql,
   ]
 }
@@ -169,37 +172,40 @@ module "app_postgresql" {
 module "gateway_certificates" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = "self-signed-certificates", endpoint = "certificates" }
-  application_b = { name = "gateway-api-integrator", endpoint = "certificates" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.certificates.name, endpoint = "certificates" }
+  application_b = { name = module.gateway.name, endpoint = "certificates" }
 
   depends_on = [
     juju_model.this,
     data.juju_model.this,
     module.certificates,
+    module.gateway,
   ]
 }
 
 module "api_gateway_route" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = "ingress-api", endpoint = "gateway-route" }
-  application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.api_ingress.name, endpoint = "gateway-route" }
+  application_b = { name = module.gateway.name, endpoint = "gateway-route" }
 
   depends_on = [
     module.api_ingress,
+    module.gateway,
   ]
 }
 
 module "oci_gateway_route" {
   source = "./modules/integration"
 
-  model         = local.model_name
-  application_a = { name = "ingress-oci", endpoint = "gateway-route" }
-  application_b = { name = "gateway-api-integrator", endpoint = "gateway-route" }
+  model_uuid    = local.model_uuid
+  application_a = { name = module.oci_ingress.name, endpoint = "gateway-route" }
+  application_b = { name = module.gateway.name, endpoint = "gateway-route" }
 
   depends_on = [
     module.oci_ingress,
+    module.gateway,
   ]
 }

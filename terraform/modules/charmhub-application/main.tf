@@ -1,6 +1,6 @@
 resource "juju_application" "this" {
-  name  = var.name
-  model = var.model
+  name       = var.name
+  model_uuid = var.model_uuid
 
   charm {
     name     = var.charm.name

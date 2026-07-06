@@ -1,5 +1,5 @@
 resource "juju_integration" "this" {
-  model = var.model
+  model_uuid = var.model_uuid
 
   application {
     name     = var.application_a.name

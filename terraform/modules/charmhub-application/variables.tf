@@ -3,8 +3,8 @@ variable "name" {
   type        = string
 }
 
-variable "model" {
-  description = "Juju model name."
+variable "model_uuid" {
+  description = "Juju model UUID."
   type        = string
 }
 

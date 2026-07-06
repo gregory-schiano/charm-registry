@@ -147,5 +147,10 @@ jobs:
         if: failure()
         run: |
           if id ubuntu >/dev/null 2>&1; then
-            sudo -u ubuntu juju debug-log --replay || true
+            sudo -u ubuntu bash -c '
+              juju models --format json | jq -r ".models[].\"short-name\"" | while IFS= read -r model; do
+                echo "=== juju debug-log for model: $model ==="
+                juju debug-log -m "$model" --replay --limit 1000 || true
+              done
+            '
           fi
