@@ -28,7 +28,7 @@ jobs:
       upload-image: artifact
       charmcraft-channel: latest/edge
       rockcraft-channel: latest/edge
-      test-timeout-minutes: 120
+      test-timeout-minutes: 90
 
   required-status-checks:
     name: Required Integration Test Status Checks

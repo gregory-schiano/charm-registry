@@ -11,7 +11,7 @@ on:
         default: "artifact"
       build-timeout-minutes:
         type: number
-        default: 120
+        default: 60
       charmcraft-channel:
         type: string
         default: "latest/edge"
