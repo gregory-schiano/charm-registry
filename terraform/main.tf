@@ -78,6 +78,8 @@ module "oci_ingress" {
     hostname = var.oci_hostname
   }
   trust = true
+
+  depends_on = [module.api_ingress]
 }
 
 module "postgresql" {

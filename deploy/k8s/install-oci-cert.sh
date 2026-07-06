@@ -64,10 +64,14 @@ EOF
 if [[ -n "${certs_root}" ]]; then
 	install_cert_for_root "${certs_root}"
 else
+	install_cert_for_root /etc/containerd/certs.d
 	install_cert_for_root /ck8s/k8s-containerd/etc/containerd/certs.d
 	install_cert_for_root /var/snap/k8s/common/etc/containerd/certs.d
 fi
 
+if systemctl is-active --quiet containerd 2>/dev/null; then
+	sudo systemctl restart containerd
+fi
 if snap services k8s 2>/dev/null | grep -q '^k8s\.containerd'; then
 	sudo snap restart k8s.containerd
 else
