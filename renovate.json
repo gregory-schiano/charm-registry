@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Etc/UTC",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "postUpdateOptions": ["gomodTidy"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Group Go module non-major updates into a single PR.",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "go modules (non-major)"
+    },
+    {
+      "description": "Group GitHub Actions updates; digests stay pinned via helpers:pinGitHubActionDigests.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Keep the Go toolchain (go.mod + workflow GO_VERSION) in its own PR.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang", "toolchain"],
+      "groupName": "go toolchain"
+    },
+    {
+      "description": "Track the Go version pinned in workflow env vars.",
+      "matchManagers": ["custom.regex"],
+      "groupName": "go toolchain"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update the Go version pinned as GO_VERSION in GitHub Actions workflows.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["GO_VERSION:\\s*[\"']?(?<currentValue>\\d+\\.\\d+\\.\\d+)[\"']?"],
+      "depNameTemplate": "golang/go",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^go(?<version>\\d+\\.\\d+\\.\\d+)$"
+    }
+  ]
+}

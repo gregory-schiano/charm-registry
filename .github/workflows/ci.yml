@@ -7,10 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Least privilege by default; only the artifact-build job needs packages: write.
 permissions:
-  actions: read
   contents: read
-  packages: write
 
 env:
   GO_VERSION: "1.26.4"
@@ -81,11 +80,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Run unit tests (fail-fast)
-        run: make test
-
-      - name: Run tests with coverage
-        run: make coverage
+      - name: Run tests with race detector and coverage
+        run: make coverage-race
 
       - name: Check coverage threshold
         run: |
@@ -103,6 +99,19 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
+
+  charm:
+    name: Charm Python Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install tox
+        run: pipx install tox
+
+      - name: Lint, type-check, and unit-test the charm
+        working-directory: charm
+        run: tox -e lint,static,unit
 
   build:
     name: Go Build
@@ -191,7 +200,7 @@ jobs:
   required-status-checks:
     name: Required status checks
     runs-on: ubuntu-latest
-    needs: [actionlint, lint, security, test, build, integration-smoke, artifact-build]
+    needs: [actionlint, lint, charm, security, test, build, integration-smoke, artifact-build]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -201,6 +210,7 @@ jobs:
           check_job() { if [ "$2" != "success" ]; then FAILED="$FAILED $1($2)"; fi; }
           check_job actionlint "${{ needs.actionlint.result }}"
           check_job lint "${{ needs.lint.result }}"
+          check_job charm "${{ needs.charm.result }}"
           check_job security "${{ needs.security.result }}"
           check_job test "${{ needs.test.result }}"
           check_job build "${{ needs.build.result }}"

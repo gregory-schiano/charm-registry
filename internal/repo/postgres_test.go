@@ -53,6 +53,8 @@ func createRepositoryBehaviorTestPackage(t *testing.T, repository *SQLite, owner
 }
 
 func TestRepositoryCanManagePackageViaGroupACL(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-1", "owner")
@@ -84,6 +86,8 @@ func TestRepositoryCanManagePackageViaGroupACL(t *testing.T) {
 }
 
 func TestRepositoryCanViewPackageViaGroupACL(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-2", "owner2")
@@ -119,6 +123,8 @@ func TestRepositoryCanViewPackageViaGroupACL(t *testing.T) {
 }
 
 func TestRepositoryResolveDefaultReleaseFallback(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-3", "owner3")
@@ -150,6 +156,8 @@ func TestRepositoryResolveDefaultReleaseFallback(t *testing.T) {
 }
 
 func TestRepositoryWithinTransactionRollsBackOnError(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-4", "owner4")
@@ -188,6 +196,7 @@ func TestRepositoryWithinTransactionRollsBackOnError(t *testing.T) {
 }
 
 func TestRepositoryPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t *testing.T) {
+	t.Parallel()
 
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
@@ -248,6 +257,8 @@ func TestRepositoryPushRevisionStyleTransactionRollsBackOnUpdatePackageFailure(t
 }
 
 func TestRepositorySearchPackagesEscapesWildcards(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-search", "owner-search")
@@ -276,6 +287,8 @@ func TestRepositorySearchPackagesEscapesWildcards(t *testing.T) {
 }
 
 func TestRepositoryCharmhubSyncRuleCRUD(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	admin := ensureRepositoryBehaviorTestAccount(t, repository, "admin-sync", "admin-sync")
@@ -326,6 +339,8 @@ func TestRepositoryCharmhubSyncRuleCRUD(t *testing.T) {
 }
 
 func TestRepositoryReleaseVariantsByBase(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-release-variant", "owner-release-variant")
@@ -377,6 +392,8 @@ func TestRepositoryReleaseVariantsByBase(t *testing.T) {
 }
 
 func TestRepositoryNilBaseReleaseIsChannelSingleton(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-nil-base", "owner-nil-base")
@@ -412,6 +429,8 @@ func TestRepositoryNilBaseReleaseIsChannelSingleton(t *testing.T) {
 }
 
 func TestRepositoryDeleteStaleTrackReleasesKeepsPresentVariants(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-stale-release", "owner-stale-release")
@@ -445,6 +464,8 @@ func TestRepositoryDeleteStaleTrackReleasesKeepsPresentVariants(t *testing.T) {
 }
 
 func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-sync-delete", "owner-sync-delete")
@@ -524,6 +545,8 @@ func TestRepositoryDeletePrimitivesForSyncCleanup(t *testing.T) {
 }
 
 func TestRepositoryListResourceRevisionObjectKeysByPackage(t *testing.T) {
+	t.Parallel()
+
 	repository := newRepositoryBehaviorTestRepository(t)
 	ctx := context.Background()
 	owner := ensureRepositoryBehaviorTestAccount(t, repository, "owner-keys", "owner-keys")

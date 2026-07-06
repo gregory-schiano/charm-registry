@@ -3,7 +3,12 @@
 
 """Unit tests for the charm's environment mapping."""
 
-from charm import public_url_environment, rate_limit_environment, size_limit_environment
+from charm import (
+    oci_secret_key_environment,
+    public_url_environment,
+    rate_limit_environment,
+    size_limit_environment,
+)
 
 
 def test_no_ingress_yields_no_overrides():
@@ -83,3 +88,16 @@ def test_rate_limits_map_to_registry_environment():
         "CHARM_REGISTRY_TOKEN_RATE_LIMIT": "10",
         "CHARM_REGISTRY_TOKEN_RATE_WINDOW": "2m",
     }
+
+
+def test_oci_secret_key_from_juju_secret_overrides_workload():
+    env = oci_secret_key_environment({"oci-secret-key": {"value": " super-secret-key "}})
+
+    assert env == {"CHARM_REGISTRY_OCI_SECRET_KEY": "super-secret-key"}
+
+
+def test_oci_secret_key_absent_falls_back_to_app_secret_key():
+    assert oci_secret_key_environment({}) == {}
+    assert oci_secret_key_environment({"oci-secret-key": None}) == {}
+    assert oci_secret_key_environment({"oci-secret-key": {"value": ""}}) == {}
+    assert oci_secret_key_environment({"oci-secret-key": {"other": "x"}}) == {}

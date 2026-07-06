@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 ACTIONLINT_VERSION ?= v1.7.7
 
-.PHONY: help fmt tidy tidy-check test test-race coverage vet build run lint actionlint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
+.PHONY: help fmt tidy tidy-check test test-race coverage coverage-race vet build run lint actionlint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
 
 help:
 	@printf "%s\n" \
@@ -12,6 +12,7 @@ help:
 		"make test         - run unit tests" \
 		"make test-race    - run tests with the race detector" \
 		"make coverage     - run tests with coverage and print report" \
+		"make coverage-race - run coverage under the race detector (single pass, CI)" \
 		"make vet          - run go vet" \
 		"make lint         - run golangci-lint" \
 		"make actionlint   - lint GitHub Actions workflows" \
@@ -38,8 +39,11 @@ help:
 		"make charm-integration-test - run charm integration tests with Jubilant" \
 		"make snap-integration-test  - run snap spread tests (requires spread + snapd)"
 
+# Apply the same formatters the linter enforces (gci import grouping +
+# gofmt simplify), including on _test.go files. `go fmt` alone would not
+# apply gci, so a plain `go fmt` can still leave `make lint` failing.
 fmt:
-	$(GO) fmt $(_GO_PKGS)
+	$(GO) tool golangci-lint fmt $(_LINT_PKGS)
 
 tidy:
 	$(GO) mod tidy
@@ -59,24 +63,30 @@ tidy-check:
 _UNIT_PKGS = $(shell $(GO) list ./internal/... | grep -Ev '/repo/db$$')
 _COVER_PKGS = $(shell $(GO) list -f '{{if .TestGoFiles}}{{.ImportPath}}{{else if .XTestGoFiles}}{{.ImportPath}}{{end}}' ./internal/... | grep -Ev '^$$|/repo/db$$')
 
+# Coverage counting mode and extra `go test` flags. `coverage-race` overrides
+# these so a single pass yields both race detection and coverage (the race
+# detector requires atomic cover mode).
+COVERMODE   ?= count
+GOTESTFLAGS ?=
+
 # Repository Go packages. Keep package scope explicit instead of using `./...`
 # so local runtime artifacts outside Go packages cannot affect tooling.
 _GO_PKGS = ./cmd/... ./internal/...
 _LINT_PKGS = $(_GO_PKGS)
 
 test:
-	$(GO) list ./internal/... | grep -Ev '/repo/db$$' | xargs $(GO) test
+	$(GO) test $(_UNIT_PKGS)
 
 test-race:
-	$(GO) list ./internal/... | grep -Ev '/repo/db$$' | xargs $(GO) test -race
+	$(GO) test -race $(_UNIT_PKGS)
 
 coverage:
 	@rm -f coverage.out
-	@printf "mode: count\n" > coverage.out
+	@printf "mode: %s\n" "$(COVERMODE)" > coverage.out
 	@failed=0; \
 	for pkg in $(_COVER_PKGS); do \
 		tmp_cov=$$(mktemp); \
-		if ! $(GO) test $$pkg -coverprofile=$$tmp_cov -covermode=count 2>&1; then \
+		if ! $(GO) test $(GOTESTFLAGS) $$pkg -coverprofile=$$tmp_cov -covermode=$(COVERMODE) 2>&1; then \
 			failed=$$((failed + 1)); \
 			printf 'FAIL: %s\n' "$$pkg"; \
 		fi; \
@@ -88,6 +98,12 @@ coverage:
 		printf '\nERROR: %d package(s) failed tests.\n' "$$failed"; \
 		exit 1; \
 	fi
+
+# Single pass that produces coverage *and* runs the race detector, so CI does
+# not execute the suite twice. Atomic cover mode is mandatory under -race.
+coverage-race: COVERMODE   = atomic
+coverage-race: GOTESTFLAGS = -race
+coverage-race: coverage
 
 vet:
 	$(GO) vet $(_GO_PKGS)
@@ -114,15 +130,17 @@ actionlint:
 vuln:
 	$(GO) tool govulncheck $(_GO_PKGS)
 
-# internal/repo/db is sqlc-generated; G101 false-positives on SQL string
-# constants are suppressed by excluding the directory from the scan.
+# -exclude-generated skips files carrying the standard "Code generated ... DO
+# NOT EDIT." header (the sqlc output in internal/repo/db), suppressing G101
+# false-positives on generated SQL string constants without hardcoding a path.
+# Inline `#nosec` annotations cover the intentional cases in hand-written code.
 gosec:
-	$(GO) tool gosec -exclude-dir=internal/repo/db $(_GO_PKGS)
+	$(GO) tool gosec -exclude-generated $(_GO_PKGS)
 
 sqlc-diff:
 	$(GO) tool sqlc diff
 
-audit: tidy vet lint test vuln gosec
+audit: tidy vet lint test-race vuln gosec
 
 check: fmt audit
 

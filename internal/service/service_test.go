@@ -1048,7 +1048,6 @@ func TestCreateReleaseRejectsIncompleteBase(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -3074,7 +3073,6 @@ func TestRepresentativeServiceMethodsRequireAuthentication(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assertServiceError(t, tt.fn(), ErrorKindUnauthorized)
@@ -3112,7 +3110,6 @@ func TestRepresentativeServiceMethodsReturnNotFoundForMissingPackage(t *testing.
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assertServiceError(t, tt.fn(), ErrorKindNotFound)

@@ -53,6 +53,19 @@ config:
       type: string
       default: oci
       description: S3 key prefix used by the embedded OCI registry backend.
+    oci-secret-key:
+      type: secret
+      description: |
+        Juju user secret holding the key used to encrypt stored OCI registry
+        credentials. Create it with `juju add-secret <name> value=<key>` — the
+        secret must contain a single `value` field of at least 16 characters —
+        then `juju grant-secret <name> <app>` and set this option to the
+        resulting secret URI. When unset, the charm falls back to the
+        framework-managed application secret key.
+
+        IMPORTANT: this key is required to decrypt existing OCI credentials.
+        Back it up (see the get-oci-secret-key action) and never rotate it
+        without re-encrypting, otherwise stored credentials become unrecoverable.
     oci-project-prefix:
       type: string
       default: charm
@@ -101,10 +114,29 @@ config:
       type: string
       default: 1m
       description: Window for token issuance rate limiting. Accepts durations such as 30s, 1m, or 2h.
+    trusted-proxies:
+      type: string
+      description: |
+        Comma-separated IPs/CIDRs of trusted reverse proxies, typically the
+        ingress/Traefik pod or service range. Only requests arriving from these
+        peers have their X-Forwarded-For / X-Real-IP / True-Client-IP headers
+        honoured for the client IP used in per-IP rate limiting and logging.
+
+        This charm always runs behind the required ingress relations, so the
+        workload only ever sees the ingress address as the transport peer. Leave
+        this empty and every client shares a single rate-limit bucket (the whole
+        deployment is limited as one IP); set it to the ingress source range to
+        restore correct per-client limiting.
     enable-insecure-dev-auth:
       type: boolean
       default: false
-      description: Enable development-only bearer tokens when OIDC is not related.
+      description: |
+        Enable development-only bearer tokens when OIDC is not related.
+
+        WARNING: never enable this in production. It activates static
+        `dev:<user>:<role>` bearer tokens (for example `dev:admin:admin`) that
+        grant access with no identity provider, bypassing OIDC authentication
+        entirely.
     admin-subjects:
       type: string
       description: Comma-separated OIDC subject values that should be registry admins.
@@ -114,3 +146,13 @@ config:
     admin-usernames:
       type: string
       description: Comma-separated OIDC username values that should be registry admins.
+
+actions:
+  get-oci-secret-key:
+    description: |
+      Output the OCI credential-encryption key currently in effect: the
+      configured oci-secret-key secret when set, otherwise the framework-managed
+      application secret key. Use this to back up the key — it is required to
+      decrypt stored OCI registry credentials and cannot be recovered if lost.
+      Runs on the leader unit only; the value is returned as an action result,
+      so restrict who may run actions on this application accordingly.

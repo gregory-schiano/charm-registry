@@ -37,35 +37,58 @@ def public_url_environment(
     return env
 
 
-def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
-    """Map charm byte-size config options to workload environment variables."""
-    mapping = {
-        "charmhub-max-artifact-bytes": "CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES",
-        "max-archive-file-bytes": "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES",
-        "max-upload-bytes": "CHARM_REGISTRY_MAX_UPLOAD_BYTES",
-    }
+_SIZE_LIMIT_ENV = {
+    "charmhub-max-artifact-bytes": "CHARM_REGISTRY_CHARMHUB_MAX_ARTIFACT_BYTES",
+    "max-archive-file-bytes": "CHARM_REGISTRY_MAX_ARCHIVE_FILE_BYTES",
+    "max-upload-bytes": "CHARM_REGISTRY_MAX_UPLOAD_BYTES",
+}
+
+_RATE_LIMIT_ENV = {
+    "rate-limit-ip-limit": "CHARM_REGISTRY_IP_RATE_LIMIT",
+    "rate-limit-ip-window": "CHARM_REGISTRY_IP_RATE_WINDOW",
+    "rate-limit-token-limit": "CHARM_REGISTRY_TOKEN_RATE_LIMIT",
+    "rate-limit-token-window": "CHARM_REGISTRY_TOKEN_RATE_WINDOW",
+}
+
+
+def _mapped_environment(
+    config: typing.Mapping[str, typing.Any],
+    mapping: typing.Mapping[str, str],
+) -> dict[str, str]:
+    """Map non-empty scalar config options to workload environment variables."""
     env: dict[str, str] = {}
     for config_key, env_key in mapping.items():
         value = config.get(config_key, config.get(config_key.replace("-", "_")))
         if value is not None and str(value).strip():
             env[env_key] = str(value).strip()
     return env
+
+
+def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
+    """Map charm byte-size config options to workload environment variables."""
+    return _mapped_environment(config, _SIZE_LIMIT_ENV)
 
 
 def rate_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
     """Map charm rate-limit config options to workload environment variables."""
-    mapping = {
-        "rate-limit-ip-limit": "CHARM_REGISTRY_IP_RATE_LIMIT",
-        "rate-limit-ip-window": "CHARM_REGISTRY_IP_RATE_WINDOW",
-        "rate-limit-token-limit": "CHARM_REGISTRY_TOKEN_RATE_LIMIT",
-        "rate-limit-token-window": "CHARM_REGISTRY_TOKEN_RATE_WINDOW",
-    }
-    env: dict[str, str] = {}
-    for config_key, env_key in mapping.items():
-        value = config.get(config_key, config.get(config_key.replace("-", "_")))
-        if value is not None and str(value).strip():
-            env[env_key] = str(value).strip()
-    return env
+    return _mapped_environment(config, _RATE_LIMIT_ENV)
+
+
+def oci_secret_key_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
+    """Map an optional Juju-secret OCI encryption key to the workload environment.
+
+    The oci-secret-key option is a secret-typed config, so the framework resolves
+    it into a mapping of the secret's fields. When a `value` field is present it
+    overrides the workload's OCI secret key; otherwise the workload falls back to
+    the framework-managed application secret key (APP_SECRET_KEY).
+    """
+    secret = config.get("oci-secret-key", config.get("oci_secret_key"))
+    if not isinstance(secret, typing.Mapping):
+        return {}
+    value = secret.get("value")
+    if value is None or not str(value).strip():
+        return {}
+    return {"CHARM_REGISTRY_OCI_SECRET_KEY": str(value).strip()}
 
 
 class CharmRegistryApp(App):
@@ -109,6 +132,7 @@ class CharmRegistryApp(App):
         )
         env.update(size_limit_environment(self._charm_state.user_defined_config))
         env.update(rate_limit_environment(self._charm_state.user_defined_config))
+        env.update(oci_secret_key_environment(self._charm_state.user_defined_config))
         return env
 
     def _oci_s3_environment(
@@ -145,6 +169,9 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         super().__init__(*args)
         self._oci_s3 = self._init_oci_s3()
         self._oci_ingress = self._init_oci_ingress()
+        self.framework.observe(
+            self.on.get_oci_secret_key_action, self._on_get_oci_secret_key_action
+        )
 
     def _init_oci_s3(self) -> PaaSS3Requirer | None:
         """Initialize the OCI S3 relation."""
@@ -184,6 +211,43 @@ class CharmRegistryCharm(paas_charm.go.Charm):
                 ops.Port(protocol="tcp", port=self._workload_config.port),
                 ops.Port(protocol="tcp", port=5000),
             )
+
+    def _configured_oci_secret_key(self) -> str | None:
+        """Return the OCI secret key from the oci-secret-key config secret, if set."""
+        secret_id = self.config.get("oci-secret-key")
+        if not secret_id:
+            return None
+        secret = self.model.get_secret(id=typing.cast(str, secret_id))
+        value = secret.get_content(refresh=True).get("value")
+        return value.strip() if value and value.strip() else None
+
+    def _effective_oci_secret_key(self) -> str | None:
+        """Return the OCI secret key in effect, mirroring the workload's fallback.
+
+        The configured oci-secret-key secret takes precedence; otherwise the
+        workload uses the framework-managed application secret key.
+        """
+        configured = self._configured_oci_secret_key()
+        if configured:
+            return configured
+        if self._secret_storage.is_initialized:
+            return self._secret_storage.get_secret_key()
+        return None
+
+    def _on_get_oci_secret_key_action(self, event: ops.ActionEvent) -> None:
+        """Return the effective OCI credential-encryption key for backup.
+
+        Args:
+            event: the action event that triggered this callback.
+        """
+        if not self.unit.is_leader():
+            event.fail("only the leader unit can read the OCI secret key")
+            return
+        key = self._effective_oci_secret_key()
+        if not key:
+            event.fail("charm is still initializing; the secret key is not available yet")
+            return
+        event.set_results({"oci-secret-key": key})
 
     def _create_app(self) -> CharmRegistryApp:
         """Build the application runtime."""

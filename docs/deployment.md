@@ -262,6 +262,31 @@ Two separate traefik applications are needed because each ingress relation publi
 
 The workload serves plain HTTP on both listeners; TLS terminates at the ingress. Give the traefik applications real certificates (for example via their `certificates` relation). The OCI ingress in particular must serve HTTPS — containerd and Docker refuse plain-HTTP registries by default.
 
+### OCI registry routing (serve at the host root)
+
+`traefik-k8s` per-app ingress routes each application under a path prefix derived from the model and app name (for example `/<model>-charm-registry`). OCI clients — containerd, Docker, `skopeo` — expect a registry at the **host root** (`https://<host>/v2/...`) and cannot be told to use a path prefix. Configure the OCI-facing traefik to route the registry hostname at `/` instead of the default `/<model>-app` prefix (for example with a host-based route and `strip-prefix` disabled, or an external ingress/`IngressRoute` that maps the OCI hostname to the charm's `oci-ingress` at the root). `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` published to clients must resolve to that root; if it still carries the model-app prefix, image pulls and pushes fail.
+
+### Per-IP rate limiting behind ingress
+
+Because the workload only ever sees the ingress as its transport peer, per-IP rate limiting treats the entire fleet as one client unless you tell it which proxies to trust. Set the `trusted-proxies` config option to the ingress/Traefik source range (pod or service CIDR) so the workload honours `X-Forwarded-For`; leave it empty and the whole deployment shares a single rate-limit bucket.
+
+```bash
+juju config charm-registry trusted-proxies="10.1.0.0/16"
+```
+
+### OCI credential-encryption key
+
+The key that encrypts stored OCI registry credentials defaults to the framework-managed application secret key. This key is required to decrypt existing credentials, so back it up and keep it stable — rotating it (for example via the built-in `rotate-secret-key` action) makes stored OCI credentials unrecoverable. For an explicit, independently managed key, supply a Juju user secret:
+
+```bash
+juju add-secret oci-key value=$(openssl rand -hex 32)
+juju grant-secret oci-key charm-registry
+juju config charm-registry oci-secret-key=<secret-uri>
+
+# Back up the effective key (leader-only action):
+juju run charm-registry/leader get-oci-secret-key
+```
+
 See the charm's `charmcraft.yaml` for the full relation and configuration interface.
 
 ## Production hardening
