@@ -40,9 +40,9 @@ def test_both_ingresses_set_all_three_urls():
 def test_size_limits_map_to_registry_environment():
     env = size_limit_environment(
         {
-            "charmhub-max-artifact-bytes": "128MB",
-            "max-archive-file-bytes": "32MB",
-            "max-upload-bytes": "1GB",
+            "charmhub_max_artifact_bytes": "128MB",
+            "max_archive_file_bytes": "32MB",
+            "max_upload_bytes": "1GB",
         }
     )
 
@@ -70,10 +70,10 @@ def test_size_limits_skip_empty_values():
 def test_rate_limits_map_to_registry_environment():
     env = rate_limit_environment(
         {
-            "rate-limit-ip-limit": 0,
-            "rate-limit-ip-window": "30s",
-            "rate-limit-token-limit": 10,
-            "rate-limit-token-window": "2m",
+            "rate_limit_ip_limit": 0,
+            "rate_limit_ip_window": "30s",
+            "rate_limit_token_limit": 10,
+            "rate_limit_token_window": "2m",
         }
     )
 

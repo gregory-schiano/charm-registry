@@ -98,6 +98,7 @@ app_secret_key = "{APP_SECRET_KEY}"
 admin_usernames = "admin"
 enable_insecure_dev_auth = true
 extra_app_config = {{
+  "max-archive-file-bytes" = "64MB"
   "rate-limit-ip-limit" = 0
   "rate-limit-token-limit" = 0
 }}
@@ -145,6 +146,7 @@ def test_terraform_stack_uses_private_charm_registry(
             "admin.usernames=admin",
             "insecure-dev-auth=true",
             "oci.secret-key=integration-test-oci-secret",
+            "limits.max-archive-file-bytes=64MB",
             f"public-api-url={registry_api_url}",
             f"public-storage-url={registry_api_url}",
             f"public-registry-url={registry_oci_url}",

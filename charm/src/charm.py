@@ -46,7 +46,7 @@ def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str,
     }
     env: dict[str, str] = {}
     for config_key, env_key in mapping.items():
-        value = config.get(config_key)
+        value = config.get(config_key, config.get(config_key.replace("-", "_")))
         if value is not None and str(value).strip():
             env[env_key] = str(value).strip()
     return env
@@ -62,7 +62,7 @@ def rate_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str,
     }
     env: dict[str, str] = {}
     for config_key, env_key in mapping.items():
-        value = config.get(config_key)
+        value = config.get(config_key, config.get(config_key.replace("-", "_")))
         if value is not None and str(value).strip():
             env[env_key] = str(value).strip()
     return env

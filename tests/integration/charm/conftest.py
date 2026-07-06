@@ -170,6 +170,7 @@ def deployed(
             "admin-usernames": "admin",
             "app-secret-key": "integration-test-secret",
             "enable-insecure-dev-auth": True,
+            "max-archive-file-bytes": "64MB",
             "rate-limit-ip-limit": 0,
             "rate-limit-token-limit": 0,
         },
