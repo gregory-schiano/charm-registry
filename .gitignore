@@ -49,6 +49,15 @@ Thumbs.db
 .AppleDouble
 .LSOverride
 
+# Terraform (keep .terraform.lock.hcl tracked for reproducible providers)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+
 # Craft tools
 *.charm
 *.rock
