@@ -1,0 +1,153 @@
+name: Promote
+
+# Promote the artifacts already published in a source channel to the next
+# channel, without rebuilding. This re-releases the exact revisions that were
+# tested and shipped to the lower channel.
+on:
+  workflow_dispatch:
+    inputs:
+      promotion:
+        type: choice
+        description: Channel promotion to perform
+        options:
+          - edge -> beta
+          - beta -> candidate
+          - candidate -> stable
+      dry_run:
+        type: boolean
+        description: "Dry run: resolve and print what would be promoted, publish nothing"
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: promote-${{ github.event.inputs.promotion }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve source/target channels
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.parse.outputs.source }}
+      target: ${{ steps.parse.outputs.target }}
+    steps:
+      - id: parse
+        run: |
+          PROMOTION="${{ github.event.inputs.promotion }}"
+          SOURCE="latest/$(echo "$PROMOTION" | awk -F ' -> ' '{print $1}' | tr -d ' ')"
+          TARGET="latest/$(echo "$PROMOTION" | awk -F ' -> ' '{print $2}' | tr -d ' ')"
+          echo "source=${SOURCE}" >> "$GITHUB_OUTPUT"
+          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "Promoting ${SOURCE} -> ${TARGET}"
+
+  promote-charm:
+    name: Promote charm on Charmhub
+    runs-on: ubuntu-latest
+    needs: resolve
+    steps:
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Authenticate with Charmhub
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMCRAFT_AUTH }}
+        run: |
+          if [ -z "$CHARMCRAFT_AUTH" ]; then
+            echo "::error::CHARMCRAFT_AUTH secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          mkdir -p "$HOME/.local/share/snap/charmcraft/common"
+          echo "$CHARMCRAFT_AUTH" > "$HOME/.local/share/snap/charmcraft/common/credentials"
+
+      - name: Re-release source revisions to target channel
+        env:
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          TARGET: ${{ needs.resolve.outputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # Each release in the source channel carries a charm revision plus its
+          # bound resource revisions (e.g. app-image). Re-release every such
+          # revision to the target channel with the same resource bindings.
+          STATUS=$(charmcraft status charm-registry --format json)
+          mapfile -t RELEASES < <(echo "$STATUS" | jq -c \
+            --arg ch "$SOURCE" '
+              .[].mappings[].releases[]
+              | select(.channel == $ch and .revision != null)
+              | {revision, resources: (.resources // [])}' | sort -u)
+          if [ ${#RELEASES[@]} -eq 0 ]; then
+            echo "::error::No revisions found in ${SOURCE} for charm-registry"
+            exit 1
+          fi
+          for rel in "${RELEASES[@]}"; do
+            REV=$(echo "$rel" | jq -r '.revision')
+            RES_ARGS=()
+            while IFS= read -r res; do
+              [ -n "$res" ] && RES_ARGS+=(--resource "$res")
+            done < <(echo "$rel" | jq -r '.resources[]? | "\(.name):\(.revision)"')
+            echo "Promote charm revision ${REV} ${RES_ARGS[*]:-} -> ${TARGET}"
+            if [ "$DRY_RUN" = "true" ]; then
+              continue
+            fi
+            charmcraft release charm-registry --revision="$REV" --channel="$TARGET" "${RES_ARGS[@]}"
+          done
+
+  promote-snap:
+    name: Promote snap on Snap Store
+    runs-on: ubuntu-latest
+    needs: resolve
+    steps:
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Promote snap channel
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          TARGET: ${{ needs.resolve.outputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "::error::SNAPCRAFT_STORE_CREDENTIALS secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          echo "Promote snap spellbook ${SOURCE} -> ${TARGET}"
+          if [ "$DRY_RUN" = "true" ]; then
+            snapcraft status spellbook || true
+            exit 0
+          fi
+          snapcraft promote spellbook --from-channel "$SOURCE" --to-channel "$TARGET" --yes
+
+  promote-rock:
+    name: Promote rock image tag on GHCR
+    runs-on: ubuntu-latest
+    needs: resolve
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Login to GHCR
+        run: skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Re-tag rock image to target channel
+        env:
+          SOURCE: ${{ needs.resolve.outputs.source }}
+          TARGET: ${{ needs.resolve.outputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}"
+          SRC_TAG="${SOURCE##*/}"
+          DST_TAG="${TARGET##*/}"
+          echo "Re-tag rock ${IMAGE}:${SRC_TAG} -> ${IMAGE}:${DST_TAG}"
+          if [ "$DRY_RUN" = "true" ]; then
+            skopeo inspect "docker://${IMAGE}:${SRC_TAG}" --format '{{.Digest}}' || true
+            exit 0
+          fi
+          skopeo copy --insecure-policy "docker://${IMAGE}:${SRC_TAG}" "docker://${IMAGE}:${DST_TAG}"

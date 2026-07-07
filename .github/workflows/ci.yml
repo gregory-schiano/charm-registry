@@ -113,6 +113,23 @@ jobs:
         working-directory: charm
         run: tox -e lint,static,unit
 
+  # Fast static validation of the Terraform module so syntax/format errors
+  # surface on the PR instead of deep inside the spread integration run.
+  terraform:
+    name: Terraform Static Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff terraform/
+
+      - name: Validate module
+        working-directory: terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
   build:
     name: Go Build
     runs-on: ubuntu-latest
@@ -183,24 +200,15 @@ jobs:
             kill "$SERVER_PID" 2>/dev/null || true
           fi
 
-  artifact-build:
-    name: Build charm, rock, and snap artifacts
-    needs: [build]
-    uses: ./.github/workflows/build-artifacts-local.yml
-    permissions:
-      actions: read
-      contents: read
-      packages: write
-    with:
-      working-directory: .
-      upload-image: artifact
-      charmcraft-channel: latest/edge
-      rockcraft-channel: latest/edge
+  # Note: charm/rock/snap packaging is exercised by the Integration Tests
+  # workflow (integration.yml), which builds all three artifacts once on the
+  # same push/PR trigger before running them. Building them here as well would
+  # pack every artifact twice per change, so this workflow stays Go-focused.
 
   required-status-checks:
     name: Required status checks
     runs-on: ubuntu-latest
-    needs: [actionlint, lint, charm, security, test, build, integration-smoke, artifact-build]
+    needs: [actionlint, lint, charm, terraform, security, test, build, integration-smoke]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -211,11 +219,11 @@ jobs:
           check_job actionlint "${{ needs.actionlint.result }}"
           check_job lint "${{ needs.lint.result }}"
           check_job charm "${{ needs.charm.result }}"
+          check_job terraform "${{ needs.terraform.result }}"
           check_job security "${{ needs.security.result }}"
           check_job test "${{ needs.test.result }}"
           check_job build "${{ needs.build.result }}"
           check_job integration-smoke "${{ needs.integration-smoke.result }}"
-          check_job artifact-build "${{ needs.artifact-build.result }}"
           if [ -n "$FAILED" ]; then
             echo "::error::One or more required jobs failed or were skipped:$FAILED"
             exit 1

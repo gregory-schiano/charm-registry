@@ -33,21 +33,31 @@ Tag push always publishes (dry_run=false).
 
 ### Option 2: Manual Dispatch (testing / dry runs)
 
-1. Go to **Actions → Release → Run workflow**
-2. Set inputs:
-   - `dry_run`: `true` (default) to test the build without publishing, `false` to publish
-   - `tag`: the release tag (e.g. `v1.2.3-rc1`)
-   - `rock_registry`: OCI registry override (default: `ghcr.io`)
-3. Click **Run workflow**
+The workflow always builds the ref it runs on, so manual runs must be
+**dispatched on the tag itself** (the tag must already exist):
 
-Manual dispatch defaults to dry-run mode for safety.
+1. Go to **Actions → Release → Run workflow**
+2. In the ref selector ("Use workflow from"), pick the release **tag** (e.g. `v1.2.3-rc1`) — not a branch
+3. Set inputs:
+   - `dry_run`: `true` (default) to test the build without publishing, `false` to publish
+   - `rock_registry`: OCI registry override (default: `ghcr.io`)
+4. Click **Run workflow**
+
+Or from the CLI:
+
+```bash
+gh workflow run release.yml --ref v1.2.3-rc1 -f dry_run=true
+```
+
+Manual dispatch defaults to dry-run mode for safety. Runs dispatched on a
+branch instead of a tag fail immediately in `release-metadata`.
 
 ## Dry-Run Mode
 
 When `dry_run=true`:
 
-- ✓ All build jobs run (test, integration-smoke, build-binaries, build-rock, build-charm, build-snap, generate-sbom)
-- ✓ GitHub release is created as a **draft** with all artifacts attached
+- ✓ All build jobs run (test, integration-smoke, build-binaries, build-artifacts, generate-sbom)
+- ✓ GitHub release is created as a **draft** with the binaries, charm, snap, and SBOM attached (the rock lives in GHCR, not on the release)
 - ✗ Publish jobs are **skipped** (charm, rock, snap)
 - ✗ Attestations are **skipped**
 
@@ -108,8 +118,8 @@ snap install snapcraft --classic
 
 # Export login credentials (follow prompts)
 snapcraft export-login creds.txt \
-  --snaps charm-registry \
-  --channels latest/stable,latest/edge \
+  --snaps spellbook \
+  --channels latest/stable,latest/candidate,latest/beta,latest/edge \
   --acls package_upload,package_release
 
 # Copy the contents of creds.txt into the SNAPCRAFT_STORE_CREDENTIALS secret

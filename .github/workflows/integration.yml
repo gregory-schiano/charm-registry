@@ -17,7 +17,9 @@ permissions:
 jobs:
   integration-test:
     name: Charm-CI Integration
-    uses: ./.github/workflows/integration-test-local.yml
+    # Upstream charm-ci reusable workflow (build once via opcli matrix, then
+    # spread tests). SHA-pinned to v0.0.1-alpha.6; Renovate tracks the tag.
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@7e08ea41eadd61b4bc14ce408c660699deed6567 # v0.0.1-alpha.6
     secrets: inherit
     permissions:
       actions: read
@@ -25,7 +27,9 @@ jobs:
       packages: write
     with:
       working-directory: .
-      upload-image: artifact
+      # upload-image is left unset on purpose: charm-ci auto-selects the rock
+      # upload mode (fork PRs -> artifact; push/non-fork -> registry), so
+      # push-to-main builds feed publish-edge a multi-arch rock resource.
       charmcraft-channel: latest/edge
       rockcraft-channel: latest/edge
       test-timeout-minutes: 90

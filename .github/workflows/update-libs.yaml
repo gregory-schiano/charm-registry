@@ -1,0 +1,55 @@
+name: Update Charm Libraries
+
+# Keep the vendored charm libraries under charm/lib/ current, mirroring
+# traefik-k8s's update-libs automation. The Canonical observability reusable
+# workflow needs org-internal bot secrets (Noctua GPG/token), so this is a
+# self-contained equivalent: fetch the latest libs and open a PR.
+#
+# Note: PRs opened with the default GITHUB_TOKEN do not trigger CI workflows
+# (GitHub restriction). Close/reopen the PR — or push to its branch — to run
+# CI, or replace the token below with a PAT/GitHub App token.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 1" # weekly, Monday 05:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-libs
+  cancel-in-progress: false
+
+jobs:
+  update-libs:
+    name: Fetch latest charm libs and open a PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Fetch latest charm libraries
+        working-directory: charm
+        run: charmcraft fetch-lib
+
+      - name: Show changes
+        run: git status --short charm/lib/ || true
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5e914681df9dc83aa4e4905692ca88beb2f9e91f # v7.0.5
+        with:
+          commit-message: "chore: update charm libraries"
+          title: "chore: update charm libraries"
+          body: |
+            Automated update of the vendored charm libraries under `charm/lib/`
+            via `charmcraft fetch-lib`.
+
+            Review the diffs for breaking changes (LIBAPI bumps land as new
+            versioned directories and are surfaced here as new files).
+          branch: chore/update-charm-libs
+          delete-branch: true
+          add-paths: charm/lib/
+          labels: dependencies

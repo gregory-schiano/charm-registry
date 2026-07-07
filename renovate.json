@@ -48,6 +48,14 @@
       "depNameTemplate": "golang/go",
       "datasourceTemplate": "github-tags",
       "extractVersionTemplate": "^go(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the pinned canonical/charm-ci ref used for opcli (CHARM_CI_REF).",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["CHARM_CI_REF:\\s*[\"']?(?<currentValue>v[0-9][^\\s\"']*)[\"']?"],
+      "depNameTemplate": "canonical/charm-ci",
+      "datasourceTemplate": "github-tags"
     }
   ]
 }
