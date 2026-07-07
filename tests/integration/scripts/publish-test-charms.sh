@@ -62,8 +62,17 @@ if ! charmcraft register "$CHARM_NAME" >"$register_log" 2>&1; then
 fi
 rm -f "$register_log"
 
-charmcraft upload "$CHARM_FILE" --name "$CHARM_NAME" --release "$CHANNEL"
-echo "Published $CHARM_NAME from $CHARM_FILE to $CHANNEL"
+latest_revision() {
+    curl -fsS \
+        -H "Authorization: Bearer ${REGISTRY_TOKEN}" \
+        "${REGISTRY_API_URL}/v1/charm/${1}/revisions" |
+        python3 -c 'import json, sys; print(max(int(item["revision"]) for item in json.load(sys.stdin)["revisions"]))'
+}
+
+charmcraft upload "$CHARM_FILE" --name "$CHARM_NAME"
+revision="$(latest_revision "$CHARM_NAME")"
+charmcraft release "$CHARM_NAME" --revision "$revision" --channel "$CHANNEL"
+echo "Published $CHARM_NAME revision $revision from $CHARM_FILE to $CHANNEL"
 
 go build -o "$PROJECT_DIR/.bin/charm-registryctl" ./cmd/charm-registryctl
 

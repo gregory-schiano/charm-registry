@@ -56,11 +56,13 @@ ctl sync add "$RULE_NAME" --track latest --base ubuntu@24.04 --arch amd64 |
 ctl sync list | grep "$RULE_NAME" | grep -q "ubuntu@24.04" || fail "added rule missing from sync list"
 ctl sync remove "$RULE_NAME" --track latest |
 	grep -q "scheduled removal for $RULE_NAME track latest" || fail "sync remove output unexpected"
-# Removal is asynchronous: wait for the rule to disappear from the list.
+# Removal is asynchronous. The initial add also schedules a sync, so re-mark
+# the rule for removal while polling to avoid a sync failure racing the delete.
 for i in $(seq 1 30); do
 	if ! ctl sync list | grep -q "$RULE_NAME"; then
 		break
 	fi
+	ctl sync remove "$RULE_NAME" --track latest >/dev/null || true
 	[ "$i" -eq 30 ] && fail "removed rule still present in sync list after 60s"
 	sleep 2
 done

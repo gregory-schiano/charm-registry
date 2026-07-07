@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ---------- Scenario results ----------
@@ -865,31 +866,46 @@ func ScenarioSyncAddDeleteRule(c *Client) ScenarioResult {
 	}
 	_, _ = ReadAllBytes(resp3)
 
-	// List again and verify removal.
-	resp4, err := c.DoRequest("GET", "/v1/admin/charmhub-sync", "", auth)
-	if err != nil {
-		return fail(name, "list after delete: %v", err)
-	}
-	if resp4.StatusCode != http.StatusOK {
-		body4, _ := ReadAllBytes(resp4)
-		return fail(name, "list after delete: status %d, body: %s", resp4.StatusCode, string(body4))
-	}
-	listBody2, err := ReadJSON(resp4)
-	if err != nil {
-		return fail(name, "decode list after delete: %v", err)
-	}
-	rules2, _ := listBody2["rules"].([]any)
-	for _, r := range rules2 {
-		rMap, ok := r.(map[string]any)
-		if ok && rMap["name"] == ruleName && rMap["track"] == track {
-			if rMap["status"] != "deleting" {
-				return fail(name, "deleted rule %q should be marked deleting, got status %v", ruleName, rMap["status"])
+	// List again and verify the asynchronous removal completes. The add path
+	// starts a sync immediately; re-mark for deletion while polling so a fast
+	// upstream failure cannot leave dirty state for later scenarios.
+	for i := 0; i < 30; i++ {
+		resp4, err := c.DoRequest("GET", "/v1/admin/charmhub-sync", "", auth)
+		if err != nil {
+			return fail(name, "list after delete: %v", err)
+		}
+		if resp4.StatusCode != http.StatusOK {
+			body4, _ := ReadAllBytes(resp4)
+			return fail(name, "list after delete: status %d, body: %s", resp4.StatusCode, string(body4))
+		}
+		listBody2, err := ReadJSON(resp4)
+		if err != nil {
+			return fail(name, "decode list after delete: %v", err)
+		}
+		rules2, _ := listBody2["rules"].([]any)
+		found := false
+		for _, r := range rules2 {
+			rMap, ok := r.(map[string]any)
+			if ok && rMap["name"] == ruleName && rMap["track"] == track {
+				found = true
+				break
 			}
+		}
+		if !found {
 			return pass(name)
 		}
+		retryResp, err := c.DoRequest("DELETE", delPath, "", auth)
+		if err != nil {
+			return fail(name, "retry DELETE sync rule: %v", err)
+		}
+		_, _ = ReadAllBytes(retryResp)
+		if retryResp.StatusCode != http.StatusAccepted && retryResp.StatusCode != http.StatusNotFound {
+			return fail(name, "retry delete sync rule: status %d", retryResp.StatusCode)
+		}
+		time.Sleep(2 * time.Second)
 	}
 
-	return pass(name)
+	return fail(name, "deleted rule %q still present after 60s", ruleName)
 }
 
 // ---------- OCI registry ----------

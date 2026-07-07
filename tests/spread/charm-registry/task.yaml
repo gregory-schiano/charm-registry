@@ -92,15 +92,14 @@ execute: |
     exit 1
   fi
 
-  # Run all functional scenarios.
-  export FTEST_API_URL FTEST_OCI_URL FTEST_OCI_CERT_PATH
-  export FTEST_ADMIN_SUBJECT FTEST_ADMIN_USER
-
-  "$PROJECT_DIR/.bin/functional-test"
-
   echo "=== Running packaged admin CLI (charm-registryctl) e2e checks ==="
   export FTEST_ADMIN_SUBJECT FTEST_ADMIN_USER FTEST_API_URL
   "$PROJECT_DIR/tests/snap/registryctl-e2e-test.sh"
+
+  # Run all functional scenarios.
+  export FTEST_API_URL FTEST_OCI_URL FTEST_OCI_CERT_PATH
+
+  "$PROJECT_DIR/.bin/functional-test"
 
 debug: |
   snap logs "$SNAP_NAME.charm-registry" -n 100 || true
