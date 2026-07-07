@@ -18,8 +18,11 @@ jobs:
   integration-test:
     name: Charm-CI Integration
     # Upstream charm-ci reusable workflow (build once via opcli matrix, then
-    # spread tests). SHA-pinned to v0.0.1-alpha.6; Renovate tracks the tag.
-    uses: canonical/charm-ci/.github/workflows/integration-test.yml@7e08ea41eadd61b4bc14ce408c660699deed6567 # v0.0.1-alpha.6
+    # spread tests). SHA-pinned to v0.0.1-alpha.7; Renovate tracks the tag.
+    # NOTE: charm builds need CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS for
+    # the go-framework extension; pending an upstream charm-ci change to set
+    # it (opcli already does the equivalent for rockcraft).
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@2f274a6e4cfaac344660d8481ff8f8cb87a677b7 # v0.0.1-alpha.7
     secrets: inherit
     permissions:
       actions: read

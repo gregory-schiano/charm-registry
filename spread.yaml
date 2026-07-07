@@ -26,7 +26,7 @@ environment:
   FTEST_ADMIN_SUBJECT: admin
   FTEST_ADMIN_USER: admin
   CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
-  OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
+  OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-v0.0.1-alpha.7}")'
 
 prepare: |
   # Install Go for building the functional-test binary
@@ -35,7 +35,7 @@ prepare: |
     export UV_TOOL_BIN_DIR=/usr/local/bin
     export UV_TOOL_DIR=/usr/local/share/uv-tools
     if ! command -v opcli >/dev/null 2>&1; then
-      uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" --quiet
+      uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-v0.0.1-alpha.7}" --quiet
     fi
     export GH_TOKEN="${GITHUB_TOKEN}"
     opcli artifacts fetch --run-id "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --wait

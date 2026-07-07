@@ -30,7 +30,7 @@ env:
   GO_VERSION: "1.26.4"
   # Keep in sync with the charm-ci pin used in integration.yml (Renovate
   # tracks both).
-  CHARM_CI_REF: v0.0.1-alpha.6
+  CHARM_CI_REF: v0.0.1-alpha.7
 
 jobs:
   # ── Derive publish parameters ─────────────────────────────────────
@@ -228,12 +228,12 @@ jobs:
   # charm-ci opcli matrix (multi-arch), on the tag this workflow runs on.
   # Rocks are pushed to GHCR ("registry" mode) so the charm can be published
   # with a multi-arch app-image resource; publish-rock re-tags those images
-  # for the standalone release. SHA-pinned to v0.0.1-alpha.6 (Renovate tracks
+  # for the standalone release. SHA-pinned to v0.0.1-alpha.7 (Renovate tracks
   # the tag).
   build-artifacts:
     name: Build charm, rock, and snap
     needs: [release-metadata, validate-tag, test, integration-smoke]
-    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@7e08ea41eadd61b4bc14ce408c660699deed6567 # v0.0.1-alpha.6
+    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@2f274a6e4cfaac344660d8481ff8f8cb87a677b7 # v0.0.1-alpha.7
     permissions:
       actions: read
       contents: read

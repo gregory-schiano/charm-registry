@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CHARM_CI_REF: v0.0.1-alpha.6
+  CHARM_CI_REF: v0.0.1-alpha.7
 
 jobs:
   # Charm (with its rock as the app-image OCI resource) -> Charmhub latest/edge.
