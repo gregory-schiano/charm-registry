@@ -6,13 +6,16 @@ import io
 import json
 import logging
 import os
-import shlex
+import socket
 import subprocess
 import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import jubilant
+import psycopg
 import requests
 
 logger = logging.getLogger(__name__)
@@ -129,6 +132,97 @@ def _microceph_bucket_object_count(bucket: str) -> int:
     return int(usage.get("num_objects", 0))
 
 
+def _free_local_port() -> int:
+    """Return an available local TCP port for a short-lived port-forward."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _k8s_namespace(juju: jubilant.Juju) -> str:
+    """Return the Kubernetes namespace backing the current Juju model."""
+    model = json.loads(juju.cli("show-model", "--format", "json"))
+    model_data = next(iter(model.values()))
+    return str(model_data["model-name"])
+
+
+def _postgres_service(juju: jubilant.Juju, database_app: str) -> tuple[str, str]:
+    """Return the Kubernetes namespace and service for the PostgreSQL primary."""
+    model_namespace = _k8s_namespace(juju)
+    services = json.loads(
+        subprocess.check_output(
+            ["kubectl", "get", "service", "--all-namespaces", "-o", "json"],
+            text=True,
+        )
+    )
+    candidate_names = {
+        f"{database_app}-primary",
+        f"{database_app}-endpoints",
+        database_app,
+    }
+    candidates: list[tuple[str, str]] = []
+    for item in services.get("items", []):
+        metadata = item.get("metadata", {})
+        name = metadata.get("name", "")
+        namespace = metadata.get("namespace", "")
+        labels = metadata.get("labels", {})
+        if name in candidate_names or labels.get("app.juju.is/name") == database_app:
+            candidates.append((namespace, name))
+
+    for namespace, name in candidates:
+        if namespace == model_namespace and name == f"{database_app}-primary":
+            return namespace, name
+    for namespace, name in candidates:
+        if name == f"{database_app}-primary":
+            return namespace, name
+    if candidates:
+        return candidates[0]
+    raise RuntimeError(f"could not find Kubernetes service for {database_app!r}")
+
+
+@contextmanager
+def _postgres_port_forward(
+    juju: jubilant.Juju,
+    database_app: str,
+) -> Iterator[int]:
+    """Forward the PostgreSQL service to localhost and yield the local port."""
+    namespace, service = _postgres_service(juju, database_app)
+    local_port = _free_local_port()
+    proc = subprocess.Popen(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "port-forward",
+            f"service/{service}",
+            f"{local_port}:5432",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                    yield local_port
+                    return
+            except OSError:
+                time.sleep(0.5)
+        output = proc.stdout.read() if proc.stdout is not None else ""
+        raise RuntimeError("PostgreSQL port-forward did not become ready:\n" + output)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
 def _postgres_query_package_count(
     juju: jubilant.Juju,
     database_app: str,
@@ -145,29 +239,43 @@ def _postgres_query_package_count(
     password = password_task.results.get("password")
     assert password
 
-    package_name_sql = package_name.replace("'", "''")
-    script = f"""
-set -euo pipefail
-export PGPASSWORD={shlex.quote(str(password))}
-for db in $(psql -h 127.0.0.1 -U operator -d postgres -Atc "select datname from pg_database where datistemplate = false and datname <> 'postgres'"); do
-  count=$(psql -h 127.0.0.1 -U operator -d "$db" -Atc "select count(*) from packages where name = '{package_name_sql}'" 2>/dev/null || true)
-  if [ -n "$count" ]; then
-    echo "$count"
-    exit 0
-  fi
-done
-echo 0
-"""
-    output = juju.cli(
-        "ssh",
-        "--container",
-        "postgresql",
-        f"{database_app}/0",
-        "bash",
-        "-lc",
-        script,
-    )
-    return int(output.strip().splitlines()[-1])
+    with _postgres_port_forward(juju, database_app) as port:
+        with psycopg.connect(
+            host="127.0.0.1",
+            port=port,
+            dbname="postgres",
+            user="operator",
+            password=str(password),
+            connect_timeout=10,
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select datname from pg_database "
+                    "where datistemplate = false and datname <> 'postgres'"
+                )
+                databases = [str(row[0]) for row in cur.fetchall()]
+
+        for database in databases:
+            try:
+                with psycopg.connect(
+                    host="127.0.0.1",
+                    port=port,
+                    dbname=database,
+                    user="operator",
+                    password=str(password),
+                    connect_timeout=10,
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "select count(*) from packages where name = %s",
+                            (package_name,),
+                        )
+                        row = cur.fetchone()
+                        if row is not None:
+                            return int(row[0])
+            except psycopg.errors.UndefinedTable:
+                continue
+    return 0
 
 
 class TestCharmDeployment:
