@@ -168,6 +168,16 @@ Removing a rule triggers cleanup: artifacts that are no longer referenced by any
 .bin/charm-registryctl sync run postgresql-k8s
 ```
 
+### Waiting for all sync rules to complete
+
+Polls until every rule reports `ok`, automatically re-triggering rules that
+failed with a transient error (timeouts, connection resets). Fails fast when a
+rule hits a permanent error.
+
+```bash
+.bin/charm-registryctl sync wait --timeout 30m
+```
+
 ### Unregistering a charm
 
 This is destructive. It removes the package metadata plus registry-managed charm archives, resource blobs, and OCI project data.

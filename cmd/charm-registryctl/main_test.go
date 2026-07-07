@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -222,4 +223,75 @@ func TestRunReportsAPIConflict(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.EqualError(t, err, "package-exists: already exists")
+}
+
+func TestRunSyncWait(t *testing.T) {
+	t.Parallel()
+
+	var listCalls, runCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1/admin/charmhub-sync":
+			switch listCalls.Add(1) {
+			case 1:
+				// One rule pending, one failed transiently.
+				_, _ = w.Write([]byte(`{"rules":[
+					{"name":"demo","track":"latest","status":"syncing","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"},
+					{"name":"other","track":"1","status":"error","last-sync-error":"Client.Timeout exceeded","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}
+				]}`))
+			default:
+				_, _ = w.Write([]byte(`{"rules":[
+					{"name":"demo","track":"latest","status":"ok","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"},
+					{"name":"other","track":"1","status":"ok","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}
+				]}`))
+			}
+		case "POST /v1/admin/charmhub-sync/other/run":
+			runCalls.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{
+			"--url", server.URL,
+			"--token", "test-token",
+			"sync", "wait",
+			"--timeout", "10s",
+			"--interval", "10ms",
+		},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "all sync rules completed")
+	assert.GreaterOrEqual(t, listCalls.Load(), int64(2))
+	assert.Equal(t, int64(1), runCalls.Load())
+}
+
+func TestRunSyncWaitFailsOnPermanentError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rules":[{"name":"demo","track":"latest","status":"error","last-sync-error":"charm not found","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}]}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "wait"},
+		&stdout,
+		&stderr,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync failed for demo track latest: charm not found")
 }

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import time
@@ -20,7 +19,6 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 DEFAULT_S3_BUCKET = "charm-registry-artifacts"
 DEFAULT_S3_REGION = "us-east-1"
-DEFAULT_RGW_PORT = "8081"
 
 
 def _run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -38,37 +36,25 @@ def _require_cli(name: str) -> str:
     return path
 
 
-def _first_host_ip() -> str:
-    """Return a non-loopback host address reachable from the local K8s cluster."""
-    result = _run(["hostname", "-I"])
-    for address in result.stdout.split():
-        if not address.startswith("127."):
-            return address
-    return "127.0.0.1"
+@pytest.fixture(scope="session")
+def s3_config() -> dict[str, str]:
+    """Return the S3 contract provided by the environment.
 
-
-def _microceph_node_name(status: str) -> str:
-    """Extract the first MicroCeph node name from ``microceph status`` output."""
-    for line in status.splitlines():
-        match = re.match(r"^-\s+([^\s(]+)", line.strip())
-        if match:
-            return match.group(1)
-    pytest.fail(f"Could not determine MicroCeph node name from status:\n{status}")
-
-
-def _microceph_has_rgw(status: str) -> bool:
-    """Return whether MicroCeph status reports an RGW service."""
-    return any("Services:" in line and "rgw" in line for line in status.splitlines())
-
-
-def _external_s3_config() -> dict[str, str] | None:
-    """Return externally supplied S3 config, if all required values are present."""
+    S3-compatible storage is provisioned outside pytest — in CI by the spread
+    suite prepare hook (``tests/integration/scripts/setup-microceph-rgw.sh``),
+    locally by exporting the same variables for any reachable endpoint. The
+    tests only consume these inputs and never provision host services.
+    """
     endpoint = os.environ.get("JUB_S3_ENDPOINT")
     access_key = os.environ.get("JUB_S3_ACCESS_KEY")
     secret_key = os.environ.get("JUB_S3_SECRET_KEY")
     if not (endpoint and access_key and secret_key):
-        return None
-    return {
+        pytest.fail(
+            "S3 configuration is missing: set JUB_S3_ENDPOINT, JUB_S3_ACCESS_KEY,"
+            " and JUB_S3_SECRET_KEY (in CI the spread suite prepare hook"
+            " tests/integration/scripts/setup-microceph-rgw.sh provides them)."
+        )
+    config = {
         "endpoint": endpoint.rstrip("/"),
         "bucket": os.environ.get("JUB_S3_BUCKET", DEFAULT_S3_BUCKET),
         "region": os.environ.get("JUB_S3_REGION", DEFAULT_S3_REGION),
@@ -76,114 +62,10 @@ def _external_s3_config() -> dict[str, str] | None:
         "secret_key": secret_key,
         "path": os.environ.get("JUB_S3_PATH", ""),
         "uri_style": os.environ.get("JUB_S3_URI_STYLE", "path"),
-        "microceph": "false",
+        "microceph": os.environ.get("JUB_S3_MICROCEPH", "false"),
     }
-
-
-@pytest.fixture(scope="session")
-def s3_config() -> dict[str, str]:
-    """Provision or return S3-compatible storage for charm integration tests."""
-    external = _external_s3_config()
-    if external:
-        logger.info("Using externally supplied S3 endpoint: %s", external["endpoint"])
-        return external
-
-    _require_cli("snap")
-    access_key = os.environ.get("JUB_S3_ACCESS_KEY", "charm-registry")
-    secret_key = os.environ.get("JUB_S3_SECRET_KEY", "charm-registry-secret")
-    bucket = os.environ.get("JUB_S3_BUCKET", DEFAULT_S3_BUCKET)
-    region = os.environ.get("JUB_S3_REGION", DEFAULT_S3_REGION)
-    port = os.environ.get("JUB_MICROCEPH_RGW_PORT", DEFAULT_RGW_PORT)
-    host = os.environ.get("JUB_MICROCEPH_RGW_HOST", _first_host_ip())
-    endpoint = os.environ.get("JUB_S3_ENDPOINT", f"http://{host}:{port}").rstrip("/")
-
-    snap_list = subprocess.run(
-        ["snap", "list", "microceph"],
-        check=False,
-        capture_output=True,
-    )
-    if snap_list.returncode != 0:
-        _run(["sudo", "snap", "install", "microceph"])
-    _run(["sudo", "snap", "refresh", "--hold", "microceph"])
-
-    status_result = subprocess.run(
-        ["sudo", "microceph", "status"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if status_result.returncode != 0:
-        _run(["sudo", "microceph", "cluster", "bootstrap"])
-        _run(["sudo", "microceph", "disk", "add", "loop,4G,3"])
-    else:
-        logger.info("Reusing existing MicroCeph cluster:\n%s", status_result.stdout)
-        if "Disks: 0" in status_result.stdout:
-            _run(["sudo", "microceph", "disk", "add", "loop,4G,3"])
-
-    for _ in range(60):
-        status_result = _run(["sudo", "microceph", "status"])
-        if "Disks: 3" in status_result.stdout or " osd" in status_result.stdout:
-            break
-        time.sleep(5)
-    status = status_result.stdout
-    node_name = _microceph_node_name(status)
-    if not _microceph_has_rgw(status):
-        _run(
-            [
-                "sudo",
-                "microceph",
-                "enable",
-                "rgw",
-                "--target",
-                node_name,
-                "--port",
-                port,
-            ]
-        )
-
-    create_user = _run(
-        [
-            "sudo",
-            "microceph.radosgw-admin",
-            "user",
-            "create",
-            "--uid",
-            "charm-registry",
-            "--display-name",
-            "charm-registry integration tests",
-            "--access-key",
-            access_key,
-            "--secret-key",
-            secret_key,
-        ],
-        check=False,
-    )
-    if create_user.returncode != 0:
-        logger.info("Reusing existing RGW user charm-registry: %s", create_user.stderr)
-
-    for _ in range(60):
-        rgw_check = subprocess.run(
-            ["curl", "--max-time", "2", "-sS", "-o", "/dev/null", endpoint],
-            check=False,
-            capture_output=True,
-        )
-        if rgw_check.returncode == 0:
-            break
-        time.sleep(2)
-    else:
-        pytest.fail(f"MicroCeph RGW endpoint did not become reachable: {endpoint}")
-
-    logger.info("MicroCeph RGW endpoint for charm workload: %s", endpoint)
-    return {
-        "endpoint": endpoint,
-        "bucket": bucket,
-        "region": region,
-        "access_key": access_key,
-        "secret_key": secret_key,
-        "path": os.environ.get("JUB_S3_PATH", ""),
-        "uri_style": os.environ.get("JUB_S3_URI_STYLE", "path"),
-        "microceph": "true",
-    }
+    logger.info("Using S3 endpoint from environment: %s", config["endpoint"])
+    return config
 
 
 @pytest.fixture(scope="session")

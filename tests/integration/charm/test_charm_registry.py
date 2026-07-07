@@ -18,6 +18,8 @@ import jubilant
 import psycopg
 import requests
 
+from oci_image import build_oci_image, pull_oci_manifest, push_oci_image
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,11 +28,17 @@ def _auth_header(subject: str, username: str) -> str:
     return f"Bearer dev:{subject}:{username}"
 
 
-def _build_charm_archive(name: str) -> bytes:
+def _build_charm_archive(name: str, *, with_oci_resource: bool = False) -> bytes:
     """Build a minimal charm archive for API-level artifact assertions."""
     metadata = f"""name: {name}
 summary: Integration test charm
 description: A charm for integration testing
+"""
+    if with_oci_resource:
+        metadata += """resources:
+  app-image:
+    type: oci-image
+    description: Integration test workload image
 """
     manifest = """bases:
   - name: ubuntu
@@ -43,6 +51,11 @@ description: A charm for integration testing
         charm_zip.writestr("metadata.yaml", metadata)
         charm_zip.writestr("manifest.yaml", manifest)
     return archive.getvalue()
+
+
+# Bucket used by the embedded OCI registry's S3 backend (server default; the
+# workload creates it on demand through the same S3 relation credentials).
+OCI_S3_BUCKET = os.environ.get("JUB_OCI_S3_BUCKET", "charm-registry-oci")
 
 
 def _api_request(
@@ -110,7 +123,7 @@ def _push_revision(
     assert resp.status_code == 201, resp.text
 
 
-def _microceph_bucket_object_count(bucket: str) -> int:
+def _microceph_bucket_object_count(bucket: str, *, missing_ok: bool = False) -> int:
     """Return the number of RGW objects in a MicroCeph bucket."""
     result = subprocess.run(
         [
@@ -123,10 +136,13 @@ def _microceph_bucket_object_count(bucket: str) -> int:
             "--format",
             "json",
         ],
-        check=True,
+        check=not missing_ok,
         capture_output=True,
         text=True,
     )
+    if missing_ok and result.returncode != 0:
+        # The registry creates buckets on demand; absent means empty.
+        return 0
     stats = json.loads(result.stdout)
     usage = stats.get("usage", {}).get("rgw.main", {})
     return int(usage.get("num_objects", 0))
@@ -366,14 +382,15 @@ class TestCharmDeployment:
         assert resp.json().get("service-name") == "private-charm-registry"
 
     def test_s3_artifact_round_trip_and_postgresql_row(self, deployed: dict[str, Any]):
-        """A pushed charm artifact is stored in RGW and indexed in PostgreSQL."""
+        """Pushed charm and OCI image artifacts land in RGW and PostgreSQL."""
         auth = _auth_header("s3-user", "admin")
         name = f"itest-s3-artifact-{os.getpid()}-{time.time_ns()}"
-        archive = _build_charm_archive(name)
+        archive = _build_charm_archive(name, with_oci_resource=True)
         package_id = _register_charm(deployed, name, auth)
+        microceph = deployed["s3_config"].get("microceph") == "true"
 
         before_objects = None
-        if deployed["s3_config"].get("microceph") == "true":
+        if microceph:
             before_objects = _microceph_bucket_object_count(
                 deployed["s3_config"]["bucket"]
             )
@@ -402,6 +419,88 @@ class TestCharmDeployment:
             name,
         )
         assert count == 1
+
+        # OCI image resource round trip: obtain robot credentials, push a
+        # minimal image into the embedded OCI registry, register its digest as
+        # a resource revision, and pull the manifest back. The OCI backend
+        # stores its blobs in a dedicated RGW bucket via the same S3 relation.
+        resp = _api_request(
+            deployed,
+            "GET",
+            f"/v1/charm/{name}/resources/app-image/oci-image/upload-credentials",
+            auth=auth,
+        )
+        assert resp.status_code == 200, resp.text
+        credentials = resp.json()
+        assert credentials.get("image-name") and credentials.get("username")
+        repository = credentials["image-name"].split("/", 1)[1]
+
+        oci_before = None
+        if microceph:
+            oci_before = _microceph_bucket_object_count(OCI_S3_BUCKET, missing_ok=True)
+
+        image = build_oci_image(name)
+        digest = push_oci_image(
+            deployed["oci_url"],
+            repository,
+            credentials["username"],
+            credentials["password"],
+            image,
+        )
+
+        resp = _api_request(
+            deployed,
+            "POST",
+            f"/v1/charm/{name}/resources/app-image/oci-image/blob",
+            auth=auth,
+            json={"image-digest": digest},
+        )
+        assert resp.status_code == 200, resp.text
+        descriptor = resp.content
+
+        resp = _api_request(
+            deployed,
+            "POST",
+            "/unscanned-upload/",
+            auth=auth,
+            files={
+                "binary": (f"{name}-app-image.json", descriptor, "application/json")
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        resource_upload_id = resp.json()["upload_id"]
+
+        resp = _api_request(
+            deployed,
+            "POST",
+            f"/v1/charm/{name}/resources/app-image/revisions",
+            auth=auth,
+            json={"upload-id": resource_upload_id},
+        )
+        assert resp.status_code == 201, resp.text
+
+        resp = _api_request(
+            deployed,
+            "GET",
+            f"/v1/charm/{name}/resources/app-image/revisions",
+            auth=auth,
+        )
+        assert resp.status_code == 200, resp.text
+        revisions = resp.json().get("revisions") or []
+        assert revisions, "expected an OCI resource revision after push"
+
+        pulled = pull_oci_manifest(
+            deployed["oci_url"],
+            repository,
+            credentials["username"],
+            credentials["password"],
+            digest,
+        )
+        assert pulled == image["manifest"]
+
+        if oci_before is not None:
+            oci_after = _microceph_bucket_object_count(OCI_S3_BUCKET, missing_ok=True)
+            assert oci_after > oci_before
 
 
 class TestFunctionalScenarios:

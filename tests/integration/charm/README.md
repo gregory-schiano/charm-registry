@@ -12,8 +12,11 @@ functional test harness.
 - a built charm and `app-image` resource from `charm-ci`, or `JUB_APP_IMAGE`
   plus `charmcraft` for local fallback packing
 - A bootstrapped Juju controller (k8s or LXD)
-- `sudo`, `snap`, and enough disk space for a single-node MicroCeph cluster
-  with three 4 GiB loop-backed OSDs, unless external S3 credentials are supplied
+- A reachable S3-compatible endpoint supplied via `JUB_S3_ENDPOINT`,
+  `JUB_S3_ACCESS_KEY`, and `JUB_S3_SECRET_KEY`. The tests never provision host
+  services themselves; in CI the spread suite prepare hook
+  (`tests/integration/scripts/setup-microceph-rgw.sh`) provisions a
+  single-node MicroCeph RGW and exports these variables
 - Python packages from `requirements.txt` plus `opcli`
 
 ## Running
@@ -43,15 +46,14 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 | `JUB_POSTGRESQL_CHANNEL` | PostgreSQL charm channel | `14/stable` |
 | `JUB_S3_INTEGRATOR_CHARM` | S3 provider charm name | `s3-integrator` |
 | `JUB_S3_INTEGRATOR_CHANNEL` | S3 provider charm channel; must stay on track 2 | `2/stable` |
-| `JUB_MICROCEPH_RGW_HOST` | Hostname/IP used by the charm workload to reach MicroCeph RGW | first non-loopback host IP |
-| `JUB_MICROCEPH_RGW_PORT` | MicroCeph RGW port | `8081` |
-| `JUB_S3_ENDPOINT` | External S3 endpoint override; skips MicroCeph provisioning when credentials are also set | `http://<host>:8081` |
+| `JUB_S3_ENDPOINT` | S3 endpoint used by the charm workload (required) | _(none)_ |
 | `JUB_S3_BUCKET` | Bucket used for charm and resource artifacts | `charm-registry-artifacts` |
 | `JUB_S3_REGION` | S3 region | `us-east-1` |
-| `JUB_S3_ACCESS_KEY` | S3 access key | `charm-registry` |
-| `JUB_S3_SECRET_KEY` | S3 secret key | `charm-registry-secret` |
+| `JUB_S3_ACCESS_KEY` | S3 access key (required) | _(none)_ |
+| `JUB_S3_SECRET_KEY` | S3 secret key (required) | _(none)_ |
 | `JUB_S3_PATH` | Optional S3 key prefix provided by s3-integrator | _(empty)_ |
 | `JUB_S3_URI_STYLE` | S3 URI style configured on s3-integrator | `path` |
+| `JUB_S3_MICROCEPH` | Set to `true` when the endpoint is the spread-provisioned MicroCeph, enabling the RGW object-count assertion | `false` |
 | `JUB_CERTIFICATES_CHARM` | TLS provider charm name | `self-signed-certificates` |
 | `JUB_CERTIFICATES_CHANNEL` | TLS provider charm channel | `1/stable` |
 | `JUB_API_URL` | Override discovered API URL | `http://<unit-address>:8080` |

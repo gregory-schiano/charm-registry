@@ -98,6 +98,10 @@ execute: |
 
   "$PROJECT_DIR/.bin/functional-test"
 
+  echo "=== Running packaged admin CLI (charm-registryctl) e2e checks ==="
+  export FTEST_ADMIN_SUBJECT FTEST_ADMIN_USER FTEST_API_URL
+  "$PROJECT_DIR/tests/snap/registryctl-e2e-test.sh"
+
 debug: |
   snap logs "$SNAP_NAME.charm-registry" -n 100 || true
   snap services "$SNAP_NAME" || true

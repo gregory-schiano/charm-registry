@@ -99,7 +99,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 func runSync(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: charm-registryctl sync <list|add|remove|run>")
+		return errors.New("usage: charm-registryctl sync <list|add|remove|run|wait>")
 	}
 	switch args[0] {
 	case "list":
@@ -110,6 +110,8 @@ func runSync(ctx context.Context, cfg cliConfig, args []string, stdout, stderr i
 		return runSyncRemove(ctx, cfg, args[1:], stdout, stderr)
 	case "run":
 		return runSyncRun(ctx, cfg, args[1:], stdout, stderr)
+	case "wait":
+		return runSyncWait(ctx, cfg, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown sync subcommand %q", args[0])
 	}
@@ -245,6 +247,93 @@ func runSyncRun(ctx context.Context, cfg cliConfig, args []string, stdout, stder
 	return nil
 }
 
+// transientSyncError reports whether a sync rule failed for a reason that a
+// re-triggered run is likely to resolve (network timeouts and the like).
+func transientSyncError(message string) bool {
+	lowered := strings.ToLower(message)
+	for _, marker := range []string{
+		"client.timeout",
+		"context deadline exceeded",
+		"timeout",
+		"connection reset",
+		"temporarily unavailable",
+	} {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func runSyncWait(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("sync wait", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	timeout := 30 * time.Minute
+	interval := 15 * time.Second
+	fs.DurationVar(&timeout, "timeout", timeout, "Maximum time to wait for all sync rules to complete")
+	fs.DurationVar(&interval, "interval", interval, "Polling interval")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: charm-registryctl sync wait [--timeout duration] [--interval duration]")
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		pending, err := pendingSyncRules(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			fmt.Fprintln(stdout, "all sync rules completed")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for sync rules: %s", strings.Join(pending, ", "))
+		}
+		fmt.Fprintf(stdout, "waiting for sync rules: %s\n", strings.Join(pending, ", "))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+// pendingSyncRules lists the sync rules that have not completed yet,
+// re-triggering rules that failed with a transient error. Rules that failed
+// permanently produce an error.
+func pendingSyncRules(ctx context.Context, cfg cliConfig) ([]string, error) {
+	var payload charmhubSyncRuleListResponse
+	if err := doJSON(ctx, cfg, http.MethodGet, "/v1/admin/charmhub-sync", nil, &payload); err != nil {
+		return nil, err
+	}
+	var pending []string
+	for _, rule := range payload.Rules {
+		switch rule.Status {
+		case "ok":
+			continue
+		case "error", "delete-error":
+			lastError := ""
+			if rule.LastSyncError != nil {
+				lastError = *rule.LastSyncError
+			}
+			if !transientSyncError(lastError) {
+				return nil, fmt.Errorf("sync failed for %s track %s: %s", rule.Name, rule.Track, lastError)
+			}
+			path := fmt.Sprintf("/v1/admin/charmhub-sync/%s/run", url.PathEscape(rule.Name))
+			if err := doJSON(ctx, cfg, http.MethodPost, path, nil, nil); err != nil {
+				return nil, fmt.Errorf("retrying sync for %s: %w", rule.Name, err)
+			}
+			pending = append(pending, fmt.Sprintf("%s:%s:%s:retrying", rule.Name, rule.Track, rule.Status))
+		default:
+			pending = append(pending, fmt.Sprintf("%s:%s:%s", rule.Name, rule.Track, rule.Status))
+		}
+	}
+	return pending, nil
+}
+
 func runUnregister(ctx context.Context, cfg cliConfig, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("unregister", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -279,18 +368,25 @@ func runUnregister(ctx context.Context, cfg cliConfig, args []string, stdout, st
 }
 
 func doJSON(ctx context.Context, cfg cliConfig, method, path string, body any, out any) error {
+	_, err := doJSONStatus(ctx, cfg, method, path, body, out)
+	return err
+}
+
+// doJSONStatus behaves like doJSON but also returns the HTTP status code so
+// callers can tolerate specific error statuses (for example 409 Conflict).
+func doJSONStatus(ctx context.Context, cfg cliConfig, method, path string, body any, out any) (int, error) {
 	var requestBody io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		requestBody = bytes.NewReader(payload)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, cfg.URL+path, requestBody)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
@@ -300,23 +396,23 @@ func doJSON(ctx context.Context, cfg cliConfig, method, path string, body any, o
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return resp.StatusCode, err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		var apiErr errorListResponse
 		if json.Unmarshal(responseBody, &apiErr) == nil && len(apiErr.ErrorList) > 0 {
-			return fmt.Errorf("%s: %s", apiErr.ErrorList[0].Code, apiErr.ErrorList[0].Message)
+			return resp.StatusCode, fmt.Errorf("%s: %s", apiErr.ErrorList[0].Code, apiErr.ErrorList[0].Message)
 		}
-		return fmt.Errorf("request failed with status %s", resp.Status)
+		return resp.StatusCode, fmt.Errorf("request failed with status %s", resp.Status)
 	}
 	if out == nil || len(responseBody) == 0 {
-		return nil
+		return resp.StatusCode, nil
 	}
-	return json.Unmarshal(responseBody, out)
+	return resp.StatusCode, json.Unmarshal(responseBody, out)
 }

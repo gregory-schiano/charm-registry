@@ -1,22 +1,46 @@
-"""Terraform deployment integration tests."""
+"""Terraform deployment integration tests.
+
+The host-side services these tests rely on are provisioned by the spread
+suite prepare hooks (see ``spread.yaml`` and ``tests/integration/scripts/``):
+a running local snap registry (spellbook) whose endpoints arrive through the
+``REGISTRY_API_URL`` / ``REGISTRY_OCI_URL`` environment contract, with the
+built charm published to it and the Terraform dependency charms mirrored from
+Charmhub. The tests only consume that contract: they render tfvars, apply the
+Terraform module against the local registry, and assert on the deployment.
+
+On top of the deployed stack, the lifecycle test drives the full publish and
+consume path *through the Juju-deployed registry itself*: charmcraft
+register/upload/upload-resource/release, a consumer Juju model whose
+``charmhub-url`` points at the deployment, ``juju deploy``, a second charm and
+image revision, and ``juju refresh``.
+"""
 
 from __future__ import annotations
 
+import base64
+import io
+import json
 import os
 import pathlib
-import json
 import shlex
 import subprocess
-import sys
 import time
+import zipfile
 
+import pytest
+
+from oci_image import build_oci_image, machine_arch, write_oci_archive
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 TERRAFORM_DIR = ROOT / "terraform"
+SCRIPTS_DIR = ROOT / "tests" / "integration" / "scripts"
 MODEL_NAME = "charm-registry-tf"
+CONSUMER_MODEL_NAME = "charm-registry-tf-consumer"
 API_HOSTNAME = "api.charm-registry-tf.test"
 OCI_HOSTNAME = "oci.charm-registry-tf.test"
 APP_SECRET_KEY = "integration-test-secret"
+DEV_TOKEN = "dev:admin:admin"
+LIFECYCLE_CHARM = "itest-lifecycle"
 
 
 def run(
@@ -47,30 +71,17 @@ def output(*args: str | os.PathLike[str], cwd: pathlib.Path = ROOT) -> str:
     return subprocess.check_output(command, cwd=cwd, text=True).strip()
 
 
-def find_snap() -> pathlib.Path:
-    snaps = sorted(ROOT.glob("**/spellbook_*.snap"))
-    if not snaps:
-        raise FileNotFoundError("no spellbook snap artifact found")
-    return snaps[0]
-
-
-def host_ip() -> str:
-    route = output("ip", "-4", "route", "get", "1.1.1.1")
-    parts = route.split()
-    if "src" not in parts:
-        raise RuntimeError(f"unable to determine host IP from route: {route}")
-    return parts[parts.index("src") + 1]
-
-
-def wait_for_snap_health(api_url: str) -> None:
-    for attempt in range(1, 121):
-        result = run("curl", "-sf", f"{api_url}/healthz", check=False)
-        if result.returncode == 0:
-            print(f"charm-registry snap is healthy after {attempt}s")
-            return
-        time.sleep(1)
-    run("sudo", "snap", "logs", "spellbook.charm-registry", "-n", "100", check=False)
-    raise TimeoutError("snap registry did not become healthy")
+def registry_urls() -> tuple[str, str]:
+    """Return the API and OCI URLs of the prepared local snap registry."""
+    api_url = os.environ.get("REGISTRY_API_URL")
+    oci_url = os.environ.get("REGISTRY_OCI_URL")
+    if not (api_url and oci_url):
+        raise RuntimeError(
+            "REGISTRY_API_URL and REGISTRY_OCI_URL must be set (in CI the spread"
+            " suite prepare hook tests/integration/scripts/setup-snap-registry.sh"
+            " provides them)."
+        )
+    return api_url.rstrip("/"), oci_url.rstrip("/")
 
 
 def cleanup() -> None:
@@ -78,7 +89,6 @@ def cleanup() -> None:
         run("terraform", "destroy", "-auto-approve", cwd=TERRAFORM_DIR, check=False)
     (TERRAFORM_DIR / "terraform.tfvars").unlink(missing_ok=True)
     run("rm", "-rf", str(TERRAFORM_DIR / ".terraform"), check=False)
-    run("sudo", "snap", "remove", "--purge", "spellbook", check=False)
 
 
 def write_tfvars(app_image: str, registry_api_url: str) -> None:
@@ -109,21 +119,26 @@ oci_hostname = "{OCI_HOSTNAME}"
     )
 
 
-def test_terraform_stack_uses_private_charm_registry(
-    charm_path: str,
-    resource_images: dict[str, str],
-) -> None:
+def _status(model: str) -> dict:
+    return json.loads(output("juju", "status", "-m", model, "--format", "json"))
+
+
+def _unit_address(status: dict, app: str) -> str:
+    return status["applications"][app]["units"][f"{app}/0"]["address"]
+
+
+@pytest.fixture(scope="module")
+def terraform_stack(resource_images: dict[str, str]) -> dict:
+    """Apply the Terraform module once for this module's tests."""
     app_image = resource_images["app-image"]
     if app_image.endswith(".rock"):
         raise RuntimeError(
             f"charm-registry image was not uploaded to an OCI registry: {app_image}"
         )
+    registry_api_url, _ = registry_urls()
 
     cleanup()
     try:
-        if not shutil_which("terraform"):
-            run("sudo", "snap", "install", "terraform", "--classic")
-
         (ROOT / ".bin").mkdir(exist_ok=True)
         run(
             "go",
@@ -133,62 +148,7 @@ def test_terraform_stack_uses_private_charm_registry(
             "./cmd/functional-test",
         )
 
-        registry_host = host_ip()
-        registry_api_url = f"http://{registry_host}:8080"
-        registry_oci_url = f"https://{registry_host}:5000"
-
-        run("sudo", "snap", "install", "--dangerous", find_snap())
-        run(
-            "sudo",
-            "snap",
-            "set",
-            "spellbook",
-            "admin.usernames=admin",
-            "insecure-dev-auth=true",
-            "oci.secret-key=integration-test-oci-secret",
-            "limits.max-archive-file-bytes=64MB",
-            f"public-api-url={registry_api_url}",
-            f"public-storage-url={registry_api_url}",
-            f"public-registry-url={registry_oci_url}",
-            "rate-limit.ip-limit=0",
-            "rate-limit.token-limit=0",
-        )
-        run("sudo", "snap", "start", "spellbook.charm-registry")
-        wait_for_snap_health(registry_api_url)
-
-        run(
-            "bash",
-            str(ROOT / "deploy/k8s/install-oci-cert.sh"),
-            env={
-                "CHARM_REGISTRY_PUBLIC_REGISTRY_URL": registry_oci_url,
-                "CHARM_REGISTRY_K8S_OCI_CA_FILE": "/var/snap/spellbook/common/certs/oci.crt",
-            },
-        )
         run("kubectl", "wait", "--for=condition=Ready", "node", "--all", "--timeout=5m")
-
-        token = "dev:admin:admin"
-        run(
-            sys.executable,
-            str(ROOT / "tests/integration/terraform/publish_charm.py"),
-            "--registry-url",
-            registry_api_url,
-            "--token",
-            token,
-            "--charm-name",
-            "charm-registry",
-            "--channel",
-            "latest/edge",
-            "--charm-file",
-            charm_path,
-        )
-        run(
-            sys.executable,
-            str(ROOT / "tests/integration/terraform/sync_dependencies.py"),
-            "--registry-url",
-            registry_api_url,
-            "--token",
-            token,
-        )
 
         write_tfvars(app_image, registry_api_url)
         run("terraform", "init", "-input=false", cwd=TERRAFORM_DIR)
@@ -206,35 +166,319 @@ def test_terraform_stack_uses_private_charm_registry(
         )
         run("juju", "status", "-m", MODEL_NAME, "--relations", "--color=false")
 
-        unit_address = output(
-            "juju",
-            "status",
-            "-m",
-            MODEL_NAME,
-            "--format",
-            "json",
-        )
-        status = json.loads(unit_address)
-        address = status["applications"]["charm-registry"]["units"]["charm-registry/0"][
-            "address"
-        ]
-        run(
-            ROOT / ".bin" / "functional-test",
-            env={
-                "FTEST_API_URL": f"http://{address}:8080",
-                "FTEST_OCI_URL": f"http://{address}:5000",
-                "FTEST_ADMIN_SUBJECT": "admin",
-                "FTEST_ADMIN_USER": "admin",
-                "FTEST_OCI_CERT_PATH": "",
-            },
-        )
+        address = _unit_address(_status(MODEL_NAME), "charm-registry")
+        yield {
+            "address": address,
+            "api_url": f"http://{address}:8080",
+            "oci_url": f"http://{address}:5000",
+        }
     finally:
+        run(
+            "juju",
+            "destroy-model",
+            "--no-prompt",
+            "--force",
+            CONSUMER_MODEL_NAME,
+            check=False,
+        )
         cleanup()
 
 
-def shutil_which(name: str) -> str | None:
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = pathlib.Path(directory) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+def test_terraform_stack_uses_private_charm_registry(terraform_stack: dict) -> None:
+    run(
+        ROOT / ".bin" / "functional-test",
+        env={
+            "FTEST_API_URL": terraform_stack["api_url"],
+            "FTEST_OCI_URL": terraform_stack["oci_url"],
+            "FTEST_ADMIN_SUBJECT": "admin",
+            "FTEST_ADMIN_USER": "admin",
+            "FTEST_OCI_CERT_PATH": "",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+#  Charm lifecycle through the Juju-deployed registry
+# ---------------------------------------------------------------------------
+
+
+def _build_test_charm(name: str, note: str) -> bytes:
+    """Build a minimal deployable sidecar charm archive.
+
+    The workload container's entrypoint is the pebble binary Juju mounts into
+    it, so the synthetic OCI image needs no executable content; the dispatch
+    script only reports active status.
+    """
+    metadata = f"""name: {name}
+summary: Lifecycle integration test charm
+description: Deployable test charm published through the private registry
+containers:
+  app:
+    resource: app-image
+resources:
+  app-image:
+    type: oci-image
+    description: Test workload image
+"""
+    manifest = f"""bases:
+  - name: ubuntu
+    channel: "22.04"
+    architectures:
+      - {machine_arch()}
+"""
+    dispatch = f'#!/bin/sh\nstatus-set active "{note}" || true\n'
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as charm_zip:
+        charm_zip.writestr("metadata.yaml", metadata)
+        charm_zip.writestr("manifest.yaml", manifest)
+        dispatch_info = zipfile.ZipInfo("dispatch")
+        dispatch_info.external_attr = 0o100755 << 16
+        charm_zip.writestr(dispatch_info, dispatch)
+    return archive.getvalue()
+
+
+def _gateway_lb_ip() -> str:
+    """Return the load-balancer IP assigned to the deployment's gateway."""
+    services = json.loads(
+        output("kubectl", "get", "service", "--all-namespaces", "-o", "json")
+    )
+    candidates: list[tuple[str, str]] = []
+    for item in services.get("items", []):
+        if item.get("spec", {}).get("type") != "LoadBalancer":
+            continue
+        for ingress in item.get("status", {}).get("loadBalancer", {}).get(
+            "ingress", []
+        ):
+            ip = ingress.get("ip")
+            if ip:
+                candidates.append((item["metadata"]["namespace"], ip))
+    for namespace, ip in candidates:
+        if namespace == MODEL_NAME:
+            return ip
+    if candidates:
+        return candidates[0][1]
+    raise RuntimeError("no LoadBalancer service with an assigned IP found")
+
+
+def _deployment_ca(path: pathlib.Path) -> pathlib.Path:
+    """Fetch the deployment's self-signed CA certificate to *path*."""
+    result = json.loads(
+        output(
+            "juju",
+            "run",
+            "-m",
+            MODEL_NAME,
+            "self-signed-certificates/0",
+            "get-ca-certificate",
+            "--format",
+            "json",
+        )
+    )
+    unit_result = next(iter(result.values()))
+    ca = unit_result["results"]["ca-certificate"]
+    path.write_text(ca)
+    return path
+
+
+def _api_ingress_url() -> str:
+    """Return the public API URL the registry advertises via its ingress."""
+    unit = json.loads(
+        output(
+            "juju",
+            "show-unit",
+            "-m",
+            MODEL_NAME,
+            "charm-registry/0",
+            "--format",
+            "json",
+        )
+    )
+    for relation in next(iter(unit.values())).get("relation-info", []):
+        if relation.get("endpoint") != "ingress":
+            continue
+        raw = relation.get("application-data", {}).get("ingress")
+        if not raw:
+            continue
+        return json.loads(raw)["url"].rstrip("/")
+    raise RuntimeError("could not determine the API ingress URL from relation data")
+
+
+def _registry_api(
+    api_url: str, method: str, path: str, body: dict | None = None
+) -> dict:
+    import requests
+
+    resp = requests.request(
+        method,
+        f"{api_url}{path}",
+        headers={"Authorization": f"Bearer {DEV_TOKEN}"},
+        json=body,
+        timeout=30,
+    )
+    assert resp.status_code < 300, f"{method} {path}: {resp.status_code} {resp.text}"
+    return resp.json() if resp.content else {}
+
+
+def _latest_revision(api_url: str, charm: str) -> int:
+    payload = _registry_api(api_url, "GET", f"/v1/charm/{charm}/revisions")
+    revisions = payload.get("revisions") or []
+    assert revisions, f"no revisions found for {charm}"
+    return max(int(item["revision"]) for item in revisions)
+
+
+def _latest_resource_revision(api_url: str, charm: str, resource: str) -> int:
+    payload = _registry_api(
+        api_url, "GET", f"/v1/charm/{charm}/resources/{resource}/revisions"
+    )
+    revisions = payload.get("revisions") or []
+    assert revisions, f"no resource revisions found for {charm}:{resource}"
+    return max(int(item["revision"]) for item in revisions)
+
+
+def _publish_lifecycle_revision(
+    stack: dict, charmcraft_env: dict[str, str], note: str, tag: str
+) -> tuple[int, int]:
+    """Publish one charm + image revision with charmcraft; return revisions."""
+    charm_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-{tag}.charm"
+    charm_file.write_bytes(_build_test_charm(LIFECYCLE_CHARM, note))
+    image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-{tag}-image.tar"
+    write_oci_archive(build_oci_image(f"{LIFECYCLE_CHARM}-{tag}"), image_file)
+
+    run(
+        "charmcraft",
+        "upload",
+        str(charm_file),
+        "--name",
+        LIFECYCLE_CHARM,
+        env=charmcraft_env,
+    )
+    run(
+        "charmcraft",
+        "upload-resource",
+        LIFECYCLE_CHARM,
+        "app-image",
+        "--image",
+        f"oci-archive:{image_file}",
+        env=charmcraft_env,
+    )
+    charm_revision = _latest_revision(stack["api_url"], LIFECYCLE_CHARM)
+    resource_revision = _latest_resource_revision(
+        stack["api_url"], LIFECYCLE_CHARM, "app-image"
+    )
+    run(
+        "charmcraft",
+        "release",
+        LIFECYCLE_CHARM,
+        "--revision",
+        str(charm_revision),
+        "--channel",
+        "latest/edge",
+        "--resource",
+        f"app-image:{resource_revision}",
+        env=charmcraft_env,
+    )
+    return charm_revision, resource_revision
+
+
+def _wait_for_consumer_revision(charm_revision: int, timeout: int = 600) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = _status(CONSUMER_MODEL_NAME)
+        app = status["applications"].get(LIFECYCLE_CHARM, {})
+        current_revision = app.get("charm-rev")
+        app_status = app.get("application-status", {}).get("current")
+        if current_revision == charm_revision and app_status == "active":
+            return
+        time.sleep(15)
+    raise TimeoutError(
+        f"{LIFECYCLE_CHARM} did not reach active charm revision {charm_revision}"
+    )
+
+
+def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> None:
+    """Publish, deploy, revise, and refresh a charm via the deployed registry."""
+    stack = terraform_stack
+
+    # Host plumbing: hostname resolution to the gateway (CoreDNS falls back to
+    # the host resolver, so the Juju controller resolves these too) and CA
+    # trust for charmcraft's HTTPS image push and containerd's image pulls.
+    gateway_ip = _gateway_lb_ip()
+    ca_file = _deployment_ca(ROOT / ".bin" / "charm-registry-tf-ca.crt")
+    run(
+        "sudo",
+        str(SCRIPTS_DIR / "setup-consumer-dns-cert.sh"),
+        API_HOSTNAME,
+        OCI_HOSTNAME,
+        gateway_ip,
+        str(ca_file),
+    )
+
+    charmcraft_env = {
+        "CHARMCRAFT_STORE_API_URL": stack["api_url"],
+        "CHARMCRAFT_UPLOAD_URL": stack["api_url"],
+        "CHARMCRAFT_REGISTRY_URL": f"https://{OCI_HOSTNAME}",
+        "CHARMCRAFT_AUTH": base64.b64encode(DEV_TOKEN.encode()).decode(),
+    }
+
+    api_public_url = _api_ingress_url()
+    if not api_public_url.startswith("http://"):
+        pytest.fail(
+            f"The registry advertises {api_public_url!r}; the Juju controller"
+            " cannot trust the deployment's self-signed CA for charm downloads,"
+            " so the consumer flow requires the API ingress to serve plain HTTP."
+        )
+
+    try:
+        run("charmcraft", "register", LIFECYCLE_CHARM, env=charmcraft_env)
+        charm_revision, _ = _publish_lifecycle_revision(
+            stack, charmcraft_env, "revision one", "r1"
+        )
+        assert charm_revision == 1
+
+        run(
+            "juju",
+            "add-model",
+            CONSUMER_MODEL_NAME,
+            "--config",
+            f"charmhub-url={api_public_url}",
+            "--config",
+            "test-mode=true",
+        )
+        run(
+            "juju",
+            "deploy",
+            "-m",
+            CONSUMER_MODEL_NAME,
+            LIFECYCLE_CHARM,
+            "--channel",
+            "latest/edge",
+        )
+        run(
+            "juju",
+            "wait-for",
+            "application",
+            "-m",
+            CONSUMER_MODEL_NAME,
+            LIFECYCLE_CHARM,
+            "--timeout=15m",
+        )
+        _wait_for_consumer_revision(charm_revision)
+
+        charm_revision, resource_revision = _publish_lifecycle_revision(
+            stack, charmcraft_env, "revision two", "r2"
+        )
+        assert charm_revision == 2
+        assert resource_revision == 2
+
+        run("juju", "refresh", "-m", CONSUMER_MODEL_NAME, LIFECYCLE_CHARM)
+        _wait_for_consumer_revision(charm_revision)
+    finally:
+        run("juju", "status", "-m", CONSUMER_MODEL_NAME, "--color=false", check=False)
+        run(
+            "juju",
+            "destroy-model",
+            "--no-prompt",
+            "--force",
+            CONSUMER_MODEL_NAME,
+            check=False,
+        )

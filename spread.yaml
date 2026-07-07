@@ -52,6 +52,11 @@ suites:
     systems: [ubuntu-24.04]
     backends: [snap-test]
 
+# Suite prepare hooks provision test-specific host services (S3 storage, the
+# local snap registry) and export their endpoints/credentials through
+# /etc/profile.d. The pytest process runs in a `runuser -l ubuntu` login shell
+# and receives them via tox pass_env, so the Python tests only consume the
+# contract and never mutate the host.
 integration-suites:
   tests/integration/charm/:
     summary: "charm-registry charm integration tests"
@@ -59,6 +64,10 @@ integration-suites:
     backends: [integration-test]
     environment:
       TOX_ENV: integration
+    prepare: |
+      "${PROJECT_DIR}/tests/integration/scripts/setup-microceph-rgw.sh"
+    restore: |
+      rm -f /etc/profile.d/zz-charm-registry-s3.sh
   tests/integration/terraform/:
     summary: "charm-registry Terraform deployment tests"
     working-dir: charm
@@ -67,3 +76,8 @@ integration-suites:
     kill-timeout: 45m
     environment:
       TOX_ENV: integration
+    prepare: |
+      "${PROJECT_DIR}/tests/integration/scripts/setup-snap-registry.sh"
+      "${PROJECT_DIR}/tests/integration/scripts/publish-test-charms.sh"
+    restore: |
+      rm -f /etc/profile.d/zz-charm-registry-registry.sh
