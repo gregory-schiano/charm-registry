@@ -26,7 +26,7 @@ if [ ! -f "$CA_FILE" ]; then
 fi
 
 # Refresh the /etc/hosts entries (idempotent via marker).
-sed -i "\#${MARKER}#d" /etc/hosts
+sed -i "\|${MARKER}|d" /etc/hosts
 {
     echo "${GATEWAY_IP} ${API_HOSTNAME} ${MARKER}"
     echo "${GATEWAY_IP} ${OCI_HOSTNAME} ${MARKER}"
