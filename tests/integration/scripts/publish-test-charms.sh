@@ -32,7 +32,17 @@ DEPENDENCIES=(
 )
 
 cd "$PROJECT_DIR"
-CHARM_FILE="$(realpath "$(opcli artifacts path "$CHARM_NAME" --type charm)")"
+mapfile -t charm_candidates < <(opcli artifacts path "$CHARM_NAME" --type charm)
+CHARM_FILE=""
+for charm_candidate in "${charm_candidates[@]}"; do
+    if [[ "$charm_candidate" == */charm/"${CHARM_NAME}"_*.charm ]]; then
+        if [ -n "$CHARM_FILE" ]; then
+            echo "ERROR: multiple built charm artifacts match ${CHARM_NAME}: $CHARM_FILE and $charm_candidate" >&2
+            exit 1
+        fi
+        CHARM_FILE="$(realpath "$charm_candidate")"
+    fi
+done
 if [ ! -f "$CHARM_FILE" ]; then
     echo "ERROR: built charm not found; run 'opcli artifacts build' or 'opcli artifacts fetch' first" >&2
     exit 1
