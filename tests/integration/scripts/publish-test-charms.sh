@@ -37,24 +37,17 @@ if [ ! -f "$CHARM_FILE" ]; then
     echo "ERROR: built charm not found; run 'opcli artifacts build' or 'opcli artifacts fetch' first" >&2
     exit 1
 fi
-CHARM_PROJECT_DIR="$PROJECT_DIR/charm"
-if [ ! -f "$CHARM_PROJECT_DIR/charmcraft.yaml" ]; then
-    echo "ERROR: charm project not found at $CHARM_PROJECT_DIR" >&2
-    exit 1
-fi
+CHARMCRAFT_UPLOAD_PROJECT_DIR="$PROJECT_DIR/.bin/charmcraft-upload-project-${CHARM_NAME}"
 
 if ! command -v charmcraft >/dev/null 2>&1; then
     snap install charmcraft --classic
 fi
 
 # Point charmcraft at the local registry; the dev token is accepted through
-# the Macaroon authorization scheme charmcraft uses for store requests. The
-# charm project uses go-framework/ubuntu@26.04, which is still behind
-# Charmcraft's experimental extension gate in the CI channel.
+# the Macaroon authorization scheme charmcraft uses for store requests.
 export CHARMCRAFT_STORE_API_URL="$REGISTRY_API_URL"
 export CHARMCRAFT_UPLOAD_URL="$REGISTRY_API_URL"
 export CHARMCRAFT_REGISTRY_URL="${REGISTRY_OCI_URL:-$REGISTRY_API_URL}"
-export CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1
 CHARMCRAFT_AUTH="$(printf '%s' "$REGISTRY_TOKEN" | base64 -w0)"
 export CHARMCRAFT_AUTH
 
@@ -64,7 +57,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cd "$CHARM_PROJECT_DIR"
+mkdir -p "$CHARMCRAFT_UPLOAD_PROJECT_DIR"
+cat >"$CHARMCRAFT_UPLOAD_PROJECT_DIR/charmcraft.yaml" <<EOF
+name: $CHARM_NAME
+type: charm
+base: ubuntu@22.04
+platforms:
+  amd64:
+summary: Integration upload context for $CHARM_NAME
+description: Minimal project used only as a supported charmcraft upload context.
+parts:
+  charm:
+    plugin: dump
+    source: .
+EOF
+
+cd "$CHARMCRAFT_UPLOAD_PROJECT_DIR"
 if ! charmcraft register "$CHARM_NAME" >"$register_log" 2>&1; then
     if grep -qi "already" "$register_log"; then
         echo "Charm $CHARM_NAME is already registered"
