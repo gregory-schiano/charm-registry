@@ -213,15 +213,15 @@ def deployed(
         },
     )
     secret_name = f"s3-integrator-credentials-{int(time.time())}"
-    secret_result = juju.cli(
-        "add-secret",
+    secret_uri = juju.add_secret(
         secret_name,
-        f"access-key={s3_config['access_key']}",
-        f"secret-key={s3_config['secret_key']}",
+        {
+            "access-key": s3_config["access_key"],
+            "secret-key": s3_config["secret_key"],
+        },
     )
-    secret_uri = secret_result.strip().splitlines()[-1].strip()
-    juju.cli("grant-secret", secret_name, s3_app)
-    juju.cli("config", s3_app, f"credentials={secret_uri}")
+    juju.grant_secret(secret_uri, s3_app)
+    juju.config(s3_app, {"credentials": secret_uri})
 
     logger.info("Deploying %s as %s", certificates_charm, certificates_app)
     juju.deploy(certificates_charm, certificates_app, channel=certificates_channel)

@@ -63,7 +63,7 @@ JUB_APP_IMAGE=<image-ref> python3 -m pytest -v -s --tb native tests/integration/
 
 | Test Class | What it verifies |
 |---|---|
-| `TestCharmDeployment` | Charm deploys with its OCI resource, PostgreSQL, S3, and self-signed TLS integrations, reaches active status, health/ready/root endpoints respond, and artifact data lands in RGW while metadata lands in PostgreSQL |
+| `TestCharmDeployment` | Charm deploys with its OCI resource, PostgreSQL, S3, and self-signed TLS integrations, reaches active status, health/ready/root endpoints respond, charm and OCI image artifacts land in RGW (artifact and OCI buckets) while metadata lands in PostgreSQL |
 | `TestFunctionalScenarios` | All shared Go functional scenarios pass against the deployed charm |
 
 ## Architecture

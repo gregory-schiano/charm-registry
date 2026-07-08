@@ -73,7 +73,7 @@ integration-suites:
     working-dir: charm
     backends: [integration-test]
     warn-timeout: 10m
-    kill-timeout: 45m
+    kill-timeout: 75m
     environment:
       TOX_ENV: integration
     prepare: |
@@ -81,3 +81,15 @@ integration-suites:
       "${PROJECT_DIR}/tests/integration/scripts/publish-test-charms.sh"
     restore: |
       rm -f /etc/profile.d/zz-charm-registry-registry.sh
+      # Undo the consumer-model host plumbing added by the lifecycle test
+      # (tests/integration/scripts/setup-consumer-dns-cert.sh).
+      sed -i '\|# charm-registry-tf-itest|d' /etc/hosts
+      if [ -f /usr/local/share/ca-certificates/charm-registry-tf-itest.crt ]; then
+        rm -f /usr/local/share/ca-certificates/charm-registry-tf-itest.crt
+        update-ca-certificates --fresh >/dev/null || true
+      fi
+      for root in /etc/containerd/certs.d \
+          /ck8s/k8s-containerd/etc/containerd/certs.d \
+          /var/snap/k8s/common/etc/containerd/certs.d; do
+        rm -rf "${root}/oci.charm-registry-tf.test"
+      done

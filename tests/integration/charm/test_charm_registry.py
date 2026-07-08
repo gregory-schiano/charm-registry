@@ -157,9 +157,24 @@ def _free_local_port() -> int:
 
 def _k8s_namespace(juju: jubilant.Juju) -> str:
     """Return the Kubernetes namespace backing the current Juju model."""
-    model = json.loads(juju.cli("show-model", "--format", "json"))
-    model_data = next(iter(model.values()))
-    return str(model_data["model-name"])
+    model = juju.show_model()
+    return model.short_name
+
+
+def _has_relation(
+    status: jubilant.statustypes.Status,
+    app: str,
+    endpoint: str,
+    related_app: str,
+) -> bool:
+    """Return whether ``app:endpoint`` is related to ``related_app``."""
+    app_status = status.apps.get(app)
+    if app_status is None:
+        return False
+    return any(
+        relation.related_app == related_app
+        for relation in app_status.relations.get(endpoint, [])
+    )
 
 
 def _postgres_service(juju: jubilant.Juju, database_app: str) -> tuple[str, str]:
@@ -311,7 +326,6 @@ class TestCharmDeployment:
         juju: jubilant.Juju = deployed["juju"]
         status = juju.status()
         database_status = status.apps[deployed["database_app"]].app_status
-        relation_status = juju.cli("status", "--relations")
 
         logger.info(
             "PostgreSQL status: %s %s",
@@ -319,25 +333,30 @@ class TestCharmDeployment:
             database_status.message,
         )
         assert database_status.current == "active"
-        assert f"{deployed['app']}:postgresql" in relation_status
-        assert f"{deployed['database_app']}:database" in relation_status
+        assert _has_relation(
+            status, deployed["app"], "postgresql", deployed["database_app"]
+        )
+        assert _has_relation(
+            status, deployed["database_app"], "database", deployed["app"]
+        )
 
     def test_s3_relation_active(self, deployed: dict[str, Any]):
         """The deployment uses the S3 relation for artifact storage."""
         juju: jubilant.Juju = deployed["juju"]
         status = juju.status()
         s3_status = status.apps[deployed["s3_app"]].app_status
-        relation_status = juju.cli("status", "--relations")
 
         logger.info("S3 integrator status: %s %s", s3_status.current, s3_status.message)
         assert s3_status.current == "active"
-        assert f"{deployed['app']}:s3" in relation_status
-        assert f"{deployed['s3_app']}:s3-credentials" in relation_status
+        assert _has_relation(status, deployed["app"], "s3", deployed["s3_app"])
+        assert _has_relation(
+            status, deployed["s3_app"], "s3-credentials", deployed["app"]
+        )
 
     def test_self_signed_certificates_active(self, deployed: dict[str, Any]):
         """Self-signed certificates are issued to the Gateway API integrator."""
         juju: jubilant.Juju = deployed["juju"]
-        relation_status = juju.cli("status", "--relations")
+        status = juju.status()
         task = juju.run(
             f"{deployed['certificates_app']}/0",
             "get-ca-certificate",
@@ -348,17 +367,43 @@ class TestCharmDeployment:
 
         logger.info("CA certificate output:\n%s", ca_certificate)
         assert "BEGIN CERTIFICATE" in ca_certificate
-        assert f"{deployed['certificates_app']}:certificates" in relation_status
-        assert f"{deployed['gateway_app']}:certificates" in relation_status
+        assert _has_relation(
+            status,
+            deployed["certificates_app"],
+            "certificates",
+            deployed["gateway_app"],
+        )
+        assert _has_relation(
+            status,
+            deployed["gateway_app"],
+            "certificates",
+            deployed["certificates_app"],
+        )
 
     def test_gateway_api_ingress_active(self, deployed: dict[str, Any]):
         """Both ingress-configurator applications are related to Gateway API."""
         juju: jubilant.Juju = deployed["juju"]
-        relation_status = juju.cli("status", "--relations")
+        status = juju.status()
 
-        assert f"{deployed['api_ingress_app']}:gateway-route" in relation_status
-        assert f"{deployed['oci_ingress_app']}:gateway-route" in relation_status
-        assert f"{deployed['gateway_app']}:gateway-route" in relation_status
+        assert _has_relation(
+            status,
+            deployed["api_ingress_app"],
+            "gateway-route",
+            deployed["gateway_app"],
+        )
+        assert _has_relation(
+            status,
+            deployed["oci_ingress_app"],
+            "gateway-route",
+            deployed["gateway_app"],
+        )
+        gateway_routes = status.apps[deployed["gateway_app"]].relations.get(
+            "gateway-route", []
+        )
+        assert {
+            deployed["api_ingress_app"],
+            deployed["oci_ingress_app"],
+        }.issubset({relation.related_app for relation in gateway_routes})
 
     def test_health_endpoint(self, deployed: dict[str, Any]):
         """GET /healthz returns status=ok."""

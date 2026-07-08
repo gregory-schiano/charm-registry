@@ -32,6 +32,7 @@ import pytest
 from oci_image import build_oci_image, machine_arch, write_oci_archive
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
+CHARM_PROJECT_DIR = ROOT / "charm"
 TERRAFORM_DIR = ROOT / "terraform"
 SCRIPTS_DIR = ROOT / "tests" / "integration" / "scripts"
 MODEL_NAME = "charm-registry-tf"
@@ -246,8 +247,8 @@ def _gateway_lb_ip() -> str:
     for item in services.get("items", []):
         if item.get("spec", {}).get("type") != "LoadBalancer":
             continue
-        for ingress in item.get("status", {}).get("loadBalancer", {}).get(
-            "ingress", []
+        for ingress in (
+            item.get("status", {}).get("loadBalancer", {}).get("ingress", [])
         ):
             ip = ingress.get("ip")
             if ip:
@@ -350,6 +351,7 @@ def _publish_lifecycle_revision(
         str(charm_file),
         "--name",
         LIFECYCLE_CHARM,
+        cwd=CHARM_PROJECT_DIR,
         env=charmcraft_env,
     )
     run(
@@ -359,6 +361,7 @@ def _publish_lifecycle_revision(
         "app-image",
         "--image",
         f"oci-archive:{image_file}",
+        cwd=CHARM_PROJECT_DIR,
         env=charmcraft_env,
     )
     charm_revision = _latest_revision(stack["api_url"], LIFECYCLE_CHARM)
@@ -375,6 +378,7 @@ def _publish_lifecycle_revision(
         "latest/edge",
         "--resource",
         f"app-image:{resource_revision}",
+        cwd=CHARM_PROJECT_DIR,
         env=charmcraft_env,
     )
     return charm_revision, resource_revision
@@ -429,7 +433,13 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
         )
 
     try:
-        run("charmcraft", "register", LIFECYCLE_CHARM, env=charmcraft_env)
+        run(
+            "charmcraft",
+            "register",
+            LIFECYCLE_CHARM,
+            cwd=CHARM_PROJECT_DIR,
+            env=charmcraft_env,
+        )
         charm_revision, _ = _publish_lifecycle_revision(
             stack, charmcraft_env, "revision one", "r1"
         )

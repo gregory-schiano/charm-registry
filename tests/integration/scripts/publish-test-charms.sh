@@ -36,9 +36,14 @@ if ! command -v charmcraft >/dev/null 2>&1; then
 fi
 
 cd "$PROJECT_DIR"
-CHARM_FILE="$(opcli artifacts path "$CHARM_NAME" --type charm)"
+CHARM_FILE="$(realpath "$(opcli artifacts path "$CHARM_NAME" --type charm)")"
 if [ ! -f "$CHARM_FILE" ]; then
     echo "ERROR: built charm not found; run 'opcli artifacts build' or 'opcli artifacts fetch' first" >&2
+    exit 1
+fi
+CHARM_PROJECT_DIR="$PROJECT_DIR/charm"
+if [ ! -f "$CHARM_PROJECT_DIR/charmcraft.yaml" ]; then
+    echo "ERROR: charm project not found at $CHARM_PROJECT_DIR" >&2
     exit 1
 fi
 
@@ -51,6 +56,7 @@ CHARMCRAFT_AUTH="$(printf '%s' "$REGISTRY_TOKEN" | base64 -w0)"
 export CHARMCRAFT_AUTH
 
 register_log="$(mktemp)"
+cd "$CHARM_PROJECT_DIR"
 if ! charmcraft register "$CHARM_NAME" >"$register_log" 2>&1; then
     if grep -qi "already" "$register_log"; then
         echo "Charm $CHARM_NAME is already registered"
@@ -74,6 +80,7 @@ revision="$(latest_revision "$CHARM_NAME")"
 charmcraft release "$CHARM_NAME" --revision "$revision" --channel "$CHANNEL"
 echo "Published $CHARM_NAME revision $revision from $CHARM_FILE to $CHANNEL"
 
+cd "$PROJECT_DIR"
 go build -o "$PROJECT_DIR/.bin/charm-registryctl" ./cmd/charm-registryctl
 
 export CHARM_REGISTRY_URL="$REGISTRY_API_URL"
