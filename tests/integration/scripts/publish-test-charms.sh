@@ -77,10 +77,10 @@ latest_revision() {
 
 charmcraft upload "$CHARM_FILE" --name "$CHARM_NAME"
 revision="$(latest_revision "$CHARM_NAME")"
+cd "$PROJECT_DIR"
 charmcraft release "$CHARM_NAME" --revision "$revision" --channel "$CHANNEL"
 echo "Published $CHARM_NAME revision $revision from $CHARM_FILE to $CHANNEL"
 
-cd "$PROJECT_DIR"
 go build -o "$PROJECT_DIR/.bin/charm-registryctl" ./cmd/charm-registryctl
 
 export CHARM_REGISTRY_URL="$REGISTRY_API_URL"

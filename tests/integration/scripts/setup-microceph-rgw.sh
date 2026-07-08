@@ -13,6 +13,7 @@ ENV_FILE=/etc/profile.d/zz-charm-registry-s3.sh
 ACCESS_KEY="${JUB_S3_ACCESS_KEY:-charm-registry}"
 SECRET_KEY="${JUB_S3_SECRET_KEY:-charm-registry-secret}"
 BUCKET="${JUB_S3_BUCKET:-charm-registry-artifacts}"
+OCI_BUCKET="${JUB_OCI_S3_BUCKET:-charm-registry-oci}"
 REGION="${JUB_S3_REGION:-us-east-1}"
 RGW_PORT="${JUB_MICROCEPH_RGW_PORT:-8081}"
 
@@ -73,6 +74,19 @@ if ! microceph.radosgw-admin user create \
     echo "Reusing existing RGW user charm-registry"
 fi
 
+ensure_bucket() {
+    local bucket="$1"
+    if microceph.radosgw-admin bucket stats --bucket "$bucket" >/dev/null 2>&1; then
+        echo "Reusing existing RGW bucket $bucket"
+        return
+    fi
+    microceph.radosgw-admin bucket create --bucket "$bucket" --uid charm-registry >/dev/null
+    echo "Created RGW bucket $bucket"
+}
+
+ensure_bucket "$BUCKET"
+ensure_bucket "$OCI_BUCKET"
+
 for _ in $(seq 1 60); do
     if curl --max-time 2 -sS -o /dev/null "$ENDPOINT"; then
         echo "MicroCeph RGW endpoint is reachable: $ENDPOINT"
@@ -88,6 +102,7 @@ fi
 cat >"$ENV_FILE" <<EOF
 export JUB_S3_ENDPOINT="$ENDPOINT"
 export JUB_S3_BUCKET="$BUCKET"
+export JUB_OCI_S3_BUCKET="$OCI_BUCKET"
 export JUB_S3_REGION="$REGION"
 export JUB_S3_ACCESS_KEY="$ACCESS_KEY"
 export JUB_S3_SECRET_KEY="$SECRET_KEY"

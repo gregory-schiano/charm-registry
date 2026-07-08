@@ -378,7 +378,6 @@ def _publish_lifecycle_revision(
         "latest/edge",
         "--resource",
         f"app-image:{resource_revision}",
-        cwd=CHARM_PROJECT_DIR,
         env=charmcraft_env,
     )
     return charm_revision, resource_revision
