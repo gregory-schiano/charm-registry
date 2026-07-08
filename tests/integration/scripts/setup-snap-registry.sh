@@ -47,7 +47,19 @@ snap set spellbook \
     "public-registry-url=${REGISTRY_OCI_URL}" \
     rate-limit.ip-limit=0 \
     rate-limit.token-limit=0
-snap start spellbook.charm-registry
+
+# The snap configure hook regenerates the self-signed OCI certificate when the
+# public registry host changes, but the workload does not hot-reload TLS files.
+# Restart after snap set so Kubernetes/containerd receives the same CA that the
+# registry is actually serving.
+snap restart spellbook.charm-registry || snap start spellbook.charm-registry
+
+if ! grep -Fxq "$REGISTRY_HOST" /var/snap/spellbook/common/certs/oci.hosts; then
+    echo "ERROR: generated OCI certificate does not cover ${REGISTRY_HOST}" >&2
+    echo "Generated hosts:" >&2
+    cat /var/snap/spellbook/common/certs/oci.hosts >&2 || true
+    exit 1
+fi
 
 for _ in $(seq 1 120); do
     if curl -sf "${REGISTRY_API_URL}/healthz" >/dev/null; then

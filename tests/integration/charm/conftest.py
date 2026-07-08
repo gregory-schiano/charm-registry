@@ -36,6 +36,38 @@ def _require_cli(name: str) -> str:
     return path
 
 
+def _built_charm_from_opcli(charm_name: str, repo_root: pathlib.Path) -> pathlib.Path:
+    """Return the built app charm from opcli artifact paths."""
+    result = _run(
+        ["opcli", "artifacts", "path", charm_name, "--type", "charm"],
+        cwd=repo_root,
+    )
+    candidates = [
+        path if (path := pathlib.Path(line)).is_absolute() else repo_root / path
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+    matches = [
+        path.resolve()
+        for path in candidates
+        if path.parent.name == "charm"
+        and path.name.startswith(f"{charm_name}_")
+        and path.suffix == ".charm"
+        and path.is_file()
+    ]
+    if not matches:
+        pytest.fail(
+            f"opcli did not return a built {charm_name} charm artifact; "
+            f"candidate paths: {[str(path) for path in candidates]}"
+        )
+    if len(matches) > 1:
+        pytest.fail(
+            f"opcli returned multiple built {charm_name} charm artifacts; "
+            f"matching paths: {[str(path) for path in matches]}"
+        )
+    return matches[0]
+
+
 @pytest.fixture(scope="session")
 def s3_config() -> dict[str, str]:
     """Return the S3 contract provided by the environment.
@@ -86,15 +118,13 @@ def functional_test_binary(repo_root: pathlib.Path) -> pathlib.Path:
 
 
 @pytest.fixture(scope="session")
-def charm_file(request: pytest.FixtureRequest, repo_root: pathlib.Path) -> pathlib.Path:
+def charm_file(repo_root: pathlib.Path) -> pathlib.Path:
     """Return the built charm artifact.
 
-    In charm-ci this comes from opcli's ``charm_paths`` fixture. When running
-    locally without opcli, fall back to packing the charm from ``charm/``.
+    In charm-ci this comes from opcli's artifact paths. When running locally
+    without opcli, fall back to packing the charm from ``charm/``.
     """
-    try:
-        charm_paths = request.getfixturevalue("charm_paths")
-    except pytest.FixtureLookupError:
+    if shutil.which("opcli") is None:
         _require_cli("charmcraft")
         charm_dir = repo_root / "charm"
         _run(["charmcraft", "pack", "--project-dir", str(charm_dir)])
@@ -103,7 +133,7 @@ def charm_file(request: pytest.FixtureRequest, repo_root: pathlib.Path) -> pathl
             pytest.fail("charmcraft pack produced no .charm file")
         charm_path = charms[0]
     else:
-        charm_path = pathlib.Path(charm_paths["charm-registry"].path)
+        charm_path = _built_charm_from_opcli("charm-registry", repo_root)
 
     logger.info("Charm artifact: %s", charm_path)
     return charm_path
