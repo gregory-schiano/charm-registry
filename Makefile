@@ -2,7 +2,7 @@ GO      ?= go
 BIN_DIR ?= $(CURDIR)/.bin
 ACTIONLINT_VERSION ?= v1.7.7
 
-.PHONY: help fmt tidy tidy-check test test-race coverage coverage-race vet build run lint actionlint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
+.PHONY: generate-test-fixtures test-fixtures-check help fmt tidy tidy-check test test-race coverage coverage-race vet build run lint actionlint vuln gosec sqlc-diff audit check generate-cert install-cert install-k8s-cert charm-pack rock-pack rock-smoke-test snap-pack snap-config-env-test artifact-build functional-test functional-test-build charm-integration-test snap-integration-test snap-shell-test
 
 help:
 	@printf "%s\n" \
@@ -27,6 +27,8 @@ help:
 		"make install-k8s-cert - install the local embedded OCI certificate into Canonical k8s containerd trust (requires sudo)" \
 		"" \
 		"make functional-test       - run shared functional scenarios against FTEST_API_URL" \
+		"make generate-test-fixtures - regenerate committed integration-test fixtures" \
+		"make test-fixtures-check    - verify committed fixtures match their generator (CI)" \
 		"make functional-test-build - compile the functional-test binary" \
 		"" \
 		"make charm-pack            - pack the charm with charmcraft" \
@@ -171,6 +173,16 @@ FTEST_API_URL ?= http://localhost:8080
 
 functional-test-build:
 	$(GO) build -o $(BIN_DIR)/functional-test ./cmd/functional-test
+
+generate-test-fixtures:
+	python3 tests/integration/scripts/generate-test-fixtures.py
+
+test-fixtures-check: generate-test-fixtures
+	@if [ -n "$$(git status --porcelain tests/integration/fixtures)" ]; then \
+		git status --porcelain tests/integration/fixtures; \
+		echo "ERROR: committed test fixtures are out of date; run 'make generate-test-fixtures' and commit."; \
+		exit 1; \
+	fi
 
 functional-test: functional-test-build
 	FTEST_API_URL=$(FTEST_API_URL) $(BIN_DIR)/functional-test

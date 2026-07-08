@@ -113,6 +113,9 @@ jobs:
         working-directory: charm
         run: tox -e lint,static,unit
 
+      - name: Verify committed integration-test fixtures match their generator
+        run: make test-fixtures-check
+
   # Fast static validation of the Terraform module so syntax/format errors
   # surface on the PR instead of deep inside the spread integration run.
   terraform:

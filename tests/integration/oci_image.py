@@ -17,8 +17,6 @@ import pathlib
 import platform
 import tarfile
 
-import requests
-
 OCI_CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json"
 OCI_LAYER_MEDIA_TYPE = "application/vnd.oci.image.layer.v1.tar+gzip"
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
@@ -44,7 +42,10 @@ def build_oci_image(name: str, *, arch: str | None = None) -> dict[str, bytes]:
         info = tarfile.TarInfo("etc/charm-registry-itest")
         info.size = len(payload)
         tar.addfile(info, io.BytesIO(payload))
-    layer = gzip.compress(tar_buffer.getvalue())
+    layer_buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=layer_buffer, mode="wb", mtime=0) as gz:
+        gz.write(tar_buffer.getvalue())
+    layer = layer_buffer.getvalue()
     config = json.dumps(
         {
             "architecture": arch or machine_arch(),
@@ -119,6 +120,8 @@ def push_oci_image(
     image: dict[str, bytes],
 ) -> str:
     """Push a built OCI image via the Distribution v2 API; return its digest."""
+    import requests
+
     session = requests.Session()
     session.auth = (username, password)
     for blob in (image["config"], image["layer"]):
@@ -155,6 +158,8 @@ def pull_oci_manifest(
     verify: bool | str = True,
 ) -> bytes:
     """Pull an OCI manifest back from the embedded registry."""
+    import requests
+
     resp = requests.get(
         f"{oci_url}/v2/{repository}/manifests/{digest}",
         auth=(username, password),

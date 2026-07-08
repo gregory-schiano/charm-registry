@@ -62,6 +62,9 @@ crash.*.log
 *.charm
 *.rock
 *.snap
+# ...except the committed, deterministically generated integration-test
+# fixtures (see tests/integration/scripts/generate-test-fixtures.py).
+!tests/integration/fixtures/*.charm
 
 # Functional test binary
 functional-test

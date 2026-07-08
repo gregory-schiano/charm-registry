@@ -79,6 +79,12 @@ integration-suites:
     prepare: |
       "${PROJECT_DIR}/tests/integration/scripts/setup-snap-registry.sh"
       "${PROJECT_DIR}/tests/integration/scripts/publish-test-charms.sh"
+      cd "${PROJECT_DIR}"
+      go build -o "${PROJECT_DIR}/.bin/functional-test" ./cmd/functional-test
+      chown -R ubuntu:ubuntu "${PROJECT_DIR}/.bin"
+      # Kubernetes must be ready before pytest applies the Terraform module;
+      # kubectl is configured for the ubuntu user by the backend provisioning.
+      runuser -l ubuntu -c "kubectl wait --for=condition=Ready node --all --timeout=5m"
     restore: |
       rm -f /etc/profile.d/zz-charm-registry-registry.sh
       # Undo the consumer-model host plumbing added by the lifecycle test
