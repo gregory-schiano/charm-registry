@@ -74,19 +74,6 @@ if ! microceph.radosgw-admin user create \
     echo "Reusing existing RGW user charm-registry"
 fi
 
-ensure_bucket() {
-    local bucket="$1"
-    if microceph.radosgw-admin bucket stats --bucket "$bucket" >/dev/null 2>&1; then
-        echo "Reusing existing RGW bucket $bucket"
-        return
-    fi
-    microceph.radosgw-admin bucket create --bucket "$bucket" --uid charm-registry >/dev/null
-    echo "Created RGW bucket $bucket"
-}
-
-ensure_bucket "$BUCKET"
-ensure_bucket "$OCI_BUCKET"
-
 for _ in $(seq 1 60); do
     if curl --max-time 2 -sS -o /dev/null "$ENDPOINT"; then
         echo "MicroCeph RGW endpoint is reachable: $ENDPOINT"
@@ -98,6 +85,40 @@ if ! curl --max-time 2 -sS -o /dev/null "$ENDPOINT"; then
     echo "ERROR: MicroCeph RGW endpoint did not become reachable: $ENDPOINT" >&2
     exit 1
 fi
+
+if ! command -v aws >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
+fi
+
+ensure_bucket() {
+    local bucket="$1"
+    if microceph.radosgw-admin bucket stats --bucket "$bucket" >/dev/null 2>&1; then
+        echo "Reusing existing RGW bucket $bucket"
+        return
+    fi
+
+    create_args=(--endpoint-url "$ENDPOINT" s3api create-bucket --bucket "$bucket")
+    if [ "$REGION" != "us-east-1" ]; then
+        create_args+=(--create-bucket-configuration "LocationConstraint=$REGION")
+    fi
+    create_log="$(mktemp)"
+    if ! AWS_ACCESS_KEY_ID="$ACCESS_KEY" \
+        AWS_SECRET_ACCESS_KEY="$SECRET_KEY" \
+        AWS_DEFAULT_REGION="$REGION" \
+        AWS_EC2_METADATA_DISABLED=true \
+        AWS_PAGER="" \
+        aws "${create_args[@]}" >"$create_log" 2>&1; then
+        cat "$create_log" >&2
+        rm -f "$create_log"
+        exit 1
+    fi
+    rm -f "$create_log"
+    echo "Created RGW bucket $bucket"
+}
+
+ensure_bucket "$BUCKET"
+ensure_bucket "$OCI_BUCKET"
 
 cat >"$ENV_FILE" <<EOF
 export JUB_S3_ENDPOINT="$ENDPOINT"

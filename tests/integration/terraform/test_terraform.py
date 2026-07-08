@@ -32,7 +32,7 @@ import pytest
 from oci_image import build_oci_image, machine_arch, write_oci_archive
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-CHARM_PROJECT_DIR = ROOT / "charm"
+CHARMCRAFT_UPLOAD_PROJECT_DIR = ROOT / ".bin" / "charmcraft-upload-project"
 TERRAFORM_DIR = ROOT / "terraform"
 SCRIPTS_DIR = ROOT / "tests" / "integration" / "scripts"
 MODEL_NAME = "charm-registry-tf"
@@ -304,42 +304,79 @@ def _api_ingress_url() -> str:
     raise RuntimeError("could not determine the API ingress URL from relation data")
 
 
-def _registry_api(
-    api_url: str, method: str, path: str, body: dict | None = None
-) -> dict:
-    import requests
+def _max_revision(payload: object) -> int:
+    revisions: list[int] = []
 
-    resp = requests.request(
-        method,
-        f"{api_url}{path}",
-        headers={"Authorization": f"Bearer {DEV_TOKEN}"},
-        json=body,
-        timeout=30,
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            revision = value.get("revision")
+            if isinstance(revision, int):
+                revisions.append(revision)
+            elif isinstance(revision, str) and revision.isdigit():
+                revisions.append(int(revision))
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(payload)
+    assert revisions, f"no revisions found in charmcraft output: {payload!r}"
+    return max(revisions)
+
+
+def _charmcraft_json(
+    *args: str,
+    cwd: pathlib.Path,
+    env: dict[str, str],
+) -> object:
+    command = ["charmcraft", *args, "--format", "json"]
+    merged_env = os.environ.copy()
+    merged_env.update(env)
+    print("+", " ".join(shlex.quote(part) for part in command))
+    return json.loads(
+        subprocess.check_output(command, cwd=cwd, env=merged_env, text=True)
     )
-    assert resp.status_code < 300, f"{method} {path}: {resp.status_code} {resp.text}"
-    return resp.json() if resp.content else {}
 
 
-def _latest_revision(api_url: str, charm: str) -> int:
-    payload = _registry_api(api_url, "GET", f"/v1/charm/{charm}/revisions")
-    revisions = payload.get("revisions") or []
-    assert revisions, f"no revisions found for {charm}"
-    return max(int(item["revision"]) for item in revisions)
+def _latest_revision(charm: str, cwd: pathlib.Path, env: dict[str, str]) -> int:
+    return _max_revision(_charmcraft_json("revisions", charm, cwd=cwd, env=env))
 
 
-def _latest_resource_revision(api_url: str, charm: str, resource: str) -> int:
-    payload = _registry_api(
-        api_url, "GET", f"/v1/charm/{charm}/resources/{resource}/revisions"
+def _latest_resource_revision(
+    charm: str, resource: str, cwd: pathlib.Path, env: dict[str, str]
+) -> int:
+    return _max_revision(
+        _charmcraft_json("resource-revisions", charm, resource, cwd=cwd, env=env)
     )
-    revisions = payload.get("revisions") or []
-    assert revisions, f"no resource revisions found for {charm}:{resource}"
-    return max(int(item["revision"]) for item in revisions)
+
+
+def _charmcraft_upload_project() -> pathlib.Path:
+    """Return a minimal supported charmcraft project for upload commands."""
+    CHARMCRAFT_UPLOAD_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    (CHARMCRAFT_UPLOAD_PROJECT_DIR / "charmcraft.yaml").write_text(
+        f"""
+name: {LIFECYCLE_CHARM}
+type: charm
+base: ubuntu@22.04
+platforms:
+  amd64:
+summary: Integration lifecycle charm
+description: Minimal project used only as charmcraft upload context.
+resources:
+  app-image:
+    type: oci-image
+    description: Test application image.
+""".lstrip()
+    )
+    return CHARMCRAFT_UPLOAD_PROJECT_DIR
 
 
 def _publish_lifecycle_revision(
-    stack: dict, charmcraft_env: dict[str, str], note: str, tag: str
+    charmcraft_env: dict[str, str], note: str, tag: str
 ) -> tuple[int, int]:
     """Publish one charm + image revision with charmcraft; return revisions."""
+    charmcraft_cwd = _charmcraft_upload_project()
     charm_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-{tag}.charm"
     charm_file.write_bytes(_build_test_charm(LIFECYCLE_CHARM, note))
     image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-{tag}-image.tar"
@@ -351,7 +388,7 @@ def _publish_lifecycle_revision(
         str(charm_file),
         "--name",
         LIFECYCLE_CHARM,
-        cwd=CHARM_PROJECT_DIR,
+        cwd=charmcraft_cwd,
         env=charmcraft_env,
     )
     run(
@@ -361,12 +398,12 @@ def _publish_lifecycle_revision(
         "app-image",
         "--image",
         f"oci-archive:{image_file}",
-        cwd=CHARM_PROJECT_DIR,
+        cwd=charmcraft_cwd,
         env=charmcraft_env,
     )
-    charm_revision = _latest_revision(stack["api_url"], LIFECYCLE_CHARM)
+    charm_revision = _latest_revision(LIFECYCLE_CHARM, charmcraft_cwd, charmcraft_env)
     resource_revision = _latest_resource_revision(
-        stack["api_url"], LIFECYCLE_CHARM, "app-image"
+        LIFECYCLE_CHARM, "app-image", charmcraft_cwd, charmcraft_env
     )
     run(
         "charmcraft",
@@ -378,6 +415,7 @@ def _publish_lifecycle_revision(
         "latest/edge",
         "--resource",
         f"app-image:{resource_revision}",
+        cwd=charmcraft_cwd,
         env=charmcraft_env,
     )
     return charm_revision, resource_revision
@@ -421,6 +459,7 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
         "CHARMCRAFT_UPLOAD_URL": stack["api_url"],
         "CHARMCRAFT_REGISTRY_URL": f"https://{OCI_HOSTNAME}",
         "CHARMCRAFT_AUTH": base64.b64encode(DEV_TOKEN.encode()).decode(),
+        "CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1",
     }
 
     api_public_url = _api_ingress_url()
@@ -436,11 +475,11 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
             "charmcraft",
             "register",
             LIFECYCLE_CHARM,
-            cwd=CHARM_PROJECT_DIR,
+            cwd=_charmcraft_upload_project(),
             env=charmcraft_env,
         )
         charm_revision, _ = _publish_lifecycle_revision(
-            stack, charmcraft_env, "revision one", "r1"
+            charmcraft_env, "revision one", "r1"
         )
         assert charm_revision == 1
 
@@ -474,7 +513,7 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
         _wait_for_consumer_revision(charm_revision)
 
         charm_revision, resource_revision = _publish_lifecycle_revision(
-            stack, charmcraft_env, "revision two", "r2"
+            charmcraft_env, "revision two", "r2"
         )
         assert charm_revision == 2
         assert resource_revision == 2
