@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 def public_url_environment(
     api_ingress_url: str | None,
     oci_ingress_url: str | None,
+    config: typing.Mapping[str, typing.Any] | None = None,
 ) -> dict[str, str]:
     """Map ingress relation URLs to the workload's public URL environment.
 
@@ -27,13 +28,18 @@ def public_url_environment(
     OCI registry listener. Both relations are required, so the variables are
     always present once the charm is active; until then the charm blocks.
     """
+    config = config or {}
+    api_url = _config_value(config, "public-api-url") or api_ingress_url
+    storage_url = _config_value(config, "public-storage-url") or api_url
+    registry_url = _config_value(config, "public-registry-url") or oci_ingress_url
+
     env: dict[str, str] = {}
-    if api_ingress_url:
-        public_url = api_ingress_url.rstrip("/")
-        env["CHARM_REGISTRY_PUBLIC_API_URL"] = public_url
-        env["CHARM_REGISTRY_PUBLIC_STORAGE_URL"] = public_url
-    if oci_ingress_url:
-        env["CHARM_REGISTRY_PUBLIC_REGISTRY_URL"] = oci_ingress_url.rstrip("/")
+    if api_url:
+        env["CHARM_REGISTRY_PUBLIC_API_URL"] = api_url.rstrip("/")
+    if storage_url:
+        env["CHARM_REGISTRY_PUBLIC_STORAGE_URL"] = storage_url.rstrip("/")
+    if registry_url:
+        env["CHARM_REGISTRY_PUBLIC_REGISTRY_URL"] = registry_url.rstrip("/")
     return env
 
 
@@ -62,6 +68,13 @@ def _mapped_environment(
         if value is not None and str(value).strip():
             env[env_key] = str(value).strip()
     return env
+
+
+def _config_value(config: typing.Mapping[str, typing.Any], key: str) -> str | None:
+    value = config.get(key, config.get(key.replace("-", "_")))
+    if value is None or not str(value).strip():
+        return None
+    return str(value).strip()
 
 
 def size_limit_environment(config: typing.Mapping[str, typing.Any]) -> dict[str, str]:
@@ -128,6 +141,7 @@ class CharmRegistryApp(App):
             public_url_environment(
                 self._api_ingress.url if self._api_ingress else None,
                 self._oci_ingress.url if self._oci_ingress else None,
+                self._charm_state.user_defined_config,
             )
         )
         env.update(size_limit_environment(self._charm_state.user_defined_config))
@@ -262,6 +276,31 @@ class CharmRegistryCharm(paas_charm.go.Charm):
             oci_ingress=self._oci_ingress,
         )
 
+    def _related_but_not_ready(self, name: str, relation_data: typing.Any) -> bool:
+        """Return whether *name* is related without usable relation data yet.
+
+        The postgresql/s3 relations are optional so the charm can run in
+        SQLite/filesystem dev mode without them. Once related, however, the
+        workload must never start on those embedded fallbacks: data written
+        there is silently discarded when the relation data arrives and the
+        workload restarts onto PostgreSQL/S3. Block until the data is ready.
+        """
+        return not relation_data and bool(self.model.relations.get(name))
+
+    def _missing_required_database_integrations(
+        self,
+        requires: dict[str, typing.Any],
+        charm_state: typing.Any,
+    ) -> typing.Generator[typing.Any, None, None]:
+        """Return missing required database integrations."""
+        yield from super()._missing_required_database_integrations(requires, charm_state)
+        databases = charm_state.integrations.databases_relation_data
+        for name in self._database_requirers:
+            if requires[name].optional and self._related_but_not_ready(
+                name, databases.get(name)
+            ):
+                yield name
+
     def _missing_required_storage_integrations(
         self,
         requires: dict[str, typing.Any],
@@ -269,8 +308,12 @@ class CharmRegistryCharm(paas_charm.go.Charm):
     ) -> typing.Generator[typing.Any, None, None]:
         """Return missing required storage integrations."""
         yield from super()._missing_required_storage_integrations(requires, charm_state)
+        if self._s3 and self._related_but_not_ready("s3", charm_state.integrations.s3):
+            yield "s3"
         if self._oci_s3 and not self._oci_s3.to_relation_data():
-            if not requires["oci-s3"].optional:
+            if not requires["oci-s3"].optional or self._related_but_not_ready(
+                "oci-s3", None
+            ):
                 yield "oci-s3"
 
     def _missing_required_other_integrations(

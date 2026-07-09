@@ -167,6 +167,18 @@ Many variables accept legacy aliases for backward compatibility:
 | `CHARM_REGISTRY_S3_USE_PATH_STYLE` | `APP_S3_USE_PATH_STYLE` |
 | `CHARM_REGISTRY_OCI_S3_USE_PATH_STYLE` | `APP_OCI_S3_USE_PATH_STYLE` |
 
+## Juju charm configuration
+
+The charm normally derives public API, storage, and OCI registry URLs from its
+ingress relations. For test or constrained network environments, these can be
+overridden explicitly:
+
+| Charm option | Environment variable | Value |
+|---|---|---|
+| `public-api-url` | `CHARM_REGISTRY_PUBLIC_API_URL` | Public API base URL |
+| `public-storage-url` | `CHARM_REGISTRY_PUBLIC_STORAGE_URL` | Public artifact download base URL; defaults to `public-api-url` when unset |
+| `public-registry-url` | `CHARM_REGISTRY_PUBLIC_REGISTRY_URL` | Public OCI registry base URL |
+
 ## Snap configuration
 
 When running as a snap, the wrapper script (`snap/local/charm-registry-wrapper`) reads snap configuration keys via `snapctl get` and maps them to environment variables. For example:

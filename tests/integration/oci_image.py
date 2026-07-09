@@ -13,7 +13,6 @@ import gzip
 import hashlib
 import io
 import json
-import pathlib
 import platform
 import tarfile
 
@@ -78,46 +77,15 @@ def build_oci_image(name: str, *, arch: str | None = None) -> dict[str, bytes]:
     return {"config": config, "layer": layer, "manifest": manifest}
 
 
-def write_oci_archive(image: dict[str, bytes], path: pathlib.Path) -> str:
-    """Write an image as an ``oci-archive`` tar usable by skopeo/charmcraft.
-
-    Returns the manifest digest.
-    """
-    manifest_digest = sha256_digest(image["manifest"])
-    index = json.dumps(
-        {
-            "schemaVersion": 2,
-            "manifests": [
-                {
-                    "mediaType": OCI_MANIFEST_MEDIA_TYPE,
-                    "digest": manifest_digest,
-                    "size": len(image["manifest"]),
-                }
-            ],
-        }
-    ).encode()
-    layout = json.dumps({"imageLayoutVersion": "1.0.0"}).encode()
-
-    def add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
-        info = tarfile.TarInfo(name)
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-
-    with tarfile.open(path, mode="w") as tar:
-        add(tar, "oci-layout", layout)
-        add(tar, "index.json", index)
-        for blob in (image["config"], image["layer"], image["manifest"]):
-            digest = sha256_digest(blob)
-            add(tar, f"blobs/sha256/{digest.split(':', 1)[1]}", blob)
-    return manifest_digest
-
-
 def push_oci_image(
     oci_url: str,
     repository: str,
     username: str,
     password: str,
     image: dict[str, bytes],
+    *,
+    tag: str | None = None,
+    verify: bool | str = True,
 ) -> str:
     """Push a built OCI image via the Distribution v2 API; return its digest."""
     import requests
@@ -125,7 +93,9 @@ def push_oci_image(
     session = requests.Session()
     session.auth = (username, password)
     for blob in (image["config"], image["layer"]):
-        start = session.post(f"{oci_url}/v2/{repository}/blobs/uploads/", timeout=30)
+        start = session.post(
+            f"{oci_url}/v2/{repository}/blobs/uploads/", timeout=30, verify=verify
+        )
         assert start.status_code == 202, start.text
         location = requests.compat.urljoin(oci_url, start.headers["Location"])
         separator = "&" if "?" in location else "?"
@@ -134,6 +104,7 @@ def push_oci_image(
             data=blob,
             headers={"Content-Type": "application/octet-stream"},
             timeout=60,
+            verify=verify,
         )
         assert finish.status_code == 201, finish.text
 
@@ -143,8 +114,18 @@ def push_oci_image(
         data=image["manifest"],
         headers={"Content-Type": OCI_MANIFEST_MEDIA_TYPE},
         timeout=30,
+        verify=verify,
     )
     assert manifest_put.status_code == 201, manifest_put.text
+    if tag:
+        tag_put = session.put(
+            f"{oci_url}/v2/{repository}/manifests/{tag}",
+            data=image["manifest"],
+            headers={"Content-Type": OCI_MANIFEST_MEDIA_TYPE},
+            timeout=30,
+            verify=verify,
+        )
+        assert tag_put.status_code == 201, tag_put.text
     return digest
 
 

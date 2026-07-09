@@ -42,9 +42,9 @@ snap refresh --hold microceph
 
 if ! microceph status >/dev/null 2>&1; then
     microceph cluster bootstrap
-    microceph disk add loop,4G,3
+    microceph disk add loop,2G,3
 elif microceph status | grep -q "Disks: 0"; then
-    microceph disk add loop,4G,3
+    microceph disk add loop,2G,3
 fi
 
 for _ in $(seq 1 60); do
@@ -88,7 +88,9 @@ fi
 
 if ! command -v aws >/dev/null 2>&1; then
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y awscli
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y awscli; then
+        snap install aws-cli --classic
+    fi
 fi
 
 ensure_bucket() {

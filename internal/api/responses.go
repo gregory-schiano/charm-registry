@@ -88,10 +88,20 @@ type resourceRevisionListItemResponse struct {
 	Architectures   []string      `json:"architectures"`
 	Bases           []core.Base   `json:"bases"`
 	CreatedAt       time.Time     `json:"created-at"`
+	Description     string        `json:"description"`
 	Download        core.Download `json:"download"`
 	Filename        string        `json:"filename"`
+	Name            string        `json:"name"`
 	PackageRevision *int          `json:"package-revision"`
 	Revision        int           `json:"revision"`
+	// Hash keys follow the Charmhub charmcraft-facing API (craft-store's
+	// CharmResourceRevision requires all four keys to be present).
+	SHA256          string        `json:"sha256"`
+	SHA3384         string        `json:"sha3-384"`
+	SHA384          string        `json:"sha384"`
+	SHA512          string        `json:"sha512"`
+	Size            int64         `json:"size"`
+	Type            string        `json:"type"`
 }
 
 type resourceRevisionListResponse struct {

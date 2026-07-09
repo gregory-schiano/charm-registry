@@ -28,6 +28,7 @@ registry_host="${registry_url#*://}"
 registry_host="${registry_host%%/*}"
 cert_file="${CHARM_REGISTRY_K8S_OCI_CA_FILE:-${ROOT_DIR}/certs/oci.crt}"
 certs_root="${CHARM_REGISTRY_K8S_CONTAINERD_CERTS_DIR:-}"
+system_ca_name="charm-registry-oci-${registry_host//[^A-Za-z0-9_.-]/-}.crt"
 
 if [[ -z "${registry_host}" ]]; then
 	echo "ERROR: cannot derive registry host from CHARM_REGISTRY_PUBLIC_REGISTRY_URL=${registry_url}" >&2
@@ -64,9 +65,22 @@ EOF
 if [[ -n "${certs_root}" ]]; then
 	install_cert_for_root "${certs_root}"
 else
+	# Canonical K8s containerd reads hosts.d; classic containerd defaults to
+	# certs.d. Cover both across the known containerd roots.
 	install_cert_for_root /etc/containerd/certs.d
+	install_cert_for_root /etc/containerd/hosts.d
 	install_cert_for_root /ck8s/k8s-containerd/etc/containerd/certs.d
+	install_cert_for_root /ck8s/k8s-containerd/etc/containerd/hosts.d
 	install_cert_for_root /var/snap/k8s/common/etc/containerd/certs.d
+	install_cert_for_root /var/snap/k8s/common/etc/containerd/hosts.d
+fi
+
+if command -v update-ca-certificates >/dev/null 2>&1; then
+	sudo install -m 0644 "${cert_file}" "/usr/local/share/ca-certificates/${system_ca_name}"
+	sudo update-ca-certificates
+	echo "Installed OCI registry CA for ${registry_host} into the system trust store"
+else
+	echo "WARNING: update-ca-certificates not found; skipping system trust installation." >&2
 fi
 
 if systemctl is-active --quiet containerd 2>/dev/null; then

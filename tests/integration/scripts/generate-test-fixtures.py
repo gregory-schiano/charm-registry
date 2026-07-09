@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Regenerate the committed integration-test fixtures.
 
-Builds the artifacts the Terraform lifecycle test publishes through the
+Builds the charm artifacts the Terraform lifecycle test publishes through the
 Juju-deployed registry:
 
 - ``itest-lifecycle_r1.charm`` / ``itest-lifecycle_r2.charm`` — a minimal
   sidecar charm (dispatch only sets active status; the workload container's
   entrypoint is the pebble binary Juju mounts into it). One universal archive
   per revision, declaring both amd64 and arm64.
-- ``itest-lifecycle-image-r{1,2}-{amd64,arm64}.tar`` — synthetic single-layer
-  OCI images as ``oci-archive`` tars for ``charmcraft upload-resource``.
+The lifecycle test materializes a tiny public OCI image as a local
+``oci-archive`` at runtime and uploads it through ``charmcraft upload-resource``.
 
-Output is byte-for-byte deterministic (pinned zip/tar/gzip timestamps), so CI
+Output is byte-for-byte deterministic (pinned zip timestamps), so CI
 can regenerate and diff to prove the committed fixtures match this script.
 Uses only the standard library. Run from anywhere:
 
@@ -24,10 +24,6 @@ import io
 import pathlib
 import sys
 import zipfile
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-
-from oci_image import build_oci_image, write_oci_archive  # noqa: E402
 
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures"
 CHARM_NAME = "itest-lifecycle"
@@ -58,6 +54,16 @@ resources:
     architectures:
 {architectures}
 """
+    charmcraft = f"""{metadata}type: charm
+base: ubuntu@22.04
+platforms:
+  amd64:
+  arm64:
+parts:
+  charm:
+    plugin: dump
+    source: .
+"""
     dispatch = f'#!/bin/sh\nstatus-set active "{note}" || true\n'
 
     archive = io.BytesIO()
@@ -65,6 +71,7 @@ resources:
         for filename, content, mode in (
             ("metadata.yaml", metadata, 0o100644),
             ("manifest.yaml", manifest, 0o100644),
+            ("charmcraft.yaml", charmcraft, 0o100644),
             ("dispatch", dispatch, 0o100755),
         ):
             info = zipfile.ZipInfo(filename, date_time=ZIP_EPOCH)
@@ -81,12 +88,6 @@ def main() -> int:
         charm_path = FIXTURES_DIR / f"{CHARM_NAME}_{tag}.charm"
         charm_path.write_bytes(build_test_charm(CHARM_NAME, note))
         written.append(charm_path)
-
-        for arch in ARCHITECTURES:
-            image = build_oci_image(f"{CHARM_NAME}-{tag}", arch=arch)
-            image_path = FIXTURES_DIR / f"{CHARM_NAME}-image-{tag}-{arch}.tar"
-            write_oci_archive(image, image_path)
-            written.append(image_path)
 
     for path in written:
         print(

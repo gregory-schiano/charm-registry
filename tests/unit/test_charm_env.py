@@ -42,6 +42,37 @@ def test_both_ingresses_set_all_three_urls():
     }
 
 
+def test_public_url_config_overrides_ingress_urls():
+    env = public_url_environment(
+        "https://registry.example.com",
+        "https://oci.example.com",
+        {
+            "public-api-url": "http://10.1.0.10:8080/",
+            "public-storage-url": "http://10.1.0.10:8080/artifacts/",
+            "public-registry-url": "http://10.1.0.10:5000/",
+        },
+    )
+
+    assert env == {
+        "CHARM_REGISTRY_PUBLIC_API_URL": "http://10.1.0.10:8080",
+        "CHARM_REGISTRY_PUBLIC_STORAGE_URL": "http://10.1.0.10:8080/artifacts",
+        "CHARM_REGISTRY_PUBLIC_REGISTRY_URL": "http://10.1.0.10:5000",
+    }
+
+
+def test_public_storage_url_defaults_to_public_api_override():
+    env = public_url_environment(
+        "https://registry.example.com",
+        None,
+        {"public-api-url": "http://10.1.0.10:8080"},
+    )
+
+    assert env == {
+        "CHARM_REGISTRY_PUBLIC_API_URL": "http://10.1.0.10:8080",
+        "CHARM_REGISTRY_PUBLIC_STORAGE_URL": "http://10.1.0.10:8080",
+    }
+
+
 def test_size_limits_map_to_registry_environment():
     env = size_limit_environment(
         {

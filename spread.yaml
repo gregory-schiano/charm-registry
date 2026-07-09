@@ -17,6 +17,11 @@ backends:
 
 path: /home/test/charm-registry
 
+# Backend/project prepare (opcli bootstrap + concierge provisioning Canonical
+# K8s and Juju) regularly needs more than spread's 15m default kill-timeout.
+warn-timeout: 15m
+kill-timeout: 40m
+
 environment:
   PROJECT_DIR: /home/test/charm-registry
   SNAP_NAME: spellbook
@@ -62,6 +67,10 @@ integration-suites:
     summary: "charm-registry charm integration tests"
     working-dir: charm
     backends: [integration-test]
+    # The Juju deploy alone budgets up to 30m (jubilant wait timeout); spread's
+    # default kill-timeout is 15m, which kills the suite mid-deploy.
+    warn-timeout: 30m
+    kill-timeout: 60m
     environment:
       TOX_ENV: integration
     prepare: |
@@ -72,15 +81,21 @@ integration-suites:
     summary: "charm-registry Terraform deployment tests"
     working-dir: charm
     backends: [integration-test]
-    warn-timeout: 10m
+    # Stack apply waits up to 30m and the lifecycle test adds publish + consumer
+    # deploy/refresh waits (15m + 10m); 10m would kill the suite mid-run.
+    warn-timeout: 30m
     kill-timeout: 75m
     environment:
       TOX_ENV: integration
     prepare: |
+      if ! command -v skopeo >/dev/null 2>&1; then
+        apt-get update
+        apt-get install -y skopeo
+      fi
       "${PROJECT_DIR}/tests/integration/scripts/setup-snap-registry.sh"
       "${PROJECT_DIR}/tests/integration/scripts/publish-test-charms.sh"
       cd "${PROJECT_DIR}"
-      go build -o "${PROJECT_DIR}/.bin/functional-test" ./cmd/functional-test
+      go build -buildvcs=false -o "${PROJECT_DIR}/.bin/functional-test" ./cmd/functional-test
       chown -R ubuntu:ubuntu "${PROJECT_DIR}/.bin"
       # Kubernetes must be ready before pytest applies the Terraform module;
       # kubectl is configured for the ubuntu user by the backend provisioning.
@@ -88,14 +103,35 @@ integration-suites:
     restore: |
       rm -f /etc/profile.d/zz-charm-registry-registry.sh
       # Undo the consumer-model host plumbing added by the lifecycle test
-      # (tests/integration/scripts/setup-consumer-dns-cert.sh).
+      # (tests/integration/scripts/setup-consumer-oci-registry.sh).
       sed -i '\|# charm-registry-tf-itest|d' /etc/hosts
+      rm -f /etc/containers/registries.conf.d/charm-registry-tf-itest.conf
+      if [ -f /var/lib/charm-registry-tf-itest-containerd-hosts ]; then
+        while read -r host_dir; do
+          [ -n "${host_dir}" ] && rm -rf "${host_dir}"
+        done < /var/lib/charm-registry-tf-itest-containerd-hosts
+        rm -f /var/lib/charm-registry-tf-itest-containerd-hosts
+      fi
       if [ -f /usr/local/share/ca-certificates/charm-registry-tf-itest.crt ]; then
         rm -f /usr/local/share/ca-certificates/charm-registry-tf-itest.crt
         update-ca-certificates --fresh >/dev/null || true
       fi
+      rm -f /usr/local/share/ca-certificates/charm-registry-oci-*.crt
+      update-ca-certificates --fresh >/dev/null || true
       for root in /etc/containerd/certs.d \
+          /etc/containerd/hosts.d \
           /ck8s/k8s-containerd/etc/containerd/certs.d \
-          /var/snap/k8s/common/etc/containerd/certs.d; do
+          /ck8s/k8s-containerd/etc/containerd/hosts.d \
+          /var/snap/k8s/common/etc/containerd/certs.d \
+          /var/snap/k8s/common/etc/containerd/hosts.d; do
         rm -rf "${root}/oci.charm-registry-tf.test"
       done
+      if systemctl is-active --quiet containerd 2>/dev/null; then
+        systemctl restart containerd
+      fi
+      if systemctl is-active --quiet snap.k8s.containerd.service 2>/dev/null; then
+        systemctl restart snap.k8s.containerd.service
+      fi
+      if snap services k8s.containerd >/dev/null 2>&1; then
+        snap restart k8s.containerd || true
+      fi

@@ -45,6 +45,22 @@ config:
         URL used by the registry process to reach its embedded OCI listener.
         Plain HTTP by default: the workload serves without TLS and relies on
         the ingress relations for TLS termination.
+    public-api-url:
+      type: string
+      description: |
+        Optional externally reachable API URL advertised to clients. When unset,
+        the charm uses the API ingress relation URL.
+    public-storage-url:
+      type: string
+      description: |
+        Optional externally reachable artifact download URL advertised to
+        clients. When unset, the charm uses public-api-url, then the API ingress
+        relation URL.
+    public-registry-url:
+      type: string
+      description: |
+        Optional externally reachable OCI registry URL advertised to clients.
+        When unset, the charm uses the OCI ingress relation URL.
     oci-s3-prefix:
       type: string
       default: oci

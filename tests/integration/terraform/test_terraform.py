@@ -24,11 +24,11 @@ import os
 import pathlib
 import shlex
 import subprocess
+import zipfile
 
 import jubilant
 import pytest
 
-from oci_image import machine_arch
 from tflib import Terraform
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -43,6 +43,7 @@ OCI_HOSTNAME = "oci.charm-registry-tf.test"
 APP_SECRET_KEY = "integration-test-secret"
 DEV_TOKEN = "dev:admin:admin"
 LIFECYCLE_CHARM = "itest-lifecycle"
+LIFECYCLE_IMAGE_SOURCE = "docker://busybox:1.36.1"
 
 
 def run(
@@ -114,7 +115,7 @@ def stack_tfvars(app_image: str, registry_api_url: str) -> dict:
 
 @pytest.fixture(scope="module")
 def terraform_stack(resource_images: dict[str, str]) -> dict:
-    """Apply the Terraform module once for this module's tests."""
+    """Apply Terraform once and leave resources for the ephemeral VM to discard."""
     app_image = resource_images["app-image"]
     if app_image.endswith(".rock"):
         raise RuntimeError(
@@ -131,32 +132,28 @@ def terraform_stack(resource_images: dict[str, str]) -> dict:
 
     tf = Terraform(TERRAFORM_DIR)
     tf.clean()
-    try:
-        tf.write_vars(stack_tfvars(app_image, registry_api_url))
-        tf.init()
-        tf.validate()
-        tf.apply()
+    tf.write_vars(stack_tfvars(app_image, registry_api_url))
+    tf.init()
+    tf.validate()
+    tf.apply()
 
-        juju = jubilant.Juju(model=MODEL_NAME)
-        juju.wait(
-            lambda status: jubilant.all_active(status, "charm-registry"),
-            error=jubilant.any_error,
-            timeout=30 * 60,
-            delay=10,
-        )
-        print(juju.cli("status", "--relations", "--color=false"))
+    juju = jubilant.Juju(model=MODEL_NAME)
+    juju.wait(
+        lambda status: jubilant.all_active(status, "charm-registry"),
+        error=jubilant.any_error,
+        timeout=30 * 60,
+        delay=10,
+    )
+    print(juju.cli("status", "--relations", "--color=false"))
 
-        status = juju.status()
-        address = status.apps["charm-registry"].units["charm-registry/0"].address
-        yield {
-            "juju": juju,
-            "address": address,
-            "api_url": f"http://{address}:8080",
-            "oci_url": f"http://{address}:5000",
-        }
-    finally:
-        _destroy_consumer_model()
-        tf.clean()
+    status = juju.status()
+    address = status.apps["charm-registry"].units["charm-registry/0"].address
+    yield {
+        "juju": juju,
+        "address": address,
+        "api_url": f"http://{address}:8080",
+        "oci_url": f"http://{address}:5000",
+    }
 
 
 def test_terraform_stack_uses_private_charm_registry(terraform_stack: dict) -> None:
@@ -177,49 +174,21 @@ def test_terraform_stack_uses_private_charm_registry(terraform_stack: dict) -> N
 # ---------------------------------------------------------------------------
 
 
-def _gateway_lb_ip() -> str:
-    """Return the load-balancer IP assigned to the deployment's gateway."""
-    services = json.loads(
-        output("kubectl", "get", "service", "--all-namespaces", "-o", "json")
+def _configure_ip_public_urls(juju: jubilant.Juju, api_url: str, oci_url: str) -> None:
+    """Make the registry advertise pod-IP URLs reachable without DNS."""
+    juju.cli(
+        "config",
+        "charm-registry",
+        f"public-api-url={api_url}",
+        f"public-storage-url={api_url}",
+        f"public-registry-url={oci_url}",
     )
-    candidates: list[tuple[str, str]] = []
-    for item in services.get("items", []):
-        if item.get("spec", {}).get("type") != "LoadBalancer":
-            continue
-        for ingress in (
-            item.get("status", {}).get("loadBalancer", {}).get("ingress", [])
-        ):
-            ip = ingress.get("ip")
-            if ip:
-                candidates.append((item["metadata"]["namespace"], ip))
-    for namespace, ip in candidates:
-        if namespace == MODEL_NAME:
-            return ip
-    if candidates:
-        return candidates[0][1]
-    raise RuntimeError("no LoadBalancer service with an assigned IP found")
-
-
-def _deployment_ca(juju: jubilant.Juju, path: pathlib.Path) -> pathlib.Path:
-    """Fetch the deployment's self-signed CA certificate to *path*."""
-    task = juju.run("self-signed-certificates/0", "get-ca-certificate", wait=60)
-    task.raise_on_failure()
-    ca = task.results["ca-certificate"]
-    path.write_text(ca)
-    return path
-
-
-def _api_ingress_url(juju: jubilant.Juju) -> str:
-    """Return the public API URL the registry advertises via its ingress."""
-    unit = json.loads(juju.cli("show-unit", "charm-registry/0", "--format", "json"))
-    for relation in next(iter(unit.values())).get("relation-info", []):
-        if relation.get("endpoint") != "ingress":
-            continue
-        raw = relation.get("application-data", {}).get("ingress")
-        if not raw:
-            continue
-        return json.loads(raw)["url"].rstrip("/")
-    raise RuntimeError("could not determine the API ingress URL from relation data")
+    juju.wait(
+        lambda status: jubilant.all_active(status, "charm-registry"),
+        error=jubilant.any_error,
+        timeout=5 * 60,
+        delay=10,
+    )
 
 
 def _max_revision(payload: object) -> int:
@@ -269,25 +238,62 @@ def _latest_resource_revision(
     )
 
 
-def _charmcraft_upload_project() -> pathlib.Path:
-    """Return a minimal supported charmcraft project for upload commands."""
+def _charmcraft_yaml_from_charm(charm_file: pathlib.Path) -> str:
+    """Build a charmcraft.yaml upload context from the charm archive metadata."""
+    with zipfile.ZipFile(charm_file) as charm_zip:
+        names = set(charm_zip.namelist())
+        if "charmcraft.yaml" in names:
+            return charm_zip.read("charmcraft.yaml").decode()
+
+        import yaml
+
+        metadata = yaml.safe_load(charm_zip.read("metadata.yaml")) or {}
+        manifest = yaml.safe_load(charm_zip.read("manifest.yaml")) or {}
+
+    bases = manifest.get("bases") or []
+    if not bases:
+        raise RuntimeError(f"{charm_file} does not contain manifest bases")
+
+    base = bases[0]
+    architectures = {
+        architecture
+        for base_entry in bases
+        for architecture in base_entry.get("architectures", [])
+    }
+    if not architectures:
+        raise RuntimeError(f"{charm_file} does not contain manifest architectures")
+
+    charmcraft_yaml = {"name": metadata.pop("name"), "type": "charm"}
+    charmcraft_yaml.update(metadata)
+    charmcraft_yaml["base"] = f"{base['name']}@{base['channel']}"
+    charmcraft_yaml["platforms"] = {
+        architecture: {} for architecture in sorted(architectures)
+    }
+    charmcraft_yaml["parts"] = {"charm": {"plugin": "dump", "source": "."}}
+    return yaml.safe_dump(charmcraft_yaml, sort_keys=False)
+
+
+def _charmcraft_upload_project(charm_file: pathlib.Path) -> pathlib.Path:
+    """Return a charmcraft project matching the charm used by upload commands."""
     CHARMCRAFT_UPLOAD_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     (CHARMCRAFT_UPLOAD_PROJECT_DIR / "charmcraft.yaml").write_text(
-        f"""
-name: {LIFECYCLE_CHARM}
-type: charm
-base: ubuntu@22.04
-platforms:
-  amd64:
-summary: Integration lifecycle charm
-description: Minimal project used only as charmcraft upload context.
-resources:
-  app-image:
-    type: oci-image
-    description: Test application image.
-""".lstrip()
+        _charmcraft_yaml_from_charm(charm_file)
     )
     return CHARMCRAFT_UPLOAD_PROJECT_DIR
+
+
+def _lifecycle_image_archive(tag: str) -> pathlib.Path:
+    """Materialize a tiny public image as a local OCI archive for Charmcraft."""
+    image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-image-{tag}.tar"
+    image_file.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        "skopeo",
+        "copy",
+        "--insecure-policy",
+        LIFECYCLE_IMAGE_SOURCE,
+        f"oci-archive:{image_file}:{tag}",
+    )
+    return image_file
 
 
 def _publish_lifecycle_revision(
@@ -295,16 +301,16 @@ def _publish_lifecycle_revision(
 ) -> tuple[int, int]:
     """Publish one charm + image revision with charmcraft; return revisions.
 
-    The charm and image are committed fixtures; regenerate them with
-    ``tests/integration/scripts/generate-test-fixtures.py``.
+    The charm is a committed fixture; the image archive is materialized from a
+    tiny public image at runtime so Charmcraft owns the upload path.
     """
-    charmcraft_cwd = _charmcraft_upload_project()
     charm_file = FIXTURES_DIR / f"{LIFECYCLE_CHARM}_{tag}.charm"
-    image_file = FIXTURES_DIR / f"{LIFECYCLE_CHARM}-image-{tag}-{machine_arch()}.tar"
-    assert charm_file.is_file() and image_file.is_file(), (
-        f"missing committed fixtures for {tag!r}; run "
+    assert charm_file.is_file(), (
+        f"missing committed charm fixture for {tag!r}; run "
         "tests/integration/scripts/generate-test-fixtures.py"
     )
+    image_file = _lifecycle_image_archive(tag)
+    charmcraft_cwd = _charmcraft_upload_project(charm_file)
 
     run(
         "charmcraft",
@@ -359,11 +365,32 @@ def _consumer_at_revision(revision: int):
     return ready
 
 
-def _destroy_consumer_model() -> None:
-    try:
-        jubilant.Juju().destroy_model(CONSUMER_MODEL_NAME, force=True)
-    except jubilant.CLIError as exc:
-        print(f"consumer model teardown skipped: {exc.stderr or exc}")
+def _print_registry_workload_logs() -> None:
+    """Dump the deployed registry's workload logs and effective pebble plan."""
+    for command in (
+        ("kubectl", "logs", "-n", MODEL_NAME, "charm-registry-0", "-c", "app", "--tail=400"),
+        (
+            "kubectl", "exec", "-n", MODEL_NAME, "charm-registry-0", "-c", "app", "--",
+            "/charm/bin/pebble", "plan",
+        ),
+    ):
+        try:
+            print(output(*command))
+        except subprocess.CalledProcessError as exc:
+            print(f"{' '.join(command)} failed: {exc}")
+
+
+def _print_consumer_k8s_diagnostics() -> None:
+    namespace = CONSUMER_MODEL_NAME
+    for command in (
+        ("kubectl", "get", "pods", "-n", namespace, "-o", "wide"),
+        ("kubectl", "describe", "pods", "-n", namespace),
+        ("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp"),
+    ):
+        try:
+            print(output(*command))
+        except subprocess.CalledProcessError as exc:
+            print(f"{' '.join(command)} failed: {exc}")
 
 
 def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> None:
@@ -371,35 +398,16 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
     stack = terraform_stack
     stack_juju: jubilant.Juju = stack["juju"]
 
-    # Host plumbing: hostname resolution to the gateway (CoreDNS falls back to
-    # the host resolver, so the Juju controller resolves these too) and CA
-    # trust for charmcraft's HTTPS image push and containerd's image pulls.
-    gateway_ip = _gateway_lb_ip()
-    ca_file = _deployment_ca(stack_juju, ROOT / ".bin" / "charm-registry-tf-ca.crt")
-    run(
-        "sudo",
-        str(SCRIPTS_DIR / "setup-consumer-dns-cert.sh"),
-        API_HOSTNAME,
-        OCI_HOSTNAME,
-        gateway_ip,
-        str(ca_file),
-    )
+    _configure_ip_public_urls(stack_juju, stack["api_url"], stack["oci_url"])
+    run("sudo", str(SCRIPTS_DIR / "setup-consumer-oci-registry.sh"), stack["oci_url"])
 
     charmcraft_env = {
         "CHARMCRAFT_STORE_API_URL": stack["api_url"],
         "CHARMCRAFT_UPLOAD_URL": stack["api_url"],
-        "CHARMCRAFT_REGISTRY_URL": f"https://{OCI_HOSTNAME}",
+        "CHARMCRAFT_REGISTRY_URL": stack["oci_url"],
         "CHARMCRAFT_AUTH": base64.b64encode(DEV_TOKEN.encode()).decode(),
         "CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1",
     }
-
-    api_public_url = _api_ingress_url(stack_juju)
-    if not api_public_url.startswith("http://"):
-        pytest.fail(
-            f"The registry advertises {api_public_url!r}; the Juju controller"
-            " cannot trust the deployment's self-signed CA for charm downloads,"
-            " so the consumer flow requires the API ingress to serve plain HTTP."
-        )
 
     consumer = jubilant.Juju()
     try:
@@ -410,7 +418,9 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
             "charmcraft",
             "register",
             LIFECYCLE_CHARM,
-            cwd=_charmcraft_upload_project(),
+            cwd=_charmcraft_upload_project(
+                FIXTURES_DIR / f"{LIFECYCLE_CHARM}_r1.charm"
+            ),
             env=charmcraft_env,
         )
         revision_1, resource_1 = _publish_lifecycle_revision(charmcraft_env, "r1")
@@ -421,7 +431,7 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
 
         consumer.add_model(
             CONSUMER_MODEL_NAME,
-            config={"charmhub-url": api_public_url, "test-mode": True},
+            config={"charmhub-url": stack["api_url"], "test-mode": True},
         )
         consumer.deploy(
             LIFECYCLE_CHARM,
@@ -449,4 +459,5 @@ def test_charm_lifecycle_through_deployed_registry(terraform_stack: dict) -> Non
                 print(consumer.cli("status", "--color=false"))
             except jubilant.CLIError:
                 pass
-        _destroy_consumer_model()
+            _print_consumer_k8s_diagnostics()
+        _print_registry_workload_logs()

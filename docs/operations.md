@@ -175,7 +175,7 @@ failed with a transient error (timeouts, connection resets). Fails fast when a
 rule hits a permanent error.
 
 ```bash
-.bin/charm-registryctl sync wait --timeout 30m
+.bin/charm-registryctl sync wait --timeout 10m
 ```
 
 ### Unregistering a charm

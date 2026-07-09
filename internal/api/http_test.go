@@ -887,12 +887,21 @@ func TestResourceEndpoints(t *testing.T) {
 		map[string]any{"upload-id": resUploadID, "type": "file"}, authHeader)
 	assert.Equal(t, http.StatusCreated, resp.Code)
 
-	// List resource revisions
+	// List resource revisions (charmcraft/craft-store contract: top-level
+	// sha256/sha3-384/sha384/sha512 keys must all be present, bases a list)
 	resp = doRequest(t, handler, "GET", "/v1/charm/res-charm/resources/config/revisions", nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	revisions := body["revisions"].([]any)
 	assert.Len(t, revisions, 1)
+	craftRevision := revisions[0].(map[string]any)
+	for _, key := range []string{"sha256", "sha3-384", "sha384", "sha512"} {
+		_, present := craftRevision[key]
+		assert.True(t, present, "missing charmcraft hash key %q", key)
+	}
+	assert.NotEmpty(t, craftRevision["sha256"])
+	_, isList := craftRevision["bases"].([]any)
+	assert.True(t, isList, "bases must serialize as a JSON list")
 
 	// Charmhub-compatible resource revisions path used by Juju.
 	resp = doRequest(t, handler, "GET", "/v2/charms/resources/res-charm/config/revisions", nil, authHeader)
@@ -900,6 +909,11 @@ func TestResourceEndpoints(t *testing.T) {
 	body = decodeJSON(t, resp)
 	revisions = body["revisions"].([]any)
 	assert.Len(t, revisions, 1)
+	compatibleRevision := revisions[0].(map[string]any)
+	assert.Equal(t, "config", compatibleRevision["name"])
+	assert.Equal(t, "file", compatibleRevision["type"])
+	assert.NotEmpty(t, compatibleRevision["sha256"])
+	assert.NotZero(t, compatibleRevision["size"])
 
 	// Update resource revision metadata
 	resp = doRequest(t, handler, "PATCH", "/v1/charm/res-charm/resources/config/revisions",

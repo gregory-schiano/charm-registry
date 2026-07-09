@@ -32,14 +32,27 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 	}
 	rows := make([]resourceRevisionListItemResponse, 0, len(revisions))
 	for _, revision := range revisions {
+		bases := revision.Bases
+		if bases == nil {
+			// craft-store's CharmResourceRevision rejects a null bases list.
+			bases = []core.Base{}
+		}
 		rows = append(rows, resourceRevisionListItemResponse{
 			Architectures:   revision.Architectures,
-			Bases:           revision.Bases,
+			Bases:           bases,
 			CreatedAt:       revision.CreatedAt,
+			Description:     revision.Description,
 			Download:        revision.Download,
 			Filename:        revision.Filename,
+			Name:            revision.Name,
 			PackageRevision: revision.PackageRevision,
 			Revision:        revision.Revision,
+			SHA256:          revision.SHA256,
+			SHA3384:         revision.SHA3384,
+			SHA384:          revision.SHA384,
+			SHA512:          revision.SHA512,
+			Size:            revision.Size,
+			Type:            revision.Type,
 		})
 	}
 	writeJSON(w, http.StatusOK, resourceRevisionListResponse{Revisions: rows})

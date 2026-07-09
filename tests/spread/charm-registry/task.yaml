@@ -21,7 +21,7 @@ prepare: |
 
   # Build the functional-test binary from source.
   cd "$PROJECT_DIR"
-  go build -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
+  go build -buildvcs=false -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
 
   # Use a pre-built snap from charm-ci artifacts, or pack locally as a fallback.
   SNAP_PATH="$(find_snap)"

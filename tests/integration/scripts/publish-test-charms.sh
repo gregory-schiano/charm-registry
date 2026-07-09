@@ -96,7 +96,7 @@ charmcraft upload "$CHARM_FILE" --name "$CHARM_NAME" --release "$CHANNEL"
 echo "Published $CHARM_NAME from $CHARM_FILE to $CHANNEL"
 
 cd "$PROJECT_DIR"
-go build -o "$PROJECT_DIR/.bin/charm-registryctl" ./cmd/charm-registryctl
+go build -buildvcs=false -o "$PROJECT_DIR/.bin/charm-registryctl" ./cmd/charm-registryctl
 
 export CHARM_REGISTRY_URL="$REGISTRY_API_URL"
 export CHARM_REGISTRY_TOKEN="$REGISTRY_TOKEN"
@@ -106,4 +106,6 @@ for dependency in "${DEPENDENCIES[@]}"; do
     "$PROJECT_DIR/.bin/charm-registryctl" sync add "$name" --track "$track"
     "$PROJECT_DIR/.bin/charm-registryctl" sync run "$name"
 done
+# Mirroring four charms (plus their OCI resources) from Charmhub is
+# network-bound; 10m has proven too tight on slow store days.
 "$PROJECT_DIR/.bin/charm-registryctl" sync wait --timeout 30m

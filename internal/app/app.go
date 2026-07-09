@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/gschiano/charm-registry/internal/api"
@@ -40,6 +41,13 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		}
 		return errors.Join(errs...)
 	}
+	// With auto backends a missing DATABASE_URL or S3 endpoint silently
+	// selects the embedded fallback, so record what was actually chosen.
+	slog.InfoContext(ctx, "resolved backends",
+		"database", cfg.ResolvedDatabaseBackend(),
+		"storage", cfg.ResolvedStorageBackend(),
+		"oci_storage", cfg.ResolvedOCIStorageBackend(),
+	)
 	storage, err := newBlobStore(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create blob store: %w", err)
