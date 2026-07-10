@@ -11,8 +11,9 @@ consumer model:
   arm64. Each archive also embeds the `charmcraft.yaml` used as the matching
   upload context for `charmcraft upload`.
 
-The lifecycle test materializes a tiny public image as a local `oci-archive`
-at runtime, then uploads it through `charmcraft upload-resource`.
+The spread prepare hook materializes a tiny public image as local
+`oci-archive` files under `.bin/`, then the lifecycle test uploads them through
+`charmcraft upload-resource`.
 
 Do not edit these files by hand. Regenerate them with:
 

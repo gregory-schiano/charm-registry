@@ -92,6 +92,7 @@ integration-suites:
         apt-get update
         apt-get install -y skopeo
       fi
+      "${PROJECT_DIR}/tests/integration/scripts/prepare-lifecycle-images.sh"
       "${PROJECT_DIR}/tests/integration/scripts/setup-snap-registry.sh"
       "${PROJECT_DIR}/tests/integration/scripts/publish-test-charms.sh"
       cd "${PROJECT_DIR}"

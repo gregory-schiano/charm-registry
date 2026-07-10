@@ -24,7 +24,6 @@ import os
 import pathlib
 import shlex
 import subprocess
-import time
 import zipfile
 
 import jubilant
@@ -44,9 +43,6 @@ OCI_HOSTNAME = "oci.charm-registry-tf.test"
 APP_SECRET_KEY = "integration-test-secret"
 DEV_TOKEN = "dev:admin:admin"
 LIFECYCLE_CHARM = "itest-lifecycle"
-# Docker's official-image mirror on public ECR: docker.io anonymous pulls are
-# rate-limited per IP, which shared CI runners regularly exhaust.
-LIFECYCLE_IMAGE_SOURCE = "docker://public.ecr.aws/docker/library/busybox:1.36.1"
 
 
 def run(
@@ -285,67 +281,15 @@ def _charmcraft_upload_project(charm_file: pathlib.Path) -> pathlib.Path:
     return CHARMCRAFT_UPLOAD_PROJECT_DIR
 
 
-def _print_image_pull_diagnostics() -> None:
-    """Dump the environment context that shapes a skopeo registry pull."""
-    registry_host = LIFECYCLE_IMAGE_SOURCE.removeprefix("docker://").split("/", 1)[0]
-    proxies = {
-        key: value
-        for key, value in os.environ.items()
-        if "proxy" in key.lower() or key in ("REGISTRY_API_URL", "REGISTRY_OCI_URL")
-    }
-    print(f"proxy-related environment: {proxies or '(none)'}")
-    for command in (
-        ("id",),
-        ("skopeo", "--version"),
-        ("getent", "hosts", registry_host),
-        ("curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}\\n", "--max-time", "15",
-         f"https://{registry_host}/v2/"),
-        ("ls", "-la", str(ROOT / ".bin")),
-        ("df", "-h", "/var/tmp", str(ROOT)),
-        ("cat", "/etc/containers/registries.conf"),
-        ("ls", "-la", "/etc/containers/registries.conf.d/"),
-    ):
-        try:
-            run(*command)
-        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-            print(f"{' '.join(command)} failed: {exc}")
-
-
 def _lifecycle_image_archive(tag: str) -> pathlib.Path:
-    """Materialize a tiny public image as a local OCI archive for Charmcraft."""
+    """Return the OCI archive prepared by the spread suite."""
     image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-image-{tag}.tar"
-    image_file.parent.mkdir(parents=True, exist_ok=True)
-    if image_file.is_file():
-        return image_file
-    command = [
-        "skopeo",
-        "--debug",
-        "copy",
-        "--insecure-policy",
-        "--retry-times",
-        "3",
-        LIFECYCLE_IMAGE_SOURCE,
-        f"oci-archive:{image_file}:{tag}",
-    ]
-    attempts = 3
-    for attempt in range(1, attempts + 1):
-        print("+", " ".join(shlex.quote(part) for part in command))
-        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
-        if result.returncode == 0:
-            return image_file
-        print(
-            f"skopeo pull attempt {attempt}/{attempts} failed "
-            f"(exit {result.returncode})\n"
-            f"--- skopeo stdout ---\n{result.stdout}"
-            f"--- skopeo stderr ---\n{result.stderr}"
+    if not image_file.is_file():
+        raise RuntimeError(
+            f"missing lifecycle image archive {image_file}; "
+            "the spread prepare hook must run "
+            "tests/integration/scripts/prepare-lifecycle-images.sh before pytest"
         )
-        image_file.unlink(missing_ok=True)
-        if attempt == attempts:
-            _print_image_pull_diagnostics()
-            raise subprocess.CalledProcessError(
-                result.returncode, command, result.stdout, result.stderr
-            )
-        time.sleep(10 * attempt)
     return image_file
 
 
@@ -354,8 +298,8 @@ def _publish_lifecycle_revision(
 ) -> tuple[int, int]:
     """Publish one charm + image revision with charmcraft; return revisions.
 
-    The charm is a committed fixture; the image archive is materialized from a
-    tiny public image at runtime so Charmcraft owns the upload path.
+    The charm is a committed fixture; the image archive is prepared by the
+    spread suite so Charmcraft owns only the upload path during pytest.
     """
     charm_file = FIXTURES_DIR / f"{LIFECYCLE_CHARM}_{tag}.charm"
     assert charm_file.is_file(), (
