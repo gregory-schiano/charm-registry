@@ -285,30 +285,67 @@ def _charmcraft_upload_project(charm_file: pathlib.Path) -> pathlib.Path:
     return CHARMCRAFT_UPLOAD_PROJECT_DIR
 
 
+def _print_image_pull_diagnostics() -> None:
+    """Dump the environment context that shapes a skopeo registry pull."""
+    registry_host = LIFECYCLE_IMAGE_SOURCE.removeprefix("docker://").split("/", 1)[0]
+    proxies = {
+        key: value
+        for key, value in os.environ.items()
+        if "proxy" in key.lower() or key in ("REGISTRY_API_URL", "REGISTRY_OCI_URL")
+    }
+    print(f"proxy-related environment: {proxies or '(none)'}")
+    for command in (
+        ("id",),
+        ("skopeo", "--version"),
+        ("getent", "hosts", registry_host),
+        ("curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}\\n", "--max-time", "15",
+         f"https://{registry_host}/v2/"),
+        ("ls", "-la", str(ROOT / ".bin")),
+        ("df", "-h", "/var/tmp", str(ROOT)),
+        ("cat", "/etc/containers/registries.conf"),
+        ("ls", "-la", "/etc/containers/registries.conf.d/"),
+    ):
+        try:
+            run(*command)
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            print(f"{' '.join(command)} failed: {exc}")
+
+
 def _lifecycle_image_archive(tag: str) -> pathlib.Path:
     """Materialize a tiny public image as a local OCI archive for Charmcraft."""
     image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-image-{tag}.tar"
     image_file.parent.mkdir(parents=True, exist_ok=True)
     if image_file.is_file():
         return image_file
+    command = [
+        "skopeo",
+        "--debug",
+        "copy",
+        "--insecure-policy",
+        "--retry-times",
+        "3",
+        LIFECYCLE_IMAGE_SOURCE,
+        f"oci-archive:{image_file}:{tag}",
+    ]
     attempts = 3
     for attempt in range(1, attempts + 1):
-        try:
-            run(
-                "skopeo",
-                "copy",
-                "--insecure-policy",
-                "--retry-times",
-                "3",
-                LIFECYCLE_IMAGE_SOURCE,
-                f"oci-archive:{image_file}:{tag}",
-            )
+        print("+", " ".join(shlex.quote(part) for part in command))
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+        if result.returncode == 0:
             return image_file
-        except subprocess.CalledProcessError:
-            image_file.unlink(missing_ok=True)
-            if attempt == attempts:
-                raise
-            time.sleep(10 * attempt)
+        print(
+            f"skopeo pull attempt {attempt}/{attempts} failed "
+            f"(exit {result.returncode})\n"
+            f"--- skopeo stdout ---\n{result.stdout}"
+            f"--- skopeo stderr ---\n{result.stderr}"
+        )
+        image_file.unlink(missing_ok=True)
+        if attempt == attempts:
+            _print_image_pull_diagnostics()
+            raise subprocess.CalledProcessError(
+                result.returncode, command, result.stdout, result.stderr
+            )
+        time.sleep(10 * attempt)
     return image_file
 
 
