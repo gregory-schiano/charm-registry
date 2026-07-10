@@ -296,9 +296,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         yield from super()._missing_required_database_integrations(requires, charm_state)
         databases = charm_state.integrations.databases_relation_data
         for name in self._database_requirers:
-            if requires[name].optional and self._related_but_not_ready(
-                name, databases.get(name)
-            ):
+            if requires[name].optional and self._related_but_not_ready(name, databases.get(name)):
                 yield name
 
     def _missing_required_storage_integrations(
@@ -311,9 +309,7 @@ class CharmRegistryCharm(paas_charm.go.Charm):
         if self._s3 and self._related_but_not_ready("s3", charm_state.integrations.s3):
             yield "s3"
         if self._oci_s3 and not self._oci_s3.to_relation_data():
-            if not requires["oci-s3"].optional or self._related_but_not_ready(
-                "oci-s3", None
-            ):
+            if not requires["oci-s3"].optional or self._related_but_not_ready("oci-s3", None):
                 yield "oci-s3"
 
     def _missing_required_other_integrations(

@@ -68,3 +68,6 @@ crash.*.log
 
 # Functional test binary
 functional-test
+
+# charm-ci
+artifacts.build.yaml

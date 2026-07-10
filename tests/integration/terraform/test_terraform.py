@@ -24,6 +24,7 @@ import os
 import pathlib
 import shlex
 import subprocess
+import time
 import zipfile
 
 import jubilant
@@ -43,7 +44,9 @@ OCI_HOSTNAME = "oci.charm-registry-tf.test"
 APP_SECRET_KEY = "integration-test-secret"
 DEV_TOKEN = "dev:admin:admin"
 LIFECYCLE_CHARM = "itest-lifecycle"
-LIFECYCLE_IMAGE_SOURCE = "docker://busybox:1.36.1"
+# Docker's official-image mirror on public ECR: docker.io anonymous pulls are
+# rate-limited per IP, which shared CI runners regularly exhaust.
+LIFECYCLE_IMAGE_SOURCE = "docker://public.ecr.aws/docker/library/busybox:1.36.1"
 
 
 def run(
@@ -286,13 +289,26 @@ def _lifecycle_image_archive(tag: str) -> pathlib.Path:
     """Materialize a tiny public image as a local OCI archive for Charmcraft."""
     image_file = ROOT / ".bin" / f"{LIFECYCLE_CHARM}-image-{tag}.tar"
     image_file.parent.mkdir(parents=True, exist_ok=True)
-    run(
-        "skopeo",
-        "copy",
-        "--insecure-policy",
-        LIFECYCLE_IMAGE_SOURCE,
-        f"oci-archive:{image_file}:{tag}",
-    )
+    if image_file.is_file():
+        return image_file
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            run(
+                "skopeo",
+                "copy",
+                "--insecure-policy",
+                "--retry-times",
+                "3",
+                LIFECYCLE_IMAGE_SOURCE,
+                f"oci-archive:{image_file}:{tag}",
+            )
+            return image_file
+        except subprocess.CalledProcessError:
+            image_file.unlink(missing_ok=True)
+            if attempt == attempts:
+                raise
+            time.sleep(10 * attempt)
     return image_file
 
 

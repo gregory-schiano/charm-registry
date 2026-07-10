@@ -96,12 +96,12 @@ type resourceRevisionListItemResponse struct {
 	Revision        int           `json:"revision"`
 	// Hash keys follow the Charmhub charmcraft-facing API (craft-store's
 	// CharmResourceRevision requires all four keys to be present).
-	SHA256          string        `json:"sha256"`
-	SHA3384         string        `json:"sha3-384"`
-	SHA384          string        `json:"sha384"`
-	SHA512          string        `json:"sha512"`
-	Size            int64         `json:"size"`
-	Type            string        `json:"type"`
+	SHA256  string `json:"sha256"`
+	SHA3384 string `json:"sha3-384"`
+	SHA384  string `json:"sha384"`
+	SHA512  string `json:"sha512"`
+	Size    int64  `json:"size"`
+	Type    string `json:"type"`
 }
 
 type resourceRevisionListResponse struct {
