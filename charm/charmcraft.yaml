@@ -1,0 +1,170 @@
+name: charm-registry
+summary: Private charm registry for Juju and charmcraft workflows
+description: |
+  Go-based private charm registry with Charmhub-compatible APIs,
+  PostgreSQL metadata storage, S3-backed artifact storage, and an
+  embedded OCI registry for charm resource workflows.
+
+type: charm
+base: ubuntu@26.04
+platforms:
+  amd64:
+  arm64:
+
+extensions:
+  - go-framework
+
+requires:
+  postgresql:
+    interface: postgresql_client
+    optional: true
+    limit: 1
+  s3:
+    interface: s3
+    optional: true
+    limit: 1
+  oci-s3:
+    interface: s3
+    optional: true
+    limit: 1
+  openid:
+    interface: oauth
+    optional: true
+    limit: 1
+  oci-ingress:
+    interface: ingress
+    optional: false
+    limit: 1
+
+config:
+  options:
+    oci-internal-url:
+      type: string
+      default: http://127.0.0.1:5000
+      description: |
+        URL used by the registry process to reach its embedded OCI listener.
+        Plain HTTP by default: the workload serves without TLS and relies on
+        the ingress relations for TLS termination.
+    public-api-url:
+      type: string
+      description: |
+        Optional externally reachable API URL advertised to clients. When unset,
+        the charm uses the API ingress relation URL.
+    public-storage-url:
+      type: string
+      description: |
+        Optional externally reachable artifact download URL advertised to
+        clients. When unset, the charm uses public-api-url, then the API ingress
+        relation URL.
+    public-registry-url:
+      type: string
+      description: |
+        Optional externally reachable OCI registry URL advertised to clients.
+        When unset, the charm uses the OCI ingress relation URL.
+    oci-s3-prefix:
+      type: string
+      default: oci
+      description: S3 key prefix used by the embedded OCI registry backend.
+    oci-secret-key:
+      type: secret
+      description: |
+        Juju user secret holding the key used to encrypt stored OCI registry
+        credentials. Create it with `juju add-secret <name> value=<key>` — the
+        secret must contain a single `value` field of at least 16 characters —
+        then `juju grant-secret <name> <app>` and set this option to the
+        resulting secret URI. When unset, the charm falls back to the
+        framework-managed application secret key.
+
+        IMPORTANT: this key is required to decrypt existing OCI credentials.
+        Back it up (see the get-oci-secret-key action) and never rotate it
+        without re-encrypting, otherwise stored credentials become unrecoverable.
+    oci-project-prefix:
+      type: string
+      default: charm
+      description: Prefix for registry-managed OCI project names.
+    oci-pull-robot-prefix:
+      type: string
+      default: pull
+      description: Prefix for generated OCI pull robot accounts.
+    oci-push-robot-prefix:
+      type: string
+      default: push
+      description: Prefix for generated OCI push robot accounts.
+    charmhub-url:
+      type: string
+      default: https://api.charmhub.io
+      description: Upstream Charmhub API base URL for synchronization.
+    charmhub-sync-interval:
+      type: string
+      default: 15m
+      description: Interval between background Charmhub synchronization scans.
+    charmhub-max-artifact-bytes:
+      type: string
+      default: 64MB
+      description: Maximum synchronized Charmhub artifact download size. Accepts bytes or KB, MB, GB suffixes.
+    max-archive-file-bytes:
+      type: string
+      default: 10MB
+      description: Maximum decompressed size for each charm archive entry. Accepts bytes or KB, MB, GB suffixes.
+    max-upload-bytes:
+      type: string
+      default: 64MB
+      description: Maximum upload request body size. Accepts bytes or KB, MB, GB suffixes.
+    rate-limit-ip-limit:
+      type: int
+      default: 30
+      description: Maximum requests per IP per window. Set to 0 to disable IP limiting.
+    rate-limit-ip-window:
+      type: string
+      default: 1m
+      description: Window for per-IP request rate limiting. Accepts durations such as 30s, 1m, or 2h.
+    rate-limit-token-limit:
+      type: int
+      default: 5
+      description: Maximum token issuances per identity per window. Set to 0 to disable token limiting.
+    rate-limit-token-window:
+      type: string
+      default: 1m
+      description: Window for token issuance rate limiting. Accepts durations such as 30s, 1m, or 2h.
+    trusted-proxies:
+      type: string
+      description: |
+        Comma-separated IPs/CIDRs of trusted reverse proxies, typically the
+        ingress/Traefik pod or service range. Only requests arriving from these
+        peers have their X-Forwarded-For / X-Real-IP / True-Client-IP headers
+        honoured for the client IP used in per-IP rate limiting and logging.
+
+        This charm always runs behind the required ingress relations, so the
+        workload only ever sees the ingress address as the transport peer. Leave
+        this empty and every client shares a single rate-limit bucket (the whole
+        deployment is limited as one IP); set it to the ingress source range to
+        restore correct per-client limiting.
+    enable-insecure-dev-auth:
+      type: boolean
+      default: false
+      description: |
+        Enable development-only bearer tokens when OIDC is not related.
+
+        WARNING: never enable this in production. It activates static
+        `dev:<user>:<role>` bearer tokens (for example `dev:admin:admin`) that
+        grant access with no identity provider, bypassing OIDC authentication
+        entirely.
+    admin-subjects:
+      type: string
+      description: Comma-separated OIDC subject values that should be registry admins.
+    admin-emails:
+      type: string
+      description: Comma-separated OIDC email values that should be registry admins.
+    admin-usernames:
+      type: string
+      description: Comma-separated OIDC username values that should be registry admins.
+
+actions:
+  get-oci-secret-key:
+    description: |
+      Output the OCI credential-encryption key currently in effect: the
+      configured oci-secret-key secret when set, otherwise the framework-managed
+      application secret key. Use this to back up the key — it is required to
+      decrypt stored OCI registry credentials and cannot be recovered if lost.
+      Runs on the leader unit only; the value is returned as an action result,
+      so restrict who may run actions on this application accordingly.

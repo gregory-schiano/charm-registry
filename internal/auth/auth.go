@@ -12,13 +12,22 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
+// TokenHashScheme identifies the hash algorithm used for a store token.
+const (
+	TokenHashSchemeSHA256 = "sha256"
+	TokenHashSchemeBcrypt = "bcrypt"
+)
+
 type TokenRepository interface {
 	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
+	FindStoreTokensByPrefix(ctx context.Context, prefix string) ([]core.StoreTokenCandidate, error)
+	UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error
 }
 
 type Claims struct {
@@ -86,12 +95,12 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 		return claims, nil, nil
 	}
 
-	tokenHash := HashToken(secret)
-	storeToken, account, err := a.tokenStore.FindStoreTokenByHash(r.Context(), tokenHash)
+	storeToken, account, err := a.findAndVerifyToken(r.Context(), secret)
 	if err == nil {
 		if storeToken.RevokedAt != nil || storeToken.ValidUntil.Before(time.Now().UTC()) {
 			return Claims{}, nil, fmt.Errorf("cannot authenticate: token revoked or expired")
 		}
+		a.upgradeTokenHash(r.Context(), storeToken, secret)
 		return Claims{
 			Subject:     account.Subject,
 			Username:    account.Username,
@@ -114,17 +123,17 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 
 	return Claims{
 		Subject: asString(rawClaims["sub"]),
-		Username: firstNonEmpty(
+		Username: core.FirstNonEmpty(
 			asString(rawClaims[a.config.OIDCUsernameClaim]),
 			asString(rawClaims["preferred_username"]),
 			asString(rawClaims["email"]),
 		),
-		DisplayName: firstNonEmpty(
+		DisplayName: core.FirstNonEmpty(
 			asString(rawClaims[a.config.OIDCDisplayNameClaim]),
 			asString(rawClaims["name"]),
 			asString(rawClaims["preferred_username"]),
 		),
-		Email: firstNonEmpty(asString(rawClaims[a.config.OIDCEmailClaim]), asString(rawClaims["email"])),
+		Email: core.FirstNonEmpty(asString(rawClaims[a.config.OIDCEmailClaim]), asString(rawClaims["email"])),
 	}, nil, nil
 }
 
@@ -132,14 +141,14 @@ func (a *Authenticator) Authenticate(r *http.Request) (Claims, *core.StoreToken,
 // associated claims and token record. It is used by the token-exchange handler
 // to validate a token extracted from the charmcraft "Macaroons" header.
 func (a *Authenticator) AuthenticateToken(ctx context.Context, raw string) (Claims, *core.StoreToken, error) {
-	tokenHash := HashToken(raw)
-	storeToken, account, err := a.tokenStore.FindStoreTokenByHash(ctx, tokenHash)
+	storeToken, account, err := a.findAndVerifyToken(ctx, raw)
 	if err != nil {
 		return Claims{}, nil, fmt.Errorf("cannot authenticate: token not found")
 	}
 	if storeToken.RevokedAt != nil || storeToken.ValidUntil.Before(time.Now().UTC()) {
 		return Claims{}, nil, fmt.Errorf("cannot authenticate: token revoked or expired")
 	}
+	a.upgradeTokenHash(ctx, storeToken, raw)
 	return Claims{
 		Subject:     account.Subject,
 		Username:    account.Username,
@@ -148,10 +157,83 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, raw string) (Clai
 	}, &storeToken, nil
 }
 
-// HashToken returns the stable SHA-256 hash for a raw store token.
+// upgradeTokenHash rehashes a legacy SHA-256 store token to bcrypt after a
+// successful verification. It is best-effort: if hashing fails the upgrade is
+// skipped so a failed rehash never overwrites the stored hash with an empty
+// value (which would brick the token).
+func (a *Authenticator) upgradeTokenHash(ctx context.Context, token core.StoreToken, raw string) {
+	if token.HashScheme != TokenHashSchemeSHA256 {
+		return
+	}
+	bcryptHash, err := bcryptHashToken(raw)
+	if err != nil {
+		return
+	}
+	_ = a.tokenStore.UpdateTokenHashScheme(ctx, token.SessionID, bcryptHash, TokenPrefixFromRaw(raw), TokenHashSchemeBcrypt)
+}
+
+// HashToken returns the SHA-256 hash for a raw store token.
+//
+// Deprecated: use bcryptHashToken for new tokens.
 func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
+}
+
+// bcryptHashToken returns the bcrypt hash for a raw store token.
+func bcryptHashToken(raw string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(raw), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("cannot hash token: %w", err)
+	}
+	return string(hash), nil
+}
+
+// TokenPrefixFromRaw extracts the first 8 characters of a raw token for indexed lookup.
+func TokenPrefixFromRaw(raw string) string {
+	if len(raw) < 8 {
+		return raw
+	}
+	return raw[:8]
+}
+
+// VerifyTokenHash verifies a raw token against a stored hash using the given scheme.
+func VerifyTokenHash(rawToken, storedHash, scheme string) bool {
+	switch scheme {
+	case TokenHashSchemeBcrypt:
+		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(rawToken)) == nil
+	case TokenHashSchemeSHA256, "":
+		return HashToken(rawToken) == storedHash
+	default:
+		return false
+	}
+}
+
+// findAndVerifyToken looks up a store token by prefix (bcrypt) or hash (SHA-256)
+// and verifies it against the stored hash.
+func (a *Authenticator) findAndVerifyToken(ctx context.Context, raw string) (core.StoreToken, core.Account, error) {
+	// Try prefix-based lookup first (bcrypt tokens).
+	prefix := TokenPrefixFromRaw(raw)
+	if len(prefix) >= 4 {
+		candidates, err := a.tokenStore.FindStoreTokensByPrefix(ctx, prefix)
+		if err == nil {
+			for _, candidate := range candidates {
+				if VerifyTokenHash(raw, candidate.Token.TokenHash, candidate.Token.HashScheme) {
+					return candidate.Token, candidate.Account, nil
+				}
+			}
+		}
+	}
+	// Fall back to SHA-256 hash lookup (legacy tokens).
+	tokenHash := HashToken(raw)
+	token, account, err := a.tokenStore.FindStoreTokenByHash(ctx, tokenHash)
+	if err != nil {
+		return core.StoreToken{}, core.Account{}, err
+	}
+	if !VerifyTokenHash(raw, token.TokenHash, token.HashScheme) {
+		return core.StoreToken{}, core.Account{}, fmt.Errorf("cannot authenticate: token verification failed")
+	}
+	return token, account, nil
 }
 
 // NewOpaqueToken creates a random opaque token and its stored hash.
@@ -164,7 +246,11 @@ func NewOpaqueToken() (raw, hash string, err error) {
 		return "", "", err
 	}
 	raw = "cr_" + base64.RawURLEncoding.EncodeToString(seed)
-	return raw, HashToken(raw), nil
+	hash, err = bcryptHashToken(raw)
+	if err != nil {
+		return "", "", err
+	}
+	return raw, hash, nil
 }
 
 func (a *Authenticator) parseInsecureToken(raw string) (Claims, bool) {
@@ -174,15 +260,15 @@ func (a *Authenticator) parseInsecureToken(raw string) (Claims, bool) {
 	if !strings.HasPrefix(raw, "dev:") {
 		return Claims{}, false
 	}
-	parts := strings.Split(raw, ":")
-	if len(parts) < 3 {
+	parts := strings.SplitN(strings.TrimPrefix(raw, "dev:"), ":", 2)
+	if len(parts) < 2 {
 		return Claims{}, false
 	}
 	return Claims{
-		Subject:     parts[1],
-		Username:    parts[2],
-		DisplayName: parts[2],
-		Email:       parts[2] + "@example.invalid",
+		Subject:     parts[0],
+		Username:    parts[1],
+		DisplayName: parts[1],
+		Email:       parts[1] + "@example.invalid",
 	}, true
 }
 
@@ -192,15 +278,6 @@ func asString(value any) string {
 	}
 	if str, ok := value.(string); ok {
 		return str
-	}
-	return ""
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
 	}
 	return ""
 }

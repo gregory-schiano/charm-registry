@@ -6,29 +6,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
-func (a *API) handleListResources(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleListResources(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	resources, err := a.svc.ListResources(r.Context(), identity, chi.URLParam(r, "name"))
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
+	writeJSON(w, http.StatusOK, resourceListResponse{Resources: resources})
 }
 
-func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	revisions, err := a.svc.ListResourceRevisions(
 		r.Context(),
 		identity,
@@ -36,32 +27,41 @@ func (a *API) handleListResourceRevisions(w http.ResponseWriter, r *http.Request
 		chi.URLParam(r, "resource"),
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	rows := make([]map[string]any, 0, len(revisions))
+	rows := make([]resourceRevisionListItemResponse, 0, len(revisions))
 	for _, revision := range revisions {
-		rows = append(rows, map[string]any{
-			"architectures": revision.Architectures,
-			"bases":         revision.Bases,
-			"created-at":    revision.CreatedAt,
-			"download":      revision.Download,
-			"filename":      revision.Filename,
-			"revision":      revision.Revision,
+		bases := revision.Bases
+		if bases == nil {
+			// craft-store's CharmResourceRevision rejects a null bases list.
+			bases = []core.Base{}
+		}
+		rows = append(rows, resourceRevisionListItemResponse{
+			Architectures:   revision.Architectures,
+			Bases:           bases,
+			CreatedAt:       revision.CreatedAt,
+			Description:     revision.Description,
+			Download:        revision.Download,
+			Filename:        revision.Filename,
+			Name:            revision.Name,
+			PackageRevision: revision.PackageRevision,
+			Revision:        revision.Revision,
+			SHA256:          revision.SHA256,
+			SHA3384:         revision.SHA3384,
+			SHA384:          revision.SHA384,
+			SHA512:          revision.SHA512,
+			Size:            revision.Size,
+			Type:            revision.Type,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"revisions": rows})
+	writeJSON(w, http.StatusOK, resourceRevisionListResponse{Revisions: rows})
 }
 
-func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.PushResourceRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	statusURL, err := a.svc.PushResource(
@@ -72,21 +72,16 @@ func (a *API) handlePushResource(w http.ResponseWriter, r *http.Request) {
 		req,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status-url": statusURL})
+	writeCreatedJSON(w, statusURL, statusURLResponse{StatusURL: statusURL})
 }
 
-func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req service.UpdateResourceRevisionRequest
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	updated, err := a.svc.UpdateResourceRevisions(
@@ -97,18 +92,13 @@ func (a *API) handleUpdateResourceRevisions(w http.ResponseWriter, r *http.Reque
 		req,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"num-resource-revisions-updated": updated})
+	writeJSON(w, http.StatusOK, resourceRevisionUpdatesResponse{NumResourceRevisionsUpdated: updated})
 }
 
-func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	payload, err := a.svc.OCIImageUploadCredentials(
 		r.Context(),
 		identity,
@@ -116,23 +106,18 @@ func (a *API) handleOCIUploadCredentials(w http.ResponseWriter, r *http.Request)
 		chi.URLParam(r, "resource"),
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
 
-func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req struct {
 		ImageDigest string `json:"image-digest"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	content, err := a.svc.OCIImageBlob(
@@ -143,7 +128,7 @@ func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 		req.ImageDigest,
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="oci-image-blob.json"`)
@@ -152,24 +137,16 @@ func (a *API) handleOCIImageBlob(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, content)
 }
 
-func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleResourceDownload(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	packageID, resourceName, revision, parseErr := parseResourceDownloadFilename(chi.URLParam(r, "filename"))
 	if parseErr != nil {
-		writeError(w, serviceError(http.StatusBadRequest, "invalid-request", parseErr.Error()))
+		writeError(w, r, apiErrorf(http.StatusBadRequest, "invalid-request", parseErr.Error()))
 		return
 	}
-	payload, err := a.svc.DownloadResource(r.Context(), identity, packageID, resourceName, revision)
+	reader, size, err := a.svc.DownloadResourceStream(r.Context(), identity, packageID, resourceName, revision)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="resource.bin"`)
-	w.Header().Set("Content-Type", "application/octet-stream")
-	// #nosec G705 -- This endpoint streams attachment bytes.
-	_, _ = w.Write(payload)
+	writeAttachment(w, r, "resource.bin", reader, size)
 }

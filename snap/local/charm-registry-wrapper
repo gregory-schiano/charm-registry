@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+. "$SNAP/bin/charm-registry-snap-helpers"
+
+set_env_from_config() {
+	env_key="$1"
+	config_key="$2"
+	value="$(config_get "$config_key")"
+	if [ -n "$value" ]; then
+		export "$env_key=$value"
+	fi
+}
+
+apply_config_env_map() {
+	map_file="$1"
+	tls_enabled=false
+	if config_bool tls.enabled false; then
+		tls_enabled=true
+	fi
+
+	while read -r env_key config_key condition extra || [ -n "${env_key:-}" ]; do
+		case "$env_key" in
+			"" | \#*) continue ;;
+		esac
+		if [ -n "${extra:-}" ]; then
+			printf 'invalid snap config env map row for %s: too many fields\n' "$env_key" >&2
+			exit 1
+		fi
+		case "$condition" in
+			always) ;;
+			tls-enabled)
+				if [ "$tls_enabled" != true ]; then
+					continue
+				fi
+				;;
+			*)
+				printf 'invalid snap config env map condition for %s: %s\n' "$env_key" "$condition" >&2
+				exit 1
+				;;
+		esac
+		set_env_from_config "$env_key" "$config_key"
+	done <"$map_file"
+}
+
+export CHARM_REGISTRY_DATA_DIR="${CHARM_REGISTRY_DATA_DIR:-$SNAP_COMMON/data}"
+export CHARM_REGISTRY_DATABASE_BACKEND="${CHARM_REGISTRY_DATABASE_BACKEND:-sqlite}"
+export CHARM_REGISTRY_STORAGE_BACKEND="${CHARM_REGISTRY_STORAGE_BACKEND:-filesystem}"
+export CHARM_REGISTRY_OCI_STORAGE_BACKEND="${CHARM_REGISTRY_OCI_STORAGE_BACKEND:-filesystem}"
+export CHARM_REGISTRY_SQLITE_PATH="${CHARM_REGISTRY_SQLITE_PATH:-$SNAP_COMMON/data/registry.sqlite}"
+export CHARM_REGISTRY_BLOB_DIR="${CHARM_REGISTRY_BLOB_DIR:-$SNAP_COMMON/data/blobs}"
+export CHARM_REGISTRY_OCI_STORAGE_DIR="${CHARM_REGISTRY_OCI_STORAGE_DIR:-$SNAP_COMMON/data/oci-registry}"
+export CHARM_REGISTRY_OCI_TLS_CERT_FILE="${CHARM_REGISTRY_OCI_TLS_CERT_FILE:-$SNAP_COMMON/certs/oci.crt}"
+export CHARM_REGISTRY_OCI_TLS_KEY_FILE="${CHARM_REGISTRY_OCI_TLS_KEY_FILE:-$SNAP_COMMON/certs/oci.key}"
+
+if config_bool tls.enabled false; then
+	export CHARM_REGISTRY_API_TLS_CERT_FILE="$SNAP_COMMON/certs/registry.crt"
+	export CHARM_REGISTRY_API_TLS_KEY_FILE="$SNAP_COMMON/certs/registry.key"
+fi
+
+apply_config_env_map "$SNAP/etc/charm-registry/config-env.map"
+
+exec "$SNAP/bin/charm-registry"

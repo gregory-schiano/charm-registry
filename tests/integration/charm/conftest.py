@@ -1,0 +1,311 @@
+"""Jubilant fixtures for charm-registry charm integration tests."""
+
+from __future__ import annotations
+
+import logging
+import os
+import pathlib
+import shutil
+import subprocess
+import time
+from collections.abc import Iterator
+from typing import Any
+
+import jubilant
+import pytest
+
+logger = logging.getLogger(__name__)
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+DEFAULT_S3_BUCKET = "charm-registry-artifacts"
+DEFAULT_S3_REGION = "us-east-1"
+
+
+def _run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    logger.info("RUN: %s", " ".join(cmd))
+    kwargs.setdefault("check", True)
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    return subprocess.run(cmd, **kwargs)
+
+
+def _require_cli(name: str) -> str:
+    path = shutil.which(name)
+    if path is None:
+        pytest.skip(f"Prerequisite CLI tool {name!r} not found on PATH")
+    return path
+
+
+def _built_charm_from_opcli(charm_name: str, repo_root: pathlib.Path) -> pathlib.Path:
+    """Return the built app charm from opcli artifact paths."""
+    result = _run(
+        ["opcli", "artifacts", "path", charm_name, "--type", "charm"],
+        cwd=repo_root,
+    )
+    candidates = [
+        path if (path := pathlib.Path(line)).is_absolute() else repo_root / path
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+    matches = [
+        path.resolve()
+        for path in candidates
+        if path.parent.name == "charm"
+        and path.name.startswith(f"{charm_name}_")
+        and path.suffix == ".charm"
+        and path.is_file()
+    ]
+    if not matches:
+        pytest.fail(
+            f"opcli did not return a built {charm_name} charm artifact; "
+            f"candidate paths: {[str(path) for path in candidates]}"
+        )
+    if len(matches) > 1:
+        pytest.fail(
+            f"opcli returned multiple built {charm_name} charm artifacts; "
+            f"matching paths: {[str(path) for path in matches]}"
+        )
+    return matches[0]
+
+
+@pytest.fixture(scope="session")
+def s3_config() -> dict[str, str]:
+    """Return the S3 contract provided by the environment.
+
+    S3-compatible storage is provisioned outside pytest — in CI by the spread
+    suite prepare hook (``tests/integration/scripts/setup-microceph-rgw.sh``),
+    locally by exporting the same variables for any reachable endpoint. The
+    tests only consume these inputs and never provision host services.
+    """
+    endpoint = os.environ.get("JUB_S3_ENDPOINT")
+    access_key = os.environ.get("JUB_S3_ACCESS_KEY")
+    secret_key = os.environ.get("JUB_S3_SECRET_KEY")
+    if not (endpoint and access_key and secret_key):
+        pytest.fail(
+            "S3 configuration is missing: set JUB_S3_ENDPOINT, JUB_S3_ACCESS_KEY,"
+            " and JUB_S3_SECRET_KEY (in CI the spread suite prepare hook"
+            " tests/integration/scripts/setup-microceph-rgw.sh provides them)."
+        )
+    config = {
+        "endpoint": endpoint.rstrip("/"),
+        "bucket": os.environ.get("JUB_S3_BUCKET", DEFAULT_S3_BUCKET),
+        "region": os.environ.get("JUB_S3_REGION", DEFAULT_S3_REGION),
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "path": os.environ.get("JUB_S3_PATH", ""),
+        "uri_style": os.environ.get("JUB_S3_URI_STYLE", "path"),
+        "microceph": os.environ.get("JUB_S3_MICROCEPH", "false"),
+    }
+    logger.info("Using S3 endpoint from environment: %s", config["endpoint"])
+    return config
+
+
+@pytest.fixture(scope="session")
+def repo_root() -> pathlib.Path:
+    """Return the repository root."""
+    return REPO_ROOT
+
+
+@pytest.fixture(scope="session")
+def functional_test_binary(repo_root: pathlib.Path) -> pathlib.Path:
+    """Build the shared functional-test binary once per test session."""
+    _require_cli("go")
+    bin_dir = repo_root / ".bin"
+    bin_dir.mkdir(exist_ok=True)
+    binary = bin_dir / "functional-test"
+    _run(["go", "build", "-o", str(binary), "./cmd/functional-test"], cwd=repo_root)
+    return binary
+
+
+@pytest.fixture(scope="session")
+def charm_file(repo_root: pathlib.Path) -> pathlib.Path:
+    """Return the built charm artifact.
+
+    In charm-ci this comes from opcli's artifact paths. When running locally
+    without opcli, fall back to packing the charm from ``charm/``.
+    """
+    if shutil.which("opcli") is None:
+        _require_cli("charmcraft")
+        charm_dir = repo_root / "charm"
+        _run(["charmcraft", "pack", "--project-dir", str(charm_dir)])
+        charms = sorted(charm_dir.glob("*.charm"), key=os.path.getmtime, reverse=True)
+        if not charms:
+            pytest.fail("charmcraft pack produced no .charm file")
+        charm_path = charms[0]
+    else:
+        charm_path = _built_charm_from_opcli("charm-registry", repo_root)
+
+    logger.info("Charm artifact: %s", charm_path)
+    return charm_path
+
+
+@pytest.fixture(scope="session")
+def app_image(request: pytest.FixtureRequest) -> str:
+    """Return the OCI image reference for the charm's app-image resource."""
+    try:
+        charm_resource_images = request.getfixturevalue("charm_resource_images")
+    except pytest.FixtureLookupError:
+        image = os.environ.get("JUB_APP_IMAGE", "")
+    else:
+        image = charm_resource_images["charm-registry"]["app-image"]
+
+    if not image:
+        pytest.skip("No app-image resource available; set JUB_APP_IMAGE for local runs")
+    logger.info("app-image resource: %s", image)
+    return image
+
+
+@pytest.fixture(scope="session")
+def juju() -> Iterator[jubilant.Juju]:
+    """Provide a temporary Juju model."""
+    _require_cli("juju")
+    existing = os.environ.get("JUB_MODEL")
+    if existing:
+        logger.info("Reusing existing Juju model: %s", existing)
+        yield jubilant.Juju(model=existing)
+        return
+
+    with jubilant.temp_model() as juju_model:
+        yield juju_model
+
+
+@pytest.fixture(scope="session")
+def deployed(
+    juju: jubilant.Juju,
+    charm_file: pathlib.Path,
+    app_image: str,
+    functional_test_binary: pathlib.Path,
+    s3_config: dict[str, str],
+) -> dict[str, Any]:
+    """Deploy charm-registry with Gateway API-backed ingress relations."""
+    del functional_test_binary
+    app = "charm-registry"
+    api_ingress_app = "ingress-api"
+    oci_ingress_app = "ingress-oci"
+    gateway_app = "gateway-api-integrator"
+    database_app = "postgresql"
+    s3_app = "s3-integrator"
+    certificates_app = "self-signed-certificates"
+    ingress_charm = os.environ.get("JUB_INGRESS_CHARM", "ingress-configurator")
+    ingress_channel = os.environ.get("JUB_INGRESS_CHANNEL", "latest/edge")
+    gateway_charm = os.environ.get("JUB_GATEWAY_CHARM", "gateway-api-integrator")
+    gateway_channel = os.environ.get("JUB_GATEWAY_CHANNEL", "1/edge")
+    gateway_class = os.environ.get("JUB_GATEWAY_CLASS", "ck-gateway")
+    api_hostname = os.environ.get("JUB_API_HOSTNAME", "api.charm-registry.test")
+    oci_hostname = os.environ.get("JUB_OCI_HOSTNAME", "oci.charm-registry.test")
+    postgresql_charm = os.environ.get("JUB_POSTGRESQL_CHARM", "postgresql-k8s")
+    postgresql_channel = os.environ.get("JUB_POSTGRESQL_CHANNEL", "14/stable")
+    s3_charm = os.environ.get("JUB_S3_INTEGRATOR_CHARM", "s3-integrator")
+    s3_channel = os.environ.get("JUB_S3_INTEGRATOR_CHANNEL", "2/stable")
+    certificates_charm = os.environ.get(
+        "JUB_CERTIFICATES_CHARM",
+        "self-signed-certificates",
+    )
+    certificates_channel = os.environ.get("JUB_CERTIFICATES_CHANNEL", "1/stable")
+
+    logger.info("Deploying %s as %s", gateway_charm, gateway_app)
+    juju.deploy(
+        gateway_charm,
+        gateway_app,
+        channel=gateway_channel,
+        config={"gateway-class": gateway_class},
+        trust=True,
+    )
+    logger.info("Deploying %s as %s", ingress_charm, api_ingress_app)
+    juju.deploy(
+        ingress_charm,
+        api_ingress_app,
+        channel=ingress_channel,
+        config={"hostname": api_hostname},
+        trust=True,
+    )
+    logger.info("Deploying %s as %s", ingress_charm, oci_ingress_app)
+    juju.deploy(
+        ingress_charm,
+        oci_ingress_app,
+        channel=ingress_channel,
+        config={"hostname": oci_hostname},
+        trust=True,
+    )
+    logger.info("Deploying %s as %s", postgresql_charm, database_app)
+    juju.deploy(postgresql_charm, database_app, channel=postgresql_channel, trust=True)
+    logger.info("Deploying %s as %s", s3_charm, s3_app)
+    juju.deploy(
+        s3_charm,
+        s3_app,
+        channel=s3_channel,
+        config={
+            "bucket": s3_config["bucket"],
+            "endpoint": s3_config["endpoint"],
+            "path": s3_config["path"],
+            "region": s3_config["region"],
+            "s3-uri-style": s3_config["uri_style"],
+        },
+    )
+    secret_name = f"s3-integrator-credentials-{int(time.time())}"
+    secret_uri = juju.add_secret(
+        secret_name,
+        {
+            "access-key": s3_config["access_key"],
+            "secret-key": s3_config["secret_key"],
+        },
+    )
+    juju.grant_secret(secret_uri, s3_app)
+    juju.config(s3_app, {"credentials": secret_uri})
+
+    logger.info("Deploying %s as %s", certificates_charm, certificates_app)
+    juju.deploy(certificates_charm, certificates_app, channel=certificates_channel)
+
+    logger.info("Deploying %s from %s", app, charm_file)
+    juju.deploy(
+        charm=str(charm_file),
+        app=app,
+        resources={"app-image": app_image},
+        config={
+            "admin-usernames": "admin",
+            "app-secret-key": "integration-test-secret",
+            "enable-insecure-dev-auth": True,
+            "max-archive-file-bytes": "64MB",
+            "rate-limit-ip-limit": 0,
+            "rate-limit-token-limit": 0,
+        },
+    )
+
+    juju.integrate(f"{app}:ingress", f"{api_ingress_app}:ingress")
+    juju.integrate(f"{app}:oci-ingress", f"{oci_ingress_app}:ingress")
+    juju.integrate(f"{app}:postgresql", f"{database_app}:database")
+    juju.integrate(f"{app}:s3", f"{s3_app}:s3-credentials")
+    juju.integrate(
+        f"{certificates_app}:certificates",
+        f"{gateway_app}:certificates",
+    )
+    juju.integrate(f"{api_ingress_app}:gateway-route", f"{gateway_app}:gateway-route")
+    juju.integrate(f"{oci_ingress_app}:gateway-route", f"{gateway_app}:gateway-route")
+
+    logger.info("Waiting for active/idle deployment")
+    juju.wait(jubilant.all_active, timeout=30 * 60, delay=10, successes=3)
+    time.sleep(10)
+
+    status = juju.status()
+    unit = status.apps[app].units.get(f"{app}/0")
+    if unit is None or not unit.address:
+        pytest.fail("charm-registry/0 has no address")
+
+    api_url = os.environ.get("JUB_API_URL", f"http://{unit.address}:8080")
+    oci_url = os.environ.get("JUB_OCI_URL", f"http://{unit.address}:5000")
+
+    logger.info("Deployed endpoints: api=%s oci=%s", api_url, oci_url)
+    return {
+        "juju": juju,
+        "app": app,
+        "unit": f"{app}/0",
+        "api_ingress_app": api_ingress_app,
+        "oci_ingress_app": oci_ingress_app,
+        "gateway_app": gateway_app,
+        "database_app": database_app,
+        "s3_app": s3_app,
+        "s3_config": s3_config,
+        "certificates_app": certificates_app,
+        "api_url": api_url,
+        "oci_url": oci_url,
+    }

@@ -6,16 +6,24 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
-type Repository interface {
-	coreTokenFinder
+type HealthRepo interface {
+	Ping(ctx context.Context) error
+	Migrate(ctx context.Context) error
+}
 
+type AccountRepo interface {
 	EnsureAccount(ctx context.Context, account core.Account) (core.Account, error)
 	GetAccountByID(ctx context.Context, accountID string) (core.Account, error)
 
 	CreateStoreToken(ctx context.Context, token core.StoreToken) error
 	ListStoreTokens(ctx context.Context, accountID string, includeInactive bool) ([]core.StoreToken, error)
+	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
+	FindStoreTokensByPrefix(ctx context.Context, prefix string) ([]core.StoreTokenCandidate, error)
+	UpdateTokenHashScheme(ctx context.Context, sessionID, hash, prefix, scheme string) error
 	RevokeStoreToken(ctx context.Context, accountID, sessionID, revokedBy string) error
+}
 
+type PackageRepo interface {
 	CreatePackage(ctx context.Context, pkg core.Package) error
 	UpdatePackage(ctx context.Context, pkg core.Package) error
 	DeletePackage(ctx context.Context, packageID string) error
@@ -26,31 +34,68 @@ type Repository interface {
 	CanViewPackage(ctx context.Context, packageID, accountID string) (bool, error)
 	CanManagePackage(ctx context.Context, packageID, accountID string) (bool, error)
 	CreateTracks(ctx context.Context, packageID string, tracks []core.Track) (int, error)
+	DeleteTrack(ctx context.Context, packageID, trackName string) error
 	ListTracks(ctx context.Context, packageID string) ([]core.Track, error)
+	ListTracksForPackages(ctx context.Context, packageIDs []string) (map[string][]core.Track, error)
 
 	CreateUpload(ctx context.Context, upload core.Upload) error
 	GetUpload(ctx context.Context, uploadID string) (core.Upload, error)
+	DeleteUploadsByObjectKeys(ctx context.Context, objectKeys []string) error
 	ApproveUpload(ctx context.Context, uploadID string, revision *int, errors []core.APIError) error
 
 	CreateRevision(ctx context.Context, revision core.Revision) error
+	DeleteRevision(ctx context.Context, packageID string, revision int) error
 	ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error)
+	ListRevisionsByNumbers(ctx context.Context, packageID string, revisions []int) (map[int]core.Revision, error)
 	GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error)
 	GetLatestRevision(ctx context.Context, packageID string) (core.Revision, error)
 
 	UpsertResourceDefinition(ctx context.Context, resource core.ResourceDefinition) (core.ResourceDefinition, error)
 	GetResourceDefinition(ctx context.Context, packageID, resourceName string) (core.ResourceDefinition, error)
 	ListResourceDefinitions(ctx context.Context, packageID string) ([]core.ResourceDefinition, error)
+	DeleteResourceDefinition(ctx context.Context, resourceID string) error
 	CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error
+	DeleteResourceRevision(ctx context.Context, resourceID string, revision int) error
 	UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error
 	ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error)
+	ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error)
 	GetResourceRevision(ctx context.Context, resourceID string, revision int) (core.ResourceRevision, error)
 
 	ReplaceRelease(ctx context.Context, packageID string, release core.Release) error
+	DeleteRelease(ctx context.Context, packageID, channel string) error
+	DeleteReleaseForBase(ctx context.Context, packageID, channel string, base *core.Base) error
+	DeleteStaleTrackReleases(ctx context.Context, packageID, track string, keep []ReleaseVariant) (int64, error)
 	ListReleases(ctx context.Context, packageID string) ([]core.Release, error)
 	ResolveRelease(ctx context.Context, packageID string, channel string) (core.Release, error)
+	ResolveReleaseForBase(ctx context.Context, packageID string, channel string, base core.Base) (core.Release, error)
 	ResolveDefaultRelease(ctx context.Context, packageID string) (core.Release, error)
 }
 
-type coreTokenFinder interface {
-	FindStoreTokenByHash(ctx context.Context, hash string) (core.StoreToken, core.Account, error)
+type CharmhubSyncRepo interface {
+	CreateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error
+	DeleteCharmhubSyncRule(ctx context.Context, packageName, track string) error
+	ListCharmhubSyncRules(ctx context.Context) ([]core.CharmhubSyncRule, error)
+	ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]core.CharmhubSyncRule, error)
+	UpdateCharmhubSyncRule(ctx context.Context, rule core.CharmhubSyncRule) error
 }
+
+type CompositeRepo interface {
+	AccountRepo
+	PackageRepo
+	CharmhubSyncRepo
+}
+
+type Transactor interface {
+	WithinTransaction(ctx context.Context, fn func(CompositeRepo) error) error
+}
+
+type Backend interface {
+	HealthRepo
+	Transactor
+	CompositeRepo
+}
+
+// Repository is retained as a compatibility alias for code paths that still
+// operate on a full backend implementation during the transition to smaller
+// focused repository interfaces.
+type Repository = Backend

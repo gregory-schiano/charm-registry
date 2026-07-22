@@ -13,23 +13,105 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteRelease = `-- name: DeleteRelease :execrows
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel = $2
+`
+
+type DeleteReleaseParams struct {
+	PackageID string
+	Channel   string
+}
+
+func (q *Queries) DeleteRelease(ctx context.Context, arg DeleteReleaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRelease, arg.PackageID, arg.Channel)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteReleaseForBase = `-- name: DeleteReleaseForBase :execrows
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel = $2
+  AND base_key = $3::jsonb::text
+`
+
+type DeleteReleaseForBaseParams struct {
+	PackageID string
+	Channel   string
+	Column3   json.RawMessage
+}
+
+func (q *Queries) DeleteReleaseForBase(ctx context.Context, arg DeleteReleaseForBaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteReleaseForBase, arg.PackageID, arg.Channel, arg.Column3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteStaleTrackReleases = `-- name: DeleteStaleTrackReleases :execrows
+WITH keep_variants AS (
+    SELECT item->>'channel' AS channel, item->>'base_key' AS base_key
+    FROM jsonb_array_elements($3::jsonb) AS item
+)
+DELETE FROM releases
+WHERE package_id = $1
+  AND channel LIKE $2
+  AND NOT EXISTS (
+      SELECT 1
+      FROM keep_variants keep
+      WHERE keep.channel = releases.channel
+        AND keep.base_key = releases.base_key
+  )
+`
+
+type DeleteStaleTrackReleasesParams struct {
+	PackageID    string
+	TrackPrefix  string
+	KeepVariants json.RawMessage
+}
+
+func (q *Queries) DeleteStaleTrackReleases(ctx context.Context, arg DeleteStaleTrackReleasesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleTrackReleases, arg.PackageID, arg.TrackPrefix, arg.KeepVariants)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listReleases = `-- name: ListReleases :many
 SELECT id, package_id, channel, revision,
        base, resources, when_created, expiration_date, progressive
 FROM releases
 WHERE package_id = $1
-ORDER BY channel ASC
+ORDER BY channel ASC, base_key ASC
 `
 
-func (q *Queries) ListReleases(ctx context.Context, packageID string) ([]Release, error) {
+type ListReleasesRow struct {
+	ID             string
+	PackageID      string
+	Channel        string
+	Revision       int32
+	Base           json.RawMessage
+	Resources      json.RawMessage
+	WhenCreated    time.Time
+	ExpirationDate pgtype.Timestamptz
+	Progressive    *float64
+}
+
+func (q *Queries) ListReleases(ctx context.Context, packageID string) ([]ListReleasesRow, error) {
 	rows, err := q.db.Query(ctx, listReleases, packageID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Release{}
+	items := []ListReleasesRow{}
 	for rows.Next() {
-		var i Release
+		var i ListReleasesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PackageID,
@@ -56,7 +138,7 @@ INSERT INTO releases (
     id, package_id, channel, revision,
     base, resources, when_created, expiration_date, progressive
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (package_id, channel) DO UPDATE SET
+ON CONFLICT (package_id, channel, base_key) DO UPDATE SET
     revision        = EXCLUDED.revision,
     base            = EXCLUDED.base,
     resources       = EXCLUDED.resources,
@@ -107,9 +189,21 @@ ORDER BY r.when_created DESC
 LIMIT 1
 `
 
-func (q *Queries) ResolveDefaultRelease(ctx context.Context, id string) (Release, error) {
+type ResolveDefaultReleaseRow struct {
+	ID             string
+	PackageID      string
+	Channel        string
+	Revision       int32
+	Base           json.RawMessage
+	Resources      json.RawMessage
+	WhenCreated    time.Time
+	ExpirationDate pgtype.Timestamptz
+	Progressive    *float64
+}
+
+func (q *Queries) ResolveDefaultRelease(ctx context.Context, id string) (ResolveDefaultReleaseRow, error) {
 	row := q.db.QueryRow(ctx, resolveDefaultRelease, id)
-	var i Release
+	var i ResolveDefaultReleaseRow
 	err := row.Scan(
 		&i.ID,
 		&i.PackageID,
@@ -133,9 +227,21 @@ ORDER BY when_created DESC
 LIMIT 1
 `
 
-func (q *Queries) ResolveLatestRelease(ctx context.Context, packageID string) (Release, error) {
+type ResolveLatestReleaseRow struct {
+	ID             string
+	PackageID      string
+	Channel        string
+	Revision       int32
+	Base           json.RawMessage
+	Resources      json.RawMessage
+	WhenCreated    time.Time
+	ExpirationDate pgtype.Timestamptz
+	Progressive    *float64
+}
+
+func (q *Queries) ResolveLatestRelease(ctx context.Context, packageID string) (ResolveLatestReleaseRow, error) {
 	row := q.db.QueryRow(ctx, resolveLatestRelease, packageID)
-	var i Release
+	var i ResolveLatestReleaseRow
 	err := row.Scan(
 		&i.ID,
 		&i.PackageID,
@@ -156,6 +262,8 @@ SELECT id, package_id, channel, revision,
 FROM releases
 WHERE package_id = $1
   AND channel    = $2
+ORDER BY when_created DESC
+LIMIT 1
 `
 
 type ResolveReleaseParams struct {
@@ -163,9 +271,65 @@ type ResolveReleaseParams struct {
 	Channel   string
 }
 
-func (q *Queries) ResolveRelease(ctx context.Context, arg ResolveReleaseParams) (Release, error) {
+type ResolveReleaseRow struct {
+	ID             string
+	PackageID      string
+	Channel        string
+	Revision       int32
+	Base           json.RawMessage
+	Resources      json.RawMessage
+	WhenCreated    time.Time
+	ExpirationDate pgtype.Timestamptz
+	Progressive    *float64
+}
+
+func (q *Queries) ResolveRelease(ctx context.Context, arg ResolveReleaseParams) (ResolveReleaseRow, error) {
 	row := q.db.QueryRow(ctx, resolveRelease, arg.PackageID, arg.Channel)
-	var i Release
+	var i ResolveReleaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.PackageID,
+		&i.Channel,
+		&i.Revision,
+		&i.Base,
+		&i.Resources,
+		&i.WhenCreated,
+		&i.ExpirationDate,
+		&i.Progressive,
+	)
+	return i, err
+}
+
+const resolveReleaseForBase = `-- name: ResolveReleaseForBase :one
+SELECT id, package_id, channel, revision,
+       base, resources, when_created, expiration_date, progressive
+FROM releases
+WHERE package_id = $1
+  AND channel    = $2
+  AND base_key   = $3::jsonb::text
+`
+
+type ResolveReleaseForBaseParams struct {
+	PackageID string
+	Channel   string
+	Column3   json.RawMessage
+}
+
+type ResolveReleaseForBaseRow struct {
+	ID             string
+	PackageID      string
+	Channel        string
+	Revision       int32
+	Base           json.RawMessage
+	Resources      json.RawMessage
+	WhenCreated    time.Time
+	ExpirationDate pgtype.Timestamptz
+	Progressive    *float64
+}
+
+func (q *Queries) ResolveReleaseForBase(ctx context.Context, arg ResolveReleaseForBaseParams) (ResolveReleaseForBaseRow, error) {
+	row := q.db.QueryRow(ctx, resolveReleaseForBase, arg.PackageID, arg.Channel, arg.Column3)
+	var i ResolveReleaseForBaseRow
 	err := row.Scan(
 		&i.ID,
 		&i.PackageID,

@@ -1,0 +1,297 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRunSyncList(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rules":[{"name":"demo","track":"latest","bases":["ubuntu@24.04"],"architectures":["amd64"],"status":"ok","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}]}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{"--url", server.URL, "--token", "test-token", "sync", "list"}, &stdout, &stderr)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "demo")
+	assert.Contains(t, stdout.String(), "latest")
+	assert.Contains(t, stdout.String(), "ubuntu@24.04")
+	assert.Contains(t, stdout.String(), "amd64")
+}
+
+func TestRunSyncAdd(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, []any{"ubuntu@24.04", "ubuntu@22.04"}, body["bases"])
+		require.Equal(t, []any{"amd64", "arm64"}, body["architectures"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"demo","track":"2.0","status":"pending","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{
+			"--url", server.URL,
+			"--token", "test-token",
+			"sync", "add", "demo",
+			"--track", "2.0",
+			"--base", "ubuntu@24.04",
+			"--base", "ubuntu@22.04",
+			"--arch", "amd64",
+			"--arch", "arm64",
+		},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled sync for demo track 2.0")
+}
+
+func TestRunSyncAddDefaultsToLatestTrack(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, "demo", body["name"])
+		require.Equal(t, "latest", body["track"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"demo","track":"latest","status":"pending","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "add", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled sync for demo track latest")
+}
+
+func TestRunSyncRemove(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync/demo/2.0", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "remove", "demo", "--track", "2.0"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled removal for demo track 2.0")
+}
+
+func TestRunSyncRemoveDefaultsToLatestTrack(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync/demo/latest", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "remove", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "scheduled removal for demo track latest")
+}
+
+func TestRunSyncRun(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/admin/charmhub-sync/demo/run", r.URL.Path)
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "run", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "triggered sync for demo")
+}
+
+func TestRunUnregister(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/v1/charm/demo", r.URL.Path)
+		require.Equal(t, "true", r.URL.Query().Get("force"))
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"package-id":"pkg-1"}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "unregister", "demo", "--yes"},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "unregistered demo")
+}
+
+func TestRunUnregisterRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", "http://registry.example.test", "--token", "test-token", "unregister", "demo"},
+		&stdout,
+		&stderr,
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "refusing to unregister without --yes")
+}
+
+func TestRunReportsAPIConflict(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error-list":[{"code":"package-exists","message":"already exists"}]}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "add", "demo", "--track", "latest"},
+		&stdout,
+		&stderr,
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "package-exists: already exists")
+}
+
+func TestRunSyncWait(t *testing.T) {
+	t.Parallel()
+
+	var listCalls, runCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1/admin/charmhub-sync":
+			switch listCalls.Add(1) {
+			case 1:
+				// One rule pending, one failed transiently.
+				_, _ = w.Write([]byte(`{"rules":[
+					{"name":"demo","track":"latest","status":"syncing","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"},
+					{"name":"other","track":"1","status":"error","last-sync-error":"Client.Timeout exceeded","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}
+				]}`))
+			default:
+				_, _ = w.Write([]byte(`{"rules":[
+					{"name":"demo","track":"latest","status":"ok","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"},
+					{"name":"other","track":"1","status":"ok","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}
+				]}`))
+			}
+		case "POST /v1/admin/charmhub-sync/other/run":
+			runCalls.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{
+			"--url", server.URL,
+			"--token", "test-token",
+			"sync", "wait",
+			"--timeout", "10s",
+			"--interval", "10ms",
+		},
+		&stdout,
+		&stderr,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "all sync rules completed")
+	assert.GreaterOrEqual(t, listCalls.Load(), int64(2))
+	assert.Equal(t, int64(1), runCalls.Load())
+}
+
+func TestRunSyncWaitFailsOnPermanentError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rules":[{"name":"demo","track":"latest","status":"error","last-sync-error":"charm not found","created-at":"2026-04-13T00:00:00Z","updated-at":"2026-04-13T00:00:00Z"}]}`))
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(
+		context.Background(),
+		[]string{"--url", server.URL, "--token", "test-token", "sync", "wait"},
+		&stdout,
+		&stderr,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sync failed for demo track latest: charm not found")
+}

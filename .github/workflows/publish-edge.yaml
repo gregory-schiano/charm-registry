@@ -1,0 +1,181 @@
+name: Publish Edge
+
+# Continuously publish to the edge channels after a successful Integration
+# Tests run on main. This reuses the artifacts that workflow already built
+# (via opcli) instead of rebuilding them, so nothing is packed twice.
+on:
+  workflow_run:
+    workflows: ["Integration Tests"]
+    types: [completed]
+
+permissions:
+  actions: read # required to download artifacts from the triggering run
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-edge
+  cancel-in-progress: false
+
+env:
+  CHARM_CI_REF: v0.0.1-alpha.7
+
+jobs:
+  # Charm (with its rock as the app-image OCI resource) -> Charmhub latest/edge.
+  # opcli reads artifacts.yaml + artifacts.build.yaml, uploads the rock resource
+  # first, then uploads and releases the charm with the correct resource binding.
+  publish-charm:
+    name: Publish charm to Charmhub (edge)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    steps:
+      - name: Checkout built ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${CHARM_CI_REF}"
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      # Push-to-main builds run in "registry" mode, so the rock resource is
+      # referenced from GHCR; authenticate so opcli/charmcraft can read it.
+      - name: Authenticate to GHCR (rock resource images)
+        run: skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Fetch built artifacts from the triggering run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: opcli artifacts fetch --run-id "${{ github.event.workflow_run.id }}" --wait
+
+      - name: Authenticate with Charmhub
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMCRAFT_AUTH }}
+        run: |
+          if [ -z "$CHARMCRAFT_AUTH" ]; then
+            echo "::error::CHARMCRAFT_AUTH secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          mkdir -p "$HOME/.local/share/snap/charmcraft/common"
+          echo "$CHARMCRAFT_AUTH" > "$HOME/.local/share/snap/charmcraft/common/credentials"
+
+      # The triggering push-to-main Integration Tests build runs in "registry"
+      # rock-upload mode (auto-selected, like upstream charm-ci), so opcli
+      # publishes the charm with a multi-arch app-image resource from GHCR —
+      # the same shape the tag release publishes.
+      - name: Publish charm + rock resource to edge
+        run: opcli artifacts publish --channel latest/edge --json
+
+  # Snap (spellbook) -> Snap Store latest/edge.
+  publish-snap:
+    name: Publish snap to Snap Store (edge)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    steps:
+      - name: Download built snap artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: built-snap-*
+          path: snaps
+          merge-multiple: true
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Upload and release each snap to edge
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "::error::SNAPCRAFT_STORE_CREDENTIALS secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          shopt -s nullglob
+          snaps=(snaps/**/*.snap snaps/*.snap)
+          if [ ${#snaps[@]} -eq 0 ]; then
+            echo "::error::No snap artifacts found from the triggering run"
+            exit 1
+          fi
+          for snap in "${snaps[@]}"; do
+            echo "Releasing ${snap} to latest/edge"
+            snapcraft upload --release=latest/edge "$snap"
+          done
+
+  # Rock as a standalone OCI image -> ghcr.io:edge (independent of the charm
+  # resource that publish-charm already handled).
+  publish-rock:
+    name: Publish rock image to GHCR (edge)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    steps:
+      # Push-to-main builds run in "registry" mode: the per-arch rocks are
+      # already in GHCR and only referenced from the build manifest (charm-ci
+      # uploads no .rock artifacts in that mode). Re-tag those image refs into
+      # a stable multi-arch :edge manifest list.
+      - name: Download build manifest
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: artifacts-build
+          path: manifest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Login to GHCR
+        run: |
+          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push multi-arch rock manifest to edge tag
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}"
+          # artifacts.build.yaml schema: rocks[].builds[] with {arch, image}
+          # in registry mode. Re-tag each arch image, then assemble :edge.
+          mapfile -t builds < <(python3 -c '
+          import yaml
+          data = yaml.safe_load(open("manifest/artifacts.build.yaml"))
+          for rock in data.get("rocks", []):
+              for build in rock.get("builds", []):
+                  if build.get("image"):
+                      print(build["arch"], build["image"])
+          ')
+          if [ ${#builds[@]} -eq 0 ]; then
+            echo "::error::No registry rock images found in the build manifest"
+            exit 1
+          fi
+          arch_refs=()
+          for entry in "${builds[@]}"; do
+            arch="${entry%% *}"
+            src="${entry#* }"
+            ref="${IMAGE}:edge-${arch}"
+            echo "Re-tagging ${src} -> ${ref}"
+            skopeo copy --insecure-policy "docker://${src}" "docker://${ref}"
+            arch_refs+=("${ref}")
+          done
+          docker buildx imagetools create -t "${IMAGE}:edge" "${arch_refs[@]}"

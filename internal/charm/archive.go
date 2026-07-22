@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/gschiano/charm-registry/internal/core"
 )
 
+const defaultMaxArchiveFileSize int64 = 10 << 20
+
 // ParseArchive extracts charm metadata from a charm archive payload.
 //
 // The following errors may be returned:
@@ -20,17 +23,49 @@ import (
 // - `metadata.yaml` is missing.
 // - `metadata.yaml` cannot be parsed.
 func ParseArchive(payload []byte) (core.CharmArchive, error) {
+	return ParseArchiveWithMaxFileSize(payload, defaultMaxArchiveFileSize)
+}
+
+// ParseArchiveWithMaxFileSize extracts charm metadata from a charm archive
+// payload while enforcing a per-entry decompressed size limit.
+func ParseArchiveWithMaxFileSize(payload []byte, maxFileSize int64) (core.CharmArchive, error) {
 	reader, err := zip.NewReader(bytes.NewReader(payload), int64(len(payload)))
 	if err != nil {
 		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	return parseZipArchive(reader, maxFileSize)
+}
+
+// ParseArchiveFile extracts charm metadata from a charm archive file on disk
+// while enforcing a per-entry decompressed size limit.
+func ParseArchiveFile(path string, size int64, maxFileSize int64) (core.CharmArchive, error) {
+	if size <= 0 {
+		return core.CharmArchive{}, fmt.Errorf("invalid charm archive size %d", size)
+	}
+	// #nosec G304 -- callers pass temp file paths or already validated blob paths.
+	file, err := os.Open(path)
+	if err != nil {
+		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	defer file.Close()
+	reader, err := zip.NewReader(file, size)
+	if err != nil {
+		return core.CharmArchive{}, fmt.Errorf("open charm archive: %w", err)
+	}
+	return parseZipArchive(reader, maxFileSize)
+}
+
+func parseZipArchive(reader *zip.Reader, maxFileSize int64) (core.CharmArchive, error) {
+	if maxFileSize <= 0 {
+		maxFileSize = defaultMaxArchiveFileSize
 	}
 
 	var archive core.CharmArchive
 	for _, file := range reader.File {
 		name := filepath.ToSlash(file.Name)
-		content, err := readZipFile(file)
+		content, err := readZipFile(file, maxFileSize)
 		if err != nil {
-			return core.CharmArchive{}, err
+			return core.CharmArchive{}, fmt.Errorf("read charm archive entry: %w", err)
 		}
 		switch {
 		case strings.EqualFold(name, "metadata.yaml"):
@@ -113,11 +148,33 @@ func ExtractWebsites(raw any) []string {
 	}
 }
 
-func readZipFile(file *zip.File) ([]byte, error) {
+func readZipFile(file *zip.File, maxFileSize int64) ([]byte, error) {
 	reader, err := file.Open()
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", file.Name, err)
 	}
 	defer reader.Close()
-	return io.ReadAll(reader)
+	limited := io.LimitReader(reader, maxFileSize+1)
+	payload, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", file.Name, err)
+	}
+	if int64(len(payload)) > maxFileSize {
+		return nil, fmt.Errorf(
+			"archive entry %q exceeds the %s per-file safety limit",
+			file.Name,
+			formatArchiveFileSizeLimit(maxFileSize),
+		)
+	}
+	return payload, nil
+}
+
+func formatArchiveFileSizeLimit(value int64) string {
+	if value%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", value>>20)
+	}
+	if value%(1<<10) == 0 {
+		return fmt.Sprintf("%d KiB", value>>10)
+	}
+	return fmt.Sprintf("%d bytes", value)
 }

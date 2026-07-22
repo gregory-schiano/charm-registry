@@ -1,0 +1,7 @@
+# Jubilant charm integration test dependencies for charm-registry.
+# Install alongside the charm's own requirements.txt.
+jubilant>=1.0,<2.0
+pytest>=7.0,<9.0
+requests>=2.28,<3.0
+PyYAML>=6.0
+psycopg[binary]>=3.1,<4.0

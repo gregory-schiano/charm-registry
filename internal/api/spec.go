@@ -2,8 +2,13 @@ package api
 
 const openAPISpec = `openapi: 3.1.0
 info:
-  title: Private Charm Registry MVP
-  version: 0.1.0
+  title: Private Charm Registry
+  version: 0.2.0
+  description: |
+    Local registry API compatible with stock charmcraft and juju for supported
+    charm and resource workflows. Production authentication uses OIDC-backed
+    account resolution plus registry-issued store tokens. Development can opt
+    into insecure bearer tokens via CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH=true.
 paths:
   /v1/charm:
     get:
@@ -16,7 +21,7 @@ paths:
     patch:
       summary: Update package metadata
     delete:
-      summary: Unregister an unpublished package
+      summary: Unregister a package; force=true also removes registry-managed artifacts
   /v1/charm/{name}/revisions:
     get:
       summary: List package revisions
@@ -39,20 +44,35 @@ paths:
     get:
       summary: List store tokens for the authenticated account
     post:
-      summary: Issue a store token
+      summary: Issue a store token after authenticating with OIDC or dev auth
   /v1/tokens/whoami:
     get:
       summary: Describe the currently authenticated store token
   /v1/tokens/dashboard/exchange:
     post:
-      summary: Exchange an OIDC-authenticated session for a store token
+      summary: Exchange an authenticated session for a store token
+  /unscanned-upload/:
+    post:
+      summary: Upload a charm or resource blob for later publishing
   /v2/charms/find:
     get:
-      summary: Search charms
+      summary: Search public charms, optionally including authorized private charms
+      description: Authentication is optional; invalid supplied credentials are rejected.
   /v2/charms/info/{name}:
     get:
-      summary: Get charm info
+      summary: Get public charm info, or authorized private charm info
+      description: Authentication is optional; invalid supplied credentials are rejected.
   /v2/charms/refresh:
     post:
-      summary: Resolve revisions and resources for Juju refresh/install flows
+      summary: Resolve public revisions and resources for Juju refresh/install flows
+      description: Authentication is optional and extends results to authorized private charms.
+  /v2/charms/resources/{name}/{resource}/revisions:
+    get:
+      summary: List resource revisions for a public or authorized private charm
+  /api/v1/charms/download/{filename}:
+    get:
+      summary: Download a public or authorized private charm artifact
+  /api/v1/resources/download/{filename}:
+    get:
+      summary: Download a public or authorized private resource artifact
 `

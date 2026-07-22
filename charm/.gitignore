@@ -1,0 +1,11 @@
+venv/
+.venv/
+build/
+*.charm
+.tox/
+.coverage
+__pycache__/
+*.py[cod]
+src/*.egg-info/
+.idea
+.vscode/

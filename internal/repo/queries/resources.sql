@@ -21,16 +21,25 @@ FROM resource_definitions
 WHERE package_id = $1
 ORDER BY name ASC;
 
+-- name: DeleteResourceDefinition :execrows
+DELETE FROM resource_definitions
+WHERE id = $1;
+
 -- name: CreateResourceRevision :exec
 INSERT INTO resource_revisions (
-    id, resource_id, revision, name, type, description,
+    id, resource_id, revision, package_revision, name, type, description,
     filename, created_at, size, sha256, sha384, sha512, sha3_384,
     object_key, bases, architectures, oci_image_digest, oci_image_blob
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11, $12, $13,
-    $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19
 );
+
+-- name: DeleteResourceRevision :execrows
+DELETE FROM resource_revisions
+WHERE resource_id = $1
+  AND revision = $2;
 
 -- name: UpdateResourceRevision :execrows
 UPDATE resource_revisions
@@ -43,7 +52,7 @@ WHERE resource_id = $1
   AND id          = $3;
 
 -- name: ListResourceRevisions :many
-SELECT id, resource_id, revision, name, type, description,
+SELECT id, resource_id, revision, package_revision, name, type, description,
        filename, created_at, size, sha256, sha384, sha512, sha3_384,
        object_key, bases, architectures, oci_image_digest, oci_image_blob
 FROM resource_revisions
@@ -51,9 +60,15 @@ WHERE resource_id = $1
 ORDER BY revision DESC;
 
 -- name: GetResourceRevision :one
-SELECT id, resource_id, revision, name, type, description,
+SELECT id, resource_id, revision, package_revision, name, type, description,
        filename, created_at, size, sha256, sha384, sha512, sha3_384,
        object_key, bases, architectures, oci_image_digest, oci_image_blob
 FROM resource_revisions
 WHERE resource_id = $1
   AND revision    = $2;
+
+-- name: ListResourceRevisionObjectKeysByPackage :many
+SELECT rr.object_key
+FROM resource_revisions rr
+JOIN resource_definitions rd ON rd.id = rr.resource_id
+WHERE rd.package_id = $1;

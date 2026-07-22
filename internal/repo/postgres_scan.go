@@ -2,51 +2,22 @@ package repo
 
 import (
 	"encoding/json"
-
-	"github.com/gschiano/charm-registry/internal/core"
 )
 
-func scanToken(row interface{ Scan(dest ...any) error }) (core.StoreToken, error) {
-	var token core.StoreToken
-	var packagesJSON []byte
-	var channelsJSON []byte
-	var permissionsJSON []byte
-	err := row.Scan(
-		&token.SessionID,
-		&token.TokenHash,
-		&token.AccountID,
-		&token.Description,
-		&packagesJSON,
-		&channelsJSON,
-		&permissionsJSON,
-		&token.ValidSince,
-		&token.ValidUntil,
-		&token.RevokedAt,
-		&token.RevokedBy,
-	)
-	if err != nil {
-		return core.StoreToken{}, err
-	}
-	unmarshalJSON(packagesJSON, &token.Packages)
-	unmarshalJSON(channelsJSON, &token.Channels)
-	unmarshalJSON(permissionsJSON, &token.Permissions)
-	return token, nil
-}
-
-func mustJSON(value any) []byte {
+func marshalJSON(value any) ([]byte, error) {
 	if value == nil {
-		return []byte("null")
+		return []byte("null"), nil
 	}
 	payload, err := json.Marshal(value)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return payload
+	return payload, nil
 }
 
-func unmarshalJSON(payload []byte, target any) {
+func unmarshalJSON(payload []byte, target any) error {
 	if len(payload) == 0 || string(payload) == "null" {
-		return
+		return nil
 	}
-	_ = json.Unmarshal(payload, target)
+	return json.Unmarshal(payload, target)
 }

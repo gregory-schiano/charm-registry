@@ -38,6 +38,25 @@ func (q *Queries) CreateTrack(ctx context.Context, arg CreateTrackParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const deleteTrack = `-- name: DeleteTrack :execrows
+DELETE FROM tracks
+WHERE package_id = $1
+  AND name = $2
+`
+
+type DeleteTrackParams struct {
+	PackageID string
+	Name      string
+}
+
+func (q *Queries) DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTrack, arg.PackageID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const listTracks = `-- name: ListTracks :many
 SELECT name, version_pattern, automatic_phasing_percentage, created_at
 FROM tracks
@@ -62,6 +81,39 @@ func (q *Queries) ListTracks(ctx context.Context, packageID string) ([]ListTrack
 	for rows.Next() {
 		var i ListTracksRow
 		if err := rows.Scan(
+			&i.Name,
+			&i.VersionPattern,
+			&i.AutomaticPhasingPercentage,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTracksForPackages = `-- name: ListTracksForPackages :many
+SELECT package_id, name, version_pattern, automatic_phasing_percentage, created_at
+FROM tracks
+WHERE package_id = ANY($1::text[])
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListTracksForPackages(ctx context.Context, dollar_1 []string) ([]Track, error) {
+	rows, err := q.db.Query(ctx, listTracksForPackages, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Track{}
+	for rows.Next() {
+		var i Track
+		if err := rows.Scan(
+			&i.PackageID,
 			&i.Name,
 			&i.VersionPattern,
 			&i.AutomaticPhasingPercentage,

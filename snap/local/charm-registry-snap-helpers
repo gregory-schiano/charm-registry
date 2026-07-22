@@ -1,0 +1,37 @@
+# Shared shell helpers for charm-registry snap hooks and wrappers.
+
+config_get() {
+	key="$1"
+	value="$(snapctl get "$key" 2>/dev/null || true)"
+	if [ -n "$value" ]; then
+		printf '%s' "$value"
+	fi
+}
+
+config_bool() {
+	key="$1"
+	default="$2"
+	value="$(config_get "$key")"
+	case "$value" in
+		"") value="$default" ;;
+	esac
+	case "$value" in
+		true | True | TRUE | 1 | yes | Yes | YES) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+url_host() {
+	raw="$1"
+	raw="${raw#*://}"
+	raw="${raw%%/*}"
+	raw="${raw%%:*}"
+	printf '%s\n' "$raw"
+}
+
+is_ip() {
+	case "$1" in
+		*:* | [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 0 ;;
+		*) return 1 ;;
+	esac
+}

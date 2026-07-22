@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,14 +24,15 @@ func (s *Service) ResolveIdentity(
 	if claims.Subject == "" {
 		return core.Identity{}, nil
 	}
-	account, err := s.repo.EnsureAccount(ctx, core.Account{
+	account, err := s.accounts.EnsureAccount(ctx, core.Account{
 		ID:          uuid.NewString(),
 		Subject:     claims.Subject,
-		Username:    firstNonEmpty(claims.Username, strings.ReplaceAll(claims.Subject, "|", "_")),
-		DisplayName: firstNonEmpty(claims.DisplayName, claims.Username, claims.Subject),
-		Email:       firstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
+		Username:    core.FirstNonEmpty(claims.Username, strings.ReplaceAll(claims.Subject, "|", "_")),
+		DisplayName: core.FirstNonEmpty(claims.DisplayName, claims.Username, claims.Subject),
+		Email:       core.FirstNonEmpty(claims.Email, sanitizeSubject(claims.Subject)+"@example.invalid"),
 		Validation:  "verified",
-		CreatedAt:   time.Now().UTC(),
+		IsAdmin:     s.cfg.IsAdminIdentity(claims.Subject, claims.Email, claims.Username),
+		CreatedAt:   s.now(),
 	})
 	if err != nil {
 		return core.Identity{}, err
@@ -66,10 +68,13 @@ func (s *Service) IssueStoreToken(
 	if err != nil {
 		return "", core.StoreToken{}, err
 	}
-	now := time.Now().UTC()
-	token := core.StoreToken{
+	prefix := auth.TokenPrefixFromRaw(raw)
+	now := s.now()
+	token, err := core.NewStoreToken(core.StoreToken{
 		SessionID:   uuid.NewString(),
 		TokenHash:   hash,
+		TokenPrefix: prefix,
+		HashScheme:  auth.TokenHashSchemeBcrypt,
 		AccountID:   identity.Account.ID,
 		Description: req.Description,
 		Packages:    req.Packages,
@@ -77,10 +82,23 @@ func (s *Service) IssueStoreToken(
 		Permissions: permissions,
 		ValidSince:  now,
 		ValidUntil:  now.Add(ttl),
-	}
-	if err := s.repo.CreateStoreToken(ctx, token); err != nil {
+	})
+	if err != nil {
 		return "", core.StoreToken{}, err
 	}
+	if err := s.accounts.CreateStoreToken(ctx, token); err != nil {
+		return "", core.StoreToken{}, err
+	}
+	slog.InfoContext(ctx, "store token issued",
+		"account_id", identity.Account.ID,
+		"session_id", token.SessionID,
+		"permission_count", len(token.Permissions),
+		"package_scope_count", len(token.Packages),
+		"channel_scope_count", len(token.Channels),
+		"valid_until", token.ValidUntil,
+	)
+	AuditLog(ctx, "token_issue", identity.Account.ID, token.SessionID, nil,
+		"permission_count", len(token.Permissions))
 	return raw, token, nil
 }
 
@@ -99,7 +117,7 @@ func (s *Service) ExchangeStoreToken(ctx context.Context, identity core.Identity
 	return raw, err
 }
 
-// ListStoreTokens lists store tokens for the authenticated account.
+// ListStoreTokens enforces auth and account scoping before listing store tokens.
 //
 // The following errors may be returned:
 // - Authentication or repository errors.
@@ -111,7 +129,7 @@ func (s *Service) ListStoreTokens(
 	if err := s.requireAuth(identity); err != nil {
 		return nil, err
 	}
-	return s.repo.ListStoreTokens(ctx, identity.Account.ID, includeInactive)
+	return s.accounts.ListStoreTokens(ctx, identity.Account.ID, includeInactive)
 }
 
 // RevokeStoreToken revokes a store token for the authenticated account.
@@ -122,16 +140,24 @@ func (s *Service) RevokeStoreToken(ctx context.Context, identity core.Identity, 
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
-	return s.repo.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID)
+	if err := s.accounts.RevokeStoreToken(ctx, identity.Account.ID, sessionID, identity.Account.ID); err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "store token revoked",
+		"account_id", identity.Account.ID,
+		"session_id", sessionID,
+	)
+	AuditLog(ctx, "token_revoke", identity.Account.ID, sessionID, nil)
+	return nil
 }
 
 // MacaroonInfo returns Charmhub-compatible token account details.
 //
 // The following errors may be returned:
 // - Authentication errors.
-func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
+func (s *Service) MacaroonInfo(identity core.Identity) (macaroonInfoResponse, error) {
 	if err := s.requireAuth(identity); err != nil {
-		return nil, err
+		return macaroonInfoResponse{}, err
 	}
 	var packages []core.PackageSelector
 	var channels []string
@@ -141,17 +167,11 @@ func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
 		channels = identity.Token.Channels
 		permissions = identity.Token.Permissions
 	}
-	return map[string]any{
-		"account": map[string]any{
-			"display-name": identity.Account.DisplayName,
-			"email":        identity.Account.Email,
-			"id":           identity.Account.ID,
-			"username":     identity.Account.Username,
-			"validation":   identity.Account.Validation,
-		},
-		"packages":    emptySliceIfNil(packages),
-		"channels":    emptySliceIfNil(channels),
-		"permissions": emptySliceIfNil(permissions),
+	return macaroonInfoResponse{
+		Account:     accountResponseFrom(identity.Account),
+		Packages:    emptySliceIfNil(packages),
+		Channels:    emptySliceIfNil(channels),
+		Permissions: emptySliceIfNil(permissions),
 	}, nil
 }
 
@@ -159,15 +179,20 @@ func (s *Service) MacaroonInfo(identity core.Identity) (map[string]any, error) {
 //
 // The following errors may be returned:
 // - Authentication errors.
-func (s *Service) DeprecatedWhoAmI(identity core.Identity) (map[string]any, error) {
+func (s *Service) DeprecatedWhoAmI(identity core.Identity) (accountResponse, error) {
 	if err := s.requireAuth(identity); err != nil {
-		return nil, err
+		return accountResponse{}, err
 	}
-	return map[string]any{
-		"display-name": identity.Account.DisplayName,
-		"email":        identity.Account.Email,
-		"id":           identity.Account.ID,
-		"username":     identity.Account.Username,
-		"validation":   identity.Account.Validation,
-	}, nil
+	return accountResponseFrom(identity.Account), nil
+}
+
+func accountResponseFrom(account core.Account) accountResponse {
+	return accountResponse{
+		DisplayName: account.DisplayName,
+		Email:       account.Email,
+		ID:          account.ID,
+		IsAdmin:     account.IsAdmin,
+		Username:    account.Username,
+		Validation:  account.Validation,
+	}
 }

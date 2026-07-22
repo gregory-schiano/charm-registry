@@ -1,6 +1,10 @@
 package service
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
@@ -108,23 +112,60 @@ type RefreshAction struct {
 
 // Service is the application service layer.
 type Service struct {
-	cfg   config.Config
-	repo  repo.Repository
-	blobs blob.Store
+	cfg       config.Config
+	health    repo.HealthRepo
+	tx        repo.Transactor
+	accounts  repo.AccountRepo
+	repo      repo.PackageRepo
+	syncRules repo.CharmhubSyncRepo
+	blobs     blob.Store
+	oci       OCIRegistry
+	Clock     func() time.Time
 }
 
 // New returns a [Service] backed by the provided repository and blob store.
-func New(cfg config.Config, repository repo.Repository, blobs blob.Store) *Service {
-	return &Service{cfg: cfg, repo: repository, blobs: blobs}
+func New(cfg config.Config, repository repo.Backend, blobs blob.Store, oci OCIRegistry) *Service {
+	return &Service{
+		cfg:       cfg,
+		health:    repository,
+		tx:        repository,
+		accounts:  repository,
+		repo:      repository,
+		syncRules: repository,
+		blobs:     blobs,
+		oci:       oci,
+		Clock:     time.Now,
+	}
 }
 
-// RootDocument returns the top-level service metadata document.
-func (s *Service) RootDocument() map[string]any {
-	return map[string]any{
-		"service-name": "private-charm-registry",
-		"version":      "v1",
-		"api-url":      s.cfg.PublicAPIURL,
-		"storage-url":  s.cfg.PublicStorageURL,
-		"registry-url": s.cfg.PublicRegistryURL,
+func (s *Service) now() time.Time {
+	if s.Clock == nil {
+		return time.Now().UTC()
+	}
+	return s.Clock().UTC()
+}
+
+func (s *Service) withRepositoryTransaction(ctx context.Context, fn func(repo.PackageRepo) error) error {
+	if err := s.tx.WithinTransaction(ctx, func(repository repo.CompositeRepo) error {
+		return fn(repository)
+	}); err != nil {
+		return fmt.Errorf("cannot complete repository transaction: %w", err)
+	}
+	return nil
+}
+
+// CheckReady reports whether the service dependencies are ready to serve requests.
+func (s *Service) CheckReady(ctx context.Context) error {
+	return s.health.Ping(ctx)
+}
+
+// GetRootDocument returns the top-level service metadata document.
+func (s *Service) GetRootDocument() rootDocumentResponse {
+	return rootDocumentResponse{
+		ServiceName: "private-charm-registry",
+		Version:     "v1",
+		APIURL:      s.cfg.PublicAPIURL,
+		StorageURL:  s.cfg.PublicStorageURL,
+		RegistryURL: s.cfg.PublicRegistryURL,
 	}
 }

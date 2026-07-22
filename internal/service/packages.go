@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"time"
+	"log/slog"
 
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
@@ -22,11 +22,14 @@ func (s *Service) RegisterPackage(
 	if err := s.requirePermission(identity, permAccountRegisterPackage); err != nil {
 		return core.Package{}, err
 	}
-	now := time.Now().UTC()
-	pkg := core.Package{
+	if err := s.ensurePackageNotSynchronized(ctx, name); err != nil {
+		return core.Package{}, err
+	}
+	now := s.now()
+	pkg, err := core.NewPackage(core.Package{
 		ID:             compactID(),
 		Name:           name,
-		Type:           firstNonEmpty(packageType, "charm"),
+		Type:           core.FirstNonEmpty(packageType, "charm"),
 		Private:        private,
 		Status:         "registered",
 		OwnerAccountID: identity.Account.ID,
@@ -45,13 +48,30 @@ func (s *Service) RegisterPackage(
 			Name:      "latest",
 			CreatedAt: now,
 		}},
+	})
+	if err != nil {
+		return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
 	}
-	if err := s.repo.CreatePackage(ctx, pkg); err != nil {
-		return core.Package{}, translateRepoError(err, "package already exists")
-	}
-	if _, err := s.repo.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.PackageRepo) error {
+		if err := repository.CreatePackage(ctx, pkg); err != nil {
+			return translateRepoError(err, messagePackageAlreadyExists)
+		}
+		if _, err := repository.CreateTracks(ctx, pkg.ID, pkg.Tracks); err != nil {
+			return err
+		}
+		return repository.UpdatePackage(ctx, pkg)
+	}); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "package registered",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"package_type", pkg.Type,
+		"private", pkg.Private,
+		"account_id", identity.Account.ID,
+	)
+	AuditLog(ctx, "package_register", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID, "private", pkg.Private)
 	return pkg, nil
 }
 
@@ -67,7 +87,15 @@ func (s *Service) ListRegisteredPackages(
 	if err := s.requirePermission(identity, permAccountViewPackages); err != nil {
 		return nil, err
 	}
-	packages, err := s.repo.ListPackagesForAccount(ctx, identity.Account.ID, includeCollaborations)
+	var (
+		packages []core.Package
+		err      error
+	)
+	if identity.Account.IsAdmin {
+		packages, err = s.repo.SearchPackages(ctx, "")
+	} else {
+		packages, err = s.repo.ListPackagesForAccount(ctx, identity.Account.ID, includeCollaborations)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +114,7 @@ func (s *Service) GetPackage(
 ) (core.Package, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return core.Package{}, translateRepoError(err, "package not found")
+		return core.Package{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, requireViewPermission); err != nil {
 		return core.Package{}, err
@@ -104,9 +132,15 @@ func (s *Service) UpdatePackage(
 	name string,
 	patch MetadataPatch,
 ) (core.Package, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return core.Package{}, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return core.Package{}, translateRepoError(err, "package not found")
+		return core.Package{}, translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return core.Package{}, err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageMetadata); err != nil {
 		return core.Package{}, err
@@ -135,10 +169,17 @@ func (s *Service) UpdatePackage(
 	if patch.Links != nil {
 		pkg.Links = patch.Links
 	}
-	pkg.UpdatedAt = time.Now().UTC()
+	pkg.UpdatedAt = s.now()
 	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
 		return core.Package{}, err
 	}
+	slog.InfoContext(ctx, "package metadata updated",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"private", pkg.Private,
+		"default_track", stringValue(pkg.DefaultTrack),
+		"account_id", identity.Account.ID,
+	)
 	return s.enrichPackage(ctx, pkg)
 }
 
@@ -147,9 +188,15 @@ func (s *Service) UpdatePackage(
 // The following errors may be returned:
 // - Authorization, validation, or repository errors.
 func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity, name string) (string, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return "", err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, name)
 	if err != nil {
-		return "", translateRepoError(err, "package not found")
+		return "", translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManage); err != nil {
 		return "", err
@@ -159,31 +206,135 @@ func (s *Service) UnregisterPackage(ctx context.Context, identity core.Identity,
 		return "", err
 	}
 	if len(revisions) > 0 {
+		slog.DebugContext(ctx, "package unregister rejected because revisions exist",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"revision_count", len(revisions),
+			"account_id", identity.Account.ID,
+		)
 		// The caller is authorised — the business rule (not a permission
 		// violation) prevents deletion.  HTTP 400 / "invalid-request" matches
 		// the Charmhub API contract; 403 is reserved for auth failures.
-		return "", newError(400, "invalid-request", "cannot unregister a package with existing revisions")
+		return "", newError(ErrorKindInvalidRequest, "invalid-request", "cannot unregister a package with existing revisions")
 	}
 	if err := s.repo.DeletePackage(ctx, pkg.ID); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "package unregistered",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"account_id", identity.Account.ID,
+	)
+	AuditLog(ctx, "package_unregister", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID)
 	return pkg.ID, nil
 }
 
-// Find searches packages that the caller is allowed to see.
+// PurgePackage deletes a package and all registry-managed artifacts for it.
+//
+// The following errors may be returned:
+// - Authorization, artifact deletion, or repository errors.
+func (s *Service) PurgePackage(ctx context.Context, identity core.Identity, name string) (string, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return "", err
+	}
+	pkg, err := s.repo.GetPackageByName(ctx, name)
+	if err != nil {
+		return "", translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
+	}
+	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManage); err != nil {
+		return "", err
+	}
+	blobKeys, err := s.packageBlobKeys(ctx, pkg.ID)
+	if err != nil {
+		return "", err
+	}
+	// Removing the package metadata is authoritative and must happen
+	// atomically before any external artifact is touched.  If it fails,
+	// nothing has been deleted and the package remains consistent.
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.PackageRepo) error {
+		if err := repository.DeleteUploadsByObjectKeys(ctx, blobKeys); err != nil {
+			return err
+		}
+		return repository.DeletePackage(ctx, pkg.ID)
+	}); err != nil {
+		return "", err
+	}
+	// The package is gone from the registry; artifact cleanup is best-effort.
+	// Any leftover blobs or OCI images are orphaned and GC-able, so a failure
+	// here must not resurrect the (already removed) package metadata.
+	if s.oci != nil {
+		if err := s.oci.DeletePackage(ctx, pkg); err != nil {
+			slog.WarnContext(ctx, "best-effort OCI artifact cleanup after purge failed",
+				"package", pkg.Name, "error", err)
+		}
+	}
+	for _, key := range blobKeys {
+		if err := s.blobs.Delete(ctx, key); err != nil {
+			slog.WarnContext(ctx, "best-effort blob cleanup after purge failed",
+				"package", pkg.Name, "key", key, "error", err)
+		}
+	}
+	slog.InfoContext(ctx, "package purged",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"blob_count", len(blobKeys),
+		"account_id", identity.Account.ID,
+	)
+	AuditLog(ctx, "package_purge", identity.Account.ID, pkg.Name, nil,
+		"package_id", pkg.ID, "blob_count", len(blobKeys))
+	return pkg.ID, nil
+}
+
+func (s *Service) packageBlobKeys(ctx context.Context, packageID string) ([]string, error) {
+	seen := map[string]struct{}{}
+	var keys []string
+	add := func(key string) {
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	revisions, err := s.repo.ListRevisions(ctx, packageID, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, revision := range revisions {
+		add(revision.ObjectKey)
+	}
+
+	resourceKeys, err := s.repo.ListResourceRevisionObjectKeysByPackage(ctx, packageID)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range resourceKeys {
+		add(key)
+	}
+	return keys, nil
+}
+
+// SearchPackages searches packages that the caller is allowed to see.
 //
 // The following errors may be returned:
 // - Repository lookup or package enrichment errors.
-func (s *Service) Find(ctx context.Context, identity core.Identity, query string) (map[string]any, error) {
+func (s *Service) SearchPackages(ctx context.Context, identity core.Identity, query string) (findResponse, error) {
 	packages, err := s.repo.SearchPackages(ctx, query)
 	if err != nil {
-		return nil, err
+		return findResponse{}, err
 	}
 	packages, err = s.enrichPackages(ctx, packages)
 	if err != nil {
-		return nil, err
+		return findResponse{}, err
 	}
-	results := make([]map[string]any, 0, len(packages))
+	results := make([]findResultResponse, 0, len(packages))
 	for _, pkg := range packages {
 		if !s.canSeePackage(ctx, identity, pkg) {
 			continue
@@ -193,161 +344,188 @@ func (s *Service) Find(ctx context.Context, identity core.Identity, query string
 			if errors.Is(err, repo.ErrNotFound) {
 				continue
 			}
-			return nil, err
+			return findResponse{}, err
 		}
 		results = append(results, item)
 	}
-	return map[string]any{"results": results}, nil
+	return findResponse{Results: results}, nil
 }
 
-// Info returns Charmhub-style metadata for a package.
+// GetPackageInfo returns Charmhub-style metadata for a package.
 //
 // The following errors may be returned:
 // - Authorization or repository lookup errors.
-func (s *Service) Info(ctx context.Context, identity core.Identity, charmName string) (map[string]any, error) {
+func (s *Service) GetPackageInfo(ctx context.Context, identity core.Identity, charmName string) (infoResponse, error) {
+	return s.info(ctx, identity, charmName, "")
+}
+
+func (s *Service) GetPackageInfoForChannel(
+	ctx context.Context,
+	identity core.Identity,
+	charmName, channel string,
+) (infoResponse, error) {
+	return s.info(ctx, identity, charmName, channel)
+}
+
+func (s *Service) info(ctx context.Context, identity core.Identity, charmName, channel string) (infoResponse, error) {
 	pkg, err := s.GetPackage(ctx, identity, charmName, false)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
-	defaultRelease, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
+	var defaultRelease core.Release
+	if channel != "" {
+		defaultRelease, err = s.repo.ResolveRelease(ctx, pkg.ID, channel)
+	} else {
+		defaultRelease, err = s.repo.ResolveDefaultRelease(ctx, pkg.ID)
+	}
 	if err != nil {
-		return nil, translateRepoError(err, "no released revisions found")
+		return infoResponse{}, translateRepoError(err, messageNoReleasedRevisionsFound)
 	}
 	defaultRevision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, defaultRelease.Revision)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	resourceDefs, err := s.repo.ListResourceDefinitions(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	resources, err := s.resolveReleaseResources(ctx, pkg.ID, resourceDefs, defaultRelease)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
 	defaultRevision.Resources = resources
 	releases, err := s.repo.ListReleases(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return infoResponse{}, err
 	}
-	// Cache loaded revisions so we don't re-fetch the same revision number for
-	// multiple channel-map entries (e.g. when the same revision is released to
-	// several channels).
-	revisionCache := map[int]core.Revision{defaultRelease.Revision: defaultRevision}
-	channelMap := make([]map[string]any, 0, len(releases))
+	revisionNumbers := uniqueRevisionNumbers(releases)
+	if len(revisionNumbers) == 0 {
+		revisionNumbers = append(revisionNumbers, defaultRelease.Revision)
+	}
+	revisionCache, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, revisionNumbers)
+	if err != nil {
+		return infoResponse{}, err
+	}
+	revisionCache[defaultRelease.Revision] = defaultRevision
+	channelMap := make([]infoChannelMapItem, 0, len(releases))
 	for _, release := range releases {
 		rev, ok := revisionCache[release.Revision]
 		if !ok {
-			rev, err = s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-			if err != nil {
-				continue
-			}
-			revisionCache[release.Revision] = rev
+			continue
 		}
 		chInfo := splitChannel(release.Channel)
-		channelMap = append(channelMap, map[string]any{
-			"channel": map[string]any{
-				"base":        release.Base,
-				"name":        release.Channel,
-				"released-at": release.When,
-				"risk":        chInfo.risk,
-				"track":       chInfo.track,
+		channelMap = append(channelMap, infoChannelMapItem{
+			Channel: infoChannelResponse{
+				Base:       release.Base,
+				Name:       release.Channel,
+				ReleasedAt: release.When,
+				Risk:       chInfo.risk,
+				Track:      chInfo.track,
 			},
-			"revision": revisionToInfo(rev, pkg.ID, s.cfg),
+			Revision: s.revisionToInfo(rev, pkg.ID),
 		})
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
-	return map[string]any{
-		"id":   pkg.ID,
-		"name": pkg.Name,
-		"type": pkg.Type,
-		"default-release": map[string]any{
-			"channel": map[string]any{
-				"base":        defaultRelease.Base,
-				"name":        defaultRelease.Channel,
-				"released-at": defaultRelease.When,
-				"risk":        channelInfo.risk,
-				"track":       channelInfo.track,
+	return infoResponse{
+		ID:   pkg.ID,
+		Name: pkg.Name,
+		Type: pkg.Type,
+		DefaultRelease: infoReleaseResponse{
+			Channel: infoChannelResponse{
+				Base:       defaultRelease.Base,
+				Name:       defaultRelease.Channel,
+				ReleasedAt: defaultRelease.When,
+				Risk:       channelInfo.risk,
+				Track:      channelInfo.track,
 			},
-			"resources": releaseResourcesToDownloads(pkg.ID, resources, s.cfg),
-			"revision":  revisionToInfo(defaultRevision, pkg.ID, s.cfg),
+			Resources: resources,
+			Revision:  s.revisionToInfo(defaultRevision, pkg.ID),
 		},
-		"channel-map": channelMap,
-		"result":      packageResult(pkg),
+		ChannelMap: channelMap,
+		Result:     packageResult(pkg),
 	}, nil
 }
 
-func (s *Service) packageFindResult(ctx context.Context, pkg core.Package) (map[string]any, error) {
+func (s *Service) packageFindResult(ctx context.Context, pkg core.Package) (findResultResponse, error) {
 	defaultRelease, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return findResultResponse{}, err
 	}
 	defaultRevision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, defaultRelease.Revision)
 	if err != nil {
-		return nil, err
+		return findResultResponse{}, err
 	}
 	channelInfo := splitChannel(defaultRelease.Channel)
-	return map[string]any{
-		"id":   pkg.ID,
-		"name": pkg.Name,
-		"type": pkg.Type,
-		"default-release": map[string]any{
-			"channel": map[string]any{
-				"base":        defaultRelease.Base,
-				"name":        defaultRelease.Channel,
-				"released-at": defaultRelease.When,
-				"risk":        channelInfo.risk,
-				"track":       channelInfo.track,
+	return findResultResponse{
+		ID:   pkg.ID,
+		Name: pkg.Name,
+		Type: pkg.Type,
+		DefaultRelease: findReleaseResponse{
+			Channel: infoChannelResponse{
+				Base:       defaultRelease.Base,
+				Name:       defaultRelease.Channel,
+				ReleasedAt: defaultRelease.When,
+				Risk:       channelInfo.risk,
+				Track:      channelInfo.track,
 			},
-			"revision": map[string]any{
-				"attributes": defaultRevision.Attributes,
-				"bases":      defaultRevision.Bases,
-				"created-at": defaultRevision.CreatedAt,
-				"download": map[string]any{
-					"hash-sha-256": defaultRevision.SHA256,
-					"size":         defaultRevision.Size,
-					"url":          s.charmDownloadURL(pkg.ID, defaultRevision.Revision),
+			Revision: findRevisionResponse{
+				Attributes: defaultRevision.Attributes,
+				Bases:      defaultRevision.Bases,
+				CreatedAt:  defaultRevision.CreatedAt,
+				Download: core.Download{
+					HashSHA256: defaultRevision.SHA256,
+					Size:       defaultRevision.Size,
+					URL:        s.charmDownloadURL(pkg.ID, defaultRevision.Revision),
 				},
-				"revision": defaultRevision.Revision,
-				"version":  defaultRevision.Version,
+				Revision: defaultRevision.Revision,
+				Version:  defaultRevision.Version,
 			},
 		},
-		"result": packageResult(pkg),
+		Result: packageResult(pkg),
 	}, nil
 }
 
-func packageResult(pkg core.Package) map[string]any {
+func packageResult(pkg core.Package) packageResultResponse {
 	website := ""
 	if pkg.Website != nil {
 		website = *pkg.Website
 	}
-	return map[string]any{
-		"bugs-url":      firstLink(pkg.Links["issues"]),
-		"categories":    []any{},
-		"deployable-on": []string{},
-		"description":   stringValue(pkg.Description),
-		"license":       "",
-		"links":         pkg.Links,
-		"media":         pkg.Media,
-		"publisher":     pkg.Publisher,
-		"store-url":     firstNonEmpty(website, pkg.Store),
-		"store-url-old": "",
-		"summary":       stringValue(pkg.Summary),
-		"title":         stringValue(pkg.Title),
-		"unlisted":      pkg.Private,
-		"used-by":       []any{},
-		"website":       website,
+	return packageResultResponse{
+		BugsURL:      firstLink(pkg.Links["issues"]),
+		Categories:   []any{},
+		DeployableOn: []string{},
+		Description:  stringValue(pkg.Description),
+		License:      "",
+		Links:        pkg.Links,
+		Media:        pkg.Media,
+		Publisher:    pkg.Publisher,
+		StoreURL:     core.FirstNonEmpty(website, pkg.Store),
+		StoreURLOld:  "",
+		Summary:      stringValue(pkg.Summary),
+		Title:        stringValue(pkg.Title),
+		Unlisted:     pkg.Private,
+		UsedBy:       []any{},
+		Website:      website,
 	}
 }
 
 func (s *Service) enrichPackages(ctx context.Context, packages []core.Package) ([]core.Package, error) {
+	if len(packages) == 0 {
+		return []core.Package{}, nil
+	}
+	packageIDs := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		packageIDs = append(packageIDs, pkg.ID)
+	}
+	tracksByPackage, err := s.repo.ListTracksForPackages(ctx, packageIDs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]core.Package, 0, len(packages))
 	for _, pkg := range packages {
-		enriched, err := s.enrichPackage(ctx, pkg)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, enriched)
+		pkg.Tracks = tracksByPackage[pkg.ID]
+		pkg.Store = s.cfg.PublicAPIURL + "/charms/" + pkg.Name
+		out = append(out, pkg)
 	}
 	return out, nil
 }
@@ -360,4 +538,17 @@ func (s *Service) enrichPackage(ctx context.Context, pkg core.Package) (core.Pac
 	pkg.Tracks = tracks
 	pkg.Store = s.cfg.PublicAPIURL + "/charms/" + pkg.Name
 	return pkg, nil
+}
+
+func uniqueRevisionNumbers(releases []core.Release) []int {
+	seen := make(map[int]struct{}, len(releases))
+	out := make([]int, 0, len(releases))
+	for _, release := range releases {
+		if _, ok := seen[release.Revision]; ok {
+			continue
+		}
+		seen[release.Revision] = struct{}{}
+		out = append(out, release.Revision)
+	}
+	return out
 }

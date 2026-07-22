@@ -1,6 +1,0 @@
-.git
-.gitignore
-.bin
-postgres-data
-minio-data
-registry-data

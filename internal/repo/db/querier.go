@@ -6,6 +6,8 @@ package repo
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -15,39 +17,60 @@ type Querier interface {
 	// interpolated SQL fragment. This is the safe replacement for the old
 	// fmt.Sprintf(roleCondition) pattern.
 	CanViewPackage(ctx context.Context, arg CanViewPackageParams) (bool, error)
+	CreateCharmhubSyncRule(ctx context.Context, arg CreateCharmhubSyncRuleParams) error
 	CreatePackage(ctx context.Context, arg CreatePackageParams) error
 	CreateResourceRevision(ctx context.Context, arg CreateResourceRevisionParams) error
 	CreateRevision(ctx context.Context, arg CreateRevisionParams) error
 	CreateStoreToken(ctx context.Context, arg CreateStoreTokenParams) error
 	CreateTrack(ctx context.Context, arg CreateTrackParams) (int64, error)
 	CreateUpload(ctx context.Context, arg CreateUploadParams) error
+	DeleteCharmhubSyncRule(ctx context.Context, arg DeleteCharmhubSyncRuleParams) (int64, error)
 	DeletePackage(ctx context.Context, id string) (int64, error)
+	DeleteRelease(ctx context.Context, arg DeleteReleaseParams) (int64, error)
+	DeleteReleaseForBase(ctx context.Context, arg DeleteReleaseForBaseParams) (int64, error)
+	DeleteResourceDefinition(ctx context.Context, id string) (int64, error)
+	DeleteResourceRevision(ctx context.Context, arg DeleteResourceRevisionParams) (int64, error)
+	DeleteRevision(ctx context.Context, arg DeleteRevisionParams) (int64, error)
+	DeleteStaleTrackReleases(ctx context.Context, arg DeleteStaleTrackReleasesParams) (int64, error)
+	DeleteStaleUploads(ctx context.Context, dollar_1 pgtype.Interval) (int64, error)
+	DeleteTrack(ctx context.Context, arg DeleteTrackParams) (int64, error)
 	EnsureAccount(ctx context.Context, arg EnsureAccountParams) (Account, error)
 	FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error)
+	FindStoreTokensByPrefix(ctx context.Context, tokenPrefix *string) ([]FindStoreTokensByPrefixRow, error)
 	GetAccountByID(ctx context.Context, id string) (Account, error)
+	GetLatestRevision(ctx context.Context, packageID string) (Revision, error)
 	GetPackageByID(ctx context.Context, id string) (GetPackageByIDRow, error)
 	GetPackageByName(ctx context.Context, name string) (GetPackageByNameRow, error)
 	GetPackageOwner(ctx context.Context, id string) (GetPackageOwnerRow, error)
 	GetResourceDefinition(ctx context.Context, arg GetResourceDefinitionParams) (ResourceDefinition, error)
 	GetResourceRevision(ctx context.Context, arg GetResourceRevisionParams) (ResourceRevision, error)
 	GetRevisionByNumber(ctx context.Context, arg GetRevisionByNumberParams) (Revision, error)
-	GetUpload(ctx context.Context, id string) (Upload, error)
-	ListActiveStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
-	ListAllStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error)
+	GetUpload(ctx context.Context, id string) (GetUploadRow, error)
+	ListActiveStoreTokens(ctx context.Context, accountID string) ([]ListActiveStoreTokensRow, error)
+	ListAllStoreTokens(ctx context.Context, accountID string) ([]ListAllStoreTokensRow, error)
+	ListCharmhubSyncRules(ctx context.Context) ([]ListCharmhubSyncRulesRow, error)
+	ListCharmhubSyncRulesByPackageName(ctx context.Context, packageName string) ([]ListCharmhubSyncRulesByPackageNameRow, error)
 	ListPackagesForAccount(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountRow, error)
-	ListReleases(ctx context.Context, packageID string) ([]Release, error)
+	ListPackagesForAccountWithCollaborations(ctx context.Context, ownerAccountID string) ([]ListPackagesForAccountWithCollaborationsRow, error)
+	ListReleases(ctx context.Context, packageID string) ([]ListReleasesRow, error)
 	ListResourceDefinitions(ctx context.Context, packageID string) ([]ResourceDefinition, error)
+	ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error)
 	ListResourceRevisions(ctx context.Context, resourceID string) ([]ResourceRevision, error)
 	ListRevisions(ctx context.Context, packageID string) ([]Revision, error)
+	ListRevisionsByNumbers(ctx context.Context, arg ListRevisionsByNumbersParams) ([]Revision, error)
 	ListTracks(ctx context.Context, packageID string) ([]ListTracksRow, error)
+	ListTracksForPackages(ctx context.Context, dollar_1 []string) ([]Track, error)
 	ReplaceRelease(ctx context.Context, arg ReplaceReleaseParams) error
-	ResolveDefaultRelease(ctx context.Context, id string) (Release, error)
-	ResolveLatestRelease(ctx context.Context, packageID string) (Release, error)
-	ResolveRelease(ctx context.Context, arg ResolveReleaseParams) (Release, error)
+	ResolveDefaultRelease(ctx context.Context, id string) (ResolveDefaultReleaseRow, error)
+	ResolveLatestRelease(ctx context.Context, packageID string) (ResolveLatestReleaseRow, error)
+	ResolveRelease(ctx context.Context, arg ResolveReleaseParams) (ResolveReleaseRow, error)
+	ResolveReleaseForBase(ctx context.Context, arg ResolveReleaseForBaseParams) (ResolveReleaseForBaseRow, error)
 	RevokeStoreToken(ctx context.Context, arg RevokeStoreTokenParams) (int64, error)
-	SearchPackages(ctx context.Context, name string) ([]SearchPackagesRow, error)
+	SearchPackages(ctx context.Context, dollar_1 string) ([]SearchPackagesRow, error)
+	UpdateCharmhubSyncRule(ctx context.Context, arg UpdateCharmhubSyncRuleParams) (int64, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (int64, error)
 	UpdateResourceRevision(ctx context.Context, arg UpdateResourceRevisionParams) (int64, error)
+	UpdateTokenHashScheme(ctx context.Context, arg UpdateTokenHashSchemeParams) error
 	UpsertResourceDefinition(ctx context.Context, arg UpsertResourceDefinitionParams) (ResourceDefinition, error)
 }
 

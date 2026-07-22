@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 1024 1024">
+  <title>Charm Registry app icon</title>
+  <rect x="0" y="0" width="1024" height="1024" rx="172" fill="#2C001E"/>
+  <g transform="translate(126 232) scale(1.75)">
+    <path d="M165 30 L55 93 L55 227 L165 290" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M165 30 L275 93 L275 114" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M275 206 L275 227 L165 290" fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    <polygon points="165,86 226,122 165,158 104,122" fill="#F15D22"/>
+    <polygon points="98,132 156,166 156,236 98,202" fill="#E95420"/>
+    <polygon points="232,132 174,166 174,236 232,202" fill="#DD4814"/>
+    <rect x="304" y="103" width="88" height="18" rx="5" fill="#FFFFFF"/>
+    <rect x="407" y="103" width="22" height="18" rx="5" fill="#FFFFFF"/>
+    <rect x="304" y="151" width="106" height="18" rx="5" fill="#FFFFFF"/>
+    <rect x="425" y="151" width="28" height="18" rx="5" fill="#E95420"/>
+    <rect x="304" y="199" width="88" height="18" rx="5" fill="#FFFFFF"/>
+    <rect x="407" y="199" width="22" height="18" rx="5" fill="#FFFFFF"/>
+  </g>
+</svg>

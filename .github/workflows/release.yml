@@ -1,0 +1,565 @@
+name: Release
+
+# Runs on pushed release tags, or manually via workflow_dispatch. Manual runs
+# MUST be dispatched ON THE TAG (select the tag as the run ref in the UI, or
+# `gh workflow run release.yml --ref v1.2.3`): every job builds the ref the
+# workflow runs on, and validate-tag rejects non-semver refs such as branches.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]+*-rc[0-9]+"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build all artifacts but skip publishing to stores/registries"
+        type: boolean
+        default: true
+      rock_registry:
+        description: "OCI registry for rock push (default: ghcr.io)"
+        type: string
+        default: "ghcr.io"
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  GO_VERSION: "1.26.4"
+  # Keep in sync with the charm-ci pin used in integration.yml (Renovate
+  # tracks both).
+  CHARM_CI_REF: v0.0.1-alpha.7
+
+jobs:
+  # ── Derive publish parameters ─────────────────────────────────────
+  release-metadata:
+    name: Derive release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
+      is_rc: ${{ steps.meta.outputs.is_rc }}
+      is_dry_run: ${{ steps.meta.outputs.is_dry_run }}
+      rock_registry: ${{ steps.meta.outputs.rock_registry }}
+      rock_image: ${{ steps.meta.outputs.rock_image }}
+      built_sha: ${{ steps.resolve.outputs.built_sha }}
+    steps:
+      - id: meta
+        run: |
+          # The workflow always runs on the tag itself (tag push, or manual
+          # dispatch with the tag selected as the run ref).
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::Release must run on a tag ref, got ${{ github.ref_type }} '${{ github.ref_name }}'. Dispatch with the tag selected as the run ref (gh workflow run release.yml --ref vX.Y.Z)."
+            exit 1
+          fi
+          TAG="${{ github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # Determine channel based on tag pattern
+          if echo "${TAG}" | grep -qE '^-rc[0-9]+$|rc[0-9]+$'; then
+            echo "channel=latest/edge" >> "$GITHUB_OUTPUT"
+            echo "is_rc=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=latest/stable" >> "$GITHUB_OUTPUT"
+            echo "is_rc=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Dry-run: true when workflow_dispatch with dry_run=true, OR workflow_dispatch with
+          # dry_run not explicitly set to false. Tag-push events always publish (dry_run=false).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
+              echo "is_dry_run=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_dry_run=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "is_dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Rock registry: input override or GHCR default
+          REGISTRY="${{ github.event.inputs.rock_registry || 'ghcr.io' }}"
+          echo "rock_registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+          echo "rock_image=${REGISTRY}/${{ github.repository }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - id: resolve
+        name: Record built SHA
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "::notice::Release build ref=${{ steps.meta.outputs.tag }} SHA=${SHA}"
+          echo "built_sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+  validate-tag:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    needs: release-metadata
+    steps:
+      - name: Check tag format
+        run: |
+          TAG="${{ needs.release-metadata.outputs.tag }}"
+          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+            echo "::error::Tag '${TAG}' does not match expected semver pattern (vX.Y.Z or vX.Y.Z-rcN)"
+            exit 1
+          fi
+          echo "Release tag validated: ${TAG}"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [release-metadata, validate-tag]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run audit
+        # `make audit` runs the full unit suite under the race detector
+        # (test-race), so no separate coverage pass is needed here.
+        run: make audit
+
+  integration-smoke:
+    name: Integration Smoke
+    runs-on: ubuntu-latest
+    needs: [release-metadata, validate-tag, test]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build server binary
+        run: CGO_ENABLED=0 go build -o .bin/charm-registry ./cmd/charm-registry
+
+      - name: Start server (SQLite + dev auth)
+        env:
+          CHARM_REGISTRY_DATABASE_BACKEND: sqlite
+          CHARM_REGISTRY_ENABLE_INSECURE_DEV_AUTH: "true"
+          CHARM_REGISTRY_LISTEN: ":8080"
+          CHARM_REGISTRY_OCI_SECRET_KEY: integration-test-secret
+        run: |
+          .bin/charm-registry &
+          echo $! > /tmp/charm-registry.pid
+          # Wait for health endpoint (up to 30s)
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::Server did not become healthy within 30s"
+              SERVER_PID=$(cat /tmp/charm-registry.pid)
+              kill "$SERVER_PID" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Run BOOT integration tests
+        env:
+          ITEST_API_URL: http://localhost:8080
+        run: go test -tags=integration -run 'TestBOOT0[1-5]_' -v -count=1 ./tests/integration/
+
+      - name: Stop server
+        if: always()
+        run: |
+          SERVER_PID=$(cat /tmp/charm-registry.pid)
+          kill "$SERVER_PID" 2>/dev/null || true
+
+  build-binaries:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    needs: [release-metadata, validate-tag, test, integration-smoke]
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build charm-registry
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -trimpath -buildvcs=true \
+            -ldflags="-s -w -buildid=" \
+            -o dist/charm-registry-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/charm-registry
+
+      - name: Build charm-registryctl
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          CGO_ENABLED=0 go build -trimpath -buildvcs=true \
+            -ldflags="-s -w -buildid=" \
+            -o dist/charm-registryctl-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/charm-registryctl
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+          retention-days: 7
+
+  # ── charm, rock, and snap ───────────────────────────────────────
+  # Build all three the SAME way CI/integration test them: the upstream
+  # charm-ci opcli matrix (multi-arch), on the tag this workflow runs on.
+  # Rocks are pushed to GHCR ("registry" mode) so the charm can be published
+  # with a multi-arch app-image resource; publish-rock re-tags those images
+  # for the standalone release. SHA-pinned to v0.0.1-alpha.7 (Renovate tracks
+  # the tag).
+  build-artifacts:
+    name: Build charm, rock, and snap
+    needs: [release-metadata, validate-tag, test, integration-smoke]
+    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@2f274a6e4cfaac344660d8481ff8f8cb87a677b7 # v0.0.1-alpha.7
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    with:
+      working-directory: .
+      upload-image: registry
+      charmcraft-channel: latest/edge
+      rockcraft-channel: latest/edge
+
+  generate-sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: [release-metadata, validate-tag, test, integration-smoke]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install syft
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM
+        run: |
+          mkdir -p dist
+          syft dir:. -o spdx-json > dist/sbom.spdx.json
+          syft dir:. -o cyclonedx-json > dist/sbom.cyclonedx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: dist/
+          retention-days: 7
+
+  # ── GitHub release ──────────────────────────────────────────────
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: [release-metadata, build-binaries, build-artifacts, generate-sbom]
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: List release artifacts
+        run: find release-artifacts -type f | sort
+
+      # Draft when: RC tag, OR dry-run mode (manual dispatch with dry_run=true)
+      - name: Create release
+        id: create_release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
+        with:
+          tag_name: ${{ needs.release-metadata.outputs.tag }}
+          generate_release_notes: true
+          draft: ${{ needs.release-metadata.outputs.is_rc == 'true' || needs.release-metadata.outputs.is_dry_run == 'true' }}
+          prerelease: ${{ needs.release-metadata.outputs.is_rc == 'true' }}
+          # No *.rock asset: registry-mode builds publish the rock straight to
+          # GHCR (see publish-rock); the image registry is its release channel.
+          files: |
+            release-artifacts/charm-registry-*
+            release-artifacts/charm-registryctl-*
+            release-artifacts/*.snap
+            release-artifacts/*.charm
+            release-artifacts/sbom.*
+
+      - name: Attest build provenance
+        if: needs.release-metadata.outputs.is_dry_run != 'true'
+        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
+        with:
+          subject-path: |
+            release-artifacts/charm-registry-*
+            release-artifacts/charm-registryctl-*
+            release-artifacts/*.snap
+            release-artifacts/*.charm
+
+      - name: Attest SBOM
+        if: needs.release-metadata.outputs.is_dry_run != 'true'
+        uses: actions/attest-sbom@cbfd0027ae731a5892db25ecd226930d7ffd19eb # v2.1.0
+        with:
+          subject-path: release-artifacts/charm-registry-linux-amd64
+          sbom-path: release-artifacts/sbom.spdx.json
+
+  # ════════════════════════════════════════════════════════════════
+  # PUBLISH JOBS — only run when dry_run is false
+  # ════════════════════════════════════════════════════════════════
+
+  # Charm (all arches) + its rock as the app-image OCI resource -> Charmhub.
+  # opcli reads artifacts.yaml + artifacts.build.yaml, assembles the multi-arch
+  # rock resource from the images pushed to GHCR during the build, uploads it,
+  # then uploads and releases the charm revisions with the resource binding.
+  publish-charm:
+    name: Publish charm to Charmhub
+    runs-on: ubuntu-latest
+    needs: [release-metadata, release, build-artifacts]
+    if: needs.release-metadata.outputs.is_dry_run != 'true'
+    permissions:
+      actions: read # download artifacts.build.yaml from this run
+      contents: read
+      packages: write # read the rock resource images from GHCR
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${CHARM_CI_REF}"
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Authenticate to GHCR (rock resource images)
+        run: skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Fetch build manifest from this run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: opcli artifacts fetch --run-id "${{ github.run_id }}" --wait
+
+      - name: Authenticate with Charmhub
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMCRAFT_AUTH }}
+        run: |
+          if [ -z "$CHARMCRAFT_AUTH" ]; then
+            echo "::error::CHARMCRAFT_AUTH secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          mkdir -p "$HOME/.local/share/snap/charmcraft/common"
+          echo "$CHARMCRAFT_AUTH" > "$HOME/.local/share/snap/charmcraft/common/credentials"
+
+      - name: Publish charm + rock resource
+        run: opcli artifacts publish --channel "${{ needs.release-metadata.outputs.channel }}" --json
+
+      - name: Verify charm release
+        run: |
+          echo "=== Charm status ==="
+          charmcraft status charm-registry
+
+  # Standalone multi-arch rock image -> OCI registry (independent of the charm
+  # resource above). Registry-mode builds already pushed the per-arch images
+  # to GHCR; re-tag those refs (from the build manifest) into a manifest list
+  # under the version tag (and 'latest' for non-RC releases).
+  publish-rock:
+    name: Publish rock to OCI registry
+    runs-on: ubuntu-latest
+    needs: [release-metadata, release, build-artifacts]
+    if: needs.release-metadata.outputs.is_dry_run != 'true'
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Download build manifest
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: artifacts-build
+          path: manifest
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Determine registry credentials
+        id: creds
+        run: |
+          REGISTRY="${{ needs.release-metadata.outputs.rock_registry }}"
+          if [ "$REGISTRY" = "ghcr.io" ]; then
+            echo "username=${{ github.actor }}" >> "$GITHUB_OUTPUT"
+            echo "password=${{ secrets.GITHUB_TOKEN }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "username=${{ secrets.HARBOR_USERNAME }}" >> "$GITHUB_OUTPUT"
+            echo "password=${{ secrets.HARBOR_PASSWORD }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to registries
+        env:
+          REGISTRY_USER: ${{ steps.creds.outputs.username }}
+          REGISTRY_PASS: ${{ steps.creds.outputs.password }}
+        run: |
+          # GHCR holds the source images from the build; the target registry
+          # (GHCR by default, override via rock_registry) receives the release
+          # tags. Log in to both.
+          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          REGISTRY="${{ needs.release-metadata.outputs.rock_registry }}"
+          skopeo login "$REGISTRY" -u "$REGISTRY_USER" -p "$REGISTRY_PASS"
+          echo "$REGISTRY_PASS" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
+      - name: Push multi-arch rock manifest
+        env:
+          IMAGE: ${{ needs.release-metadata.outputs.rock_image }}
+          TAG: ${{ needs.release-metadata.outputs.tag }}
+          IS_RC: ${{ needs.release-metadata.outputs.is_rc }}
+        run: |
+          set -euo pipefail
+          # artifacts.build.yaml schema: rocks[].builds[] with {arch, image}
+          # in registry mode. Re-tag each arch image, then assemble the
+          # version-tag manifest list.
+          mapfile -t builds < <(python3 -c '
+          import yaml
+          data = yaml.safe_load(open("manifest/artifacts.build.yaml"))
+          for rock in data.get("rocks", []):
+              for build in rock.get("builds", []):
+                  if build.get("image"):
+                      print(build["arch"], build["image"])
+          ')
+          if [ ${#builds[@]} -eq 0 ]; then
+            echo "::error::No registry rock images found in the build manifest"
+            exit 1
+          fi
+          arch_refs=()
+          for entry in "${builds[@]}"; do
+            arch="${entry%% *}"
+            src="${entry#* }"
+            ref="${IMAGE}:${TAG}-${arch}"
+            echo "Re-tagging ${src} -> ${ref}"
+            skopeo copy --insecure-policy "docker://${src}" "docker://${ref}"
+            arch_refs+=("${ref}")
+          done
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" "${arch_refs[@]}"
+          if [ "$IS_RC" != "true" ]; then
+            docker buildx imagetools create -t "${IMAGE}:latest" "${arch_refs[@]}"
+          fi
+
+      - name: Verify pushed image
+        run: |
+          IMAGE="${{ needs.release-metadata.outputs.rock_image }}"
+          TAG="${{ needs.release-metadata.outputs.tag }}"
+          DIGEST=$(skopeo inspect "docker://${IMAGE}:${TAG}" --format='{{.Digest}}')
+          echo "Rock pushed: ${IMAGE}:${TAG} (digest ${DIGEST})"
+
+  publish-snap:
+    name: Publish snap to Snap Store
+    runs-on: ubuntu-latest
+    needs: [release-metadata, release]
+    if: needs.release-metadata.outputs.is_dry_run != 'true'
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download snap artifacts (per arch)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: built-snap-*
+          path: snaps
+          merge-multiple: true
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Upload and release each snap
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+          CHANNEL: ${{ needs.release-metadata.outputs.channel }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo "::error::SNAPCRAFT_STORE_CREDENTIALS secret is not set. Configure it per docs/release.md."
+            exit 1
+          fi
+          shopt -s nullglob globstar
+          snaps=(snaps/**/*.snap snaps/*.snap)
+          if [ ${#snaps[@]} -eq 0 ]; then
+            echo "::error::No snap artifacts found"
+            exit 1
+          fi
+          # Each per-arch snap is a distinct Snap Store revision; upload and
+          # release all of them to the channel (the store routes by arch).
+          for snap in "${snaps[@]}"; do
+            echo "Releasing ${snap} to ${CHANNEL}"
+            snapcraft upload --release="$CHANNEL" "$snap"
+          done
+
+      - name: Verify snap release
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          echo "=== Snap channel map ==="
+          snapcraft list-revisions spellbook 2>/dev/null | head -10 || echo "(list-revisions not available in CI)"
+
+  # ── Dry-run summary ─────────────────────────────────────────────
+  dry-run-summary:
+    name: Dry-run summary
+    runs-on: ubuntu-latest
+    needs: [release-metadata, release, build-binaries, build-artifacts, generate-sbom]
+    if: needs.release-metadata.outputs.is_dry_run == 'true'
+    steps:
+      - name: Print dry-run summary
+        run: |
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║              DRY RUN COMPLETE                            ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║ Tag:     ${{ needs.release-metadata.outputs.tag }}"
+          echo "║ Channel: ${{ needs.release-metadata.outputs.channel }}"
+          echo "║ RC:      ${{ needs.release-metadata.outputs.is_rc }}"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║ Artifacts built (uploaded to GitHub Actions):            ║"
+          echo "║   ✓ Go binaries (linux/darwin amd64/arm64)              ║"
+          echo "║   ✓ OCI rock (pushed to GHCR, per-arch sha tags)        ║"
+          echo "║   ✓ Charm (.charm file)                                 ║"
+          echo "║   ✓ Snap (.snap file)                                   ║"
+          echo "║   ✓ SBOM (SPDX + CycloneDX)                             ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║ GitHub release: created as DRAFT                        ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║ Publishing SKIPPED (dry_run=true):                      ║"
+          echo "║   ✗ Charm → Charmhub (${{ needs.release-metadata.outputs.channel }})"
+          echo "║   ✗ Rock  → ${{ needs.release-metadata.outputs.rock_image }}:${{ needs.release-metadata.outputs.tag }}"
+          echo "║   ✗ Snap  → Snap Store (${{ needs.release-metadata.outputs.channel }})"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║ To publish for real:                                    ║"
+          echo "║   Re-run with dry_run=false, or push a real tag.        ║"
+          echo "╚══════════════════════════════════════════════════════════╝"

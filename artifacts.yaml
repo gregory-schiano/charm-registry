@@ -1,0 +1,28 @@
+version: 1
+rocks:
+  - name: charm-registry
+    rockcraft-yaml: rockcraft.yaml
+    platforms:
+      - arch: amd64
+      - arch: arm64
+        runner: [ubuntu-24.04-arm]
+charms:
+  - name: charm-registry
+    charmcraft-yaml: charm/charmcraft.yaml
+    resources:
+      app-image:
+        type: oci-image
+        rock: charm-registry
+    platforms:
+      - arch: amd64
+      - arch: arm64
+        runner: [ubuntu-24.04-arm]
+    channel: latest/edge
+snaps:
+  - name: spellbook
+    snapcraft-yaml: snap/snapcraft.yaml
+    pack-dir: .
+    platforms:
+      - arch: amd64
+      - arch: arm64
+        runner: [ubuntu-24.04-arm]

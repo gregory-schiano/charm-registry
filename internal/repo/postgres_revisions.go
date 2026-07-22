@@ -4,205 +4,223 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/gschiano/charm-registry/internal/core"
+	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// CreateUpload is part of the [Repository] interface.
 func (p *Postgres) CreateUpload(ctx context.Context, upload core.Upload) error {
-	_, err := p.pool.Exec(
-		ctx,
-		`
-		INSERT INTO uploads (
-			id, filename, object_key, size, sha256, sha384, status, kind,
-			created_at, approved_at, revision, errors
-		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	`,
-		upload.ID,
-		upload.Filename,
-		upload.ObjectKey,
-		upload.Size,
-		upload.SHA256,
-		upload.SHA384,
-		upload.Status,
-		upload.Kind,
-		upload.CreatedAt,
-		upload.ApprovedAt,
-		upload.Revision,
-		mustJSON(upload.Errors),
-	)
-	return err
+	errorsJSON, err := rawJSON(upload.Errors)
+	if err != nil {
+		return err
+	}
+	revision, err := int32Ptr(upload.Revision)
+	if err != nil {
+		return err
+	}
+	return p.queries().CreateUpload(ctx, sqlcdb.CreateUploadParams{
+		ID:         upload.ID,
+		Filename:   upload.Filename,
+		ObjectKey:  upload.ObjectKey,
+		Size:       upload.Size,
+		Sha256:     upload.SHA256,
+		Sha384:     upload.SHA384,
+		Sha512:     upload.SHA512,
+		Status:     upload.Status,
+		Kind:       upload.Kind,
+		CreatedAt:  upload.CreatedAt,
+		ApprovedAt: timestamptzPtr(upload.ApprovedAt),
+		Revision:   revision,
+		Errors:     errorsJSON,
+	})
 }
 
-// GetUpload is part of the [Repository] interface.
 func (p *Postgres) GetUpload(ctx context.Context, uploadID string) (core.Upload, error) {
-	row := p.pool.QueryRow(ctx, `
-		SELECT id, filename, object_key, size, sha256, sha384, status, kind, created_at, approved_at, revision, errors
-		FROM uploads WHERE id = $1
-	`, uploadID)
-	var upload core.Upload
-	var errorsJSON []byte
-	err := row.Scan(
-		&upload.ID,
-		&upload.Filename,
-		&upload.ObjectKey,
-		&upload.Size,
-		&upload.SHA256,
-		&upload.SHA384,
-		&upload.Status,
-		&upload.Kind,
-		&upload.CreatedAt,
-		&upload.ApprovedAt,
-		&upload.Revision,
-		&errorsJSON,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	upload, err := p.queries().GetUpload(ctx, uploadID)
+	if pgxNotFound(err) {
 		return core.Upload{}, ErrNotFound
 	}
 	if err != nil {
 		return core.Upload{}, err
 	}
-	unmarshalJSON(errorsJSON, &upload.Errors)
-	return upload, nil
+	return uploadRowFromSQLC(upload)
 }
 
-// ApproveUpload is part of the [Repository] interface.
+func (p *Postgres) DeleteUploadsByObjectKeys(ctx context.Context, objectKeys []string) error {
+	if len(objectKeys) == 0 {
+		return nil
+	}
+	_, err := p.db.Exec(ctx, "DELETE FROM uploads WHERE object_key = ANY($1::text[])", objectKeys)
+	return err
+}
+
 func (p *Postgres) ApproveUpload(ctx context.Context, uploadID string, revision *int, apiErrors []core.APIError) error {
 	status := "approved"
 	if len(apiErrors) > 0 {
 		status = "rejected"
 	}
-	tag, err := p.pool.Exec(ctx, `
-		UPDATE uploads SET approved_at = NOW(), revision = $2, errors = $3, status = $4
-		WHERE id = $1
-	`, uploadID, revision, mustJSON(apiErrors), status)
+	errorsJSON, err := rawJSON(apiErrors)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	approvedRevision, err := int32Ptr(revision)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := p.queries().ApproveUpload(ctx, sqlcdb.ApproveUploadParams{
+		ID:       uploadID,
+		Revision: approvedRevision,
+		Errors:   errorsJSON,
+		Status:   status,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// CreateRevision is part of the [Repository] interface.
 func (p *Postgres) CreateRevision(ctx context.Context, revision core.Revision) error {
-	_, err := p.pool.Exec(
-		ctx,
-		`
-		INSERT INTO revisions (
-			id, package_id, revision, version, status, created_at, created_by, size,
-			sha256, sha384, object_key, metadata_yaml, config_yaml, actions_yaml,
-			bundle_yaml, readme_md, bases, attributes, relations, subordinate
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-	`,
-		revision.ID,
-		revision.PackageID,
-		revision.Revision,
-		revision.Version,
-		revision.Status,
-		revision.CreatedAt,
-		revision.CreatedBy,
-		revision.Size,
-		revision.SHA256,
-		revision.SHA384,
-		revision.ObjectKey,
-		revision.MetadataYAML,
-		revision.ConfigYAML,
-		revision.ActionsYAML,
-		revision.BundleYAML,
-		revision.ReadmeMD,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Attributes),
-		mustJSON(revision.Relations),
-		revision.Subordinate,
-	)
-	return err
+	basesJSON, err := rawJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	attributesJSON, err := rawJSON(revision.Attributes)
+	if err != nil {
+		return err
+	}
+	relationsJSON, err := rawJSON(revision.Relations)
+	if err != nil {
+		return err
+	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
+	return p.queries().CreateRevision(ctx, sqlcdb.CreateRevisionParams{
+		ID:           revision.ID,
+		PackageID:    revision.PackageID,
+		Revision:     revisionNumber,
+		Version:      revision.Version,
+		Status:       revision.Status,
+		CreatedAt:    revision.CreatedAt,
+		CreatedBy:    revision.CreatedBy,
+		Size:         revision.Size,
+		Sha256:       revision.SHA256,
+		Sha384:       revision.SHA384,
+		ObjectKey:    revision.ObjectKey,
+		MetadataYaml: revision.MetadataYAML,
+		ConfigYaml:   revision.ConfigYAML,
+		ActionsYaml:  revision.ActionsYAML,
+		BundleYaml:   revision.BundleYAML,
+		ReadmeMd:     revision.ReadmeMD,
+		Bases:        basesJSON,
+		Attributes:   attributesJSON,
+		Relations:    relationsJSON,
+		Subordinate:  revision.Subordinate,
+	})
 }
 
-// ListRevisions is part of the [Repository] interface.
-func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error) {
-	query := `
-		SELECT id, package_id, revision, version, status, created_at, created_by, size,
-		       sha256, sha384, object_key, metadata_yaml, config_yaml, actions_yaml,
-		       bundle_yaml, readme_md, bases, attributes, relations, subordinate
-		FROM revisions WHERE package_id = $1
-	`
-	args := []any{packageID}
-	if revision != nil {
-		query += ` AND revision = $2`
-		args = append(args, *revision)
+func (p *Postgres) DeleteRevision(ctx context.Context, packageID string, revision int) error {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return err
 	}
-	query += ` ORDER BY revision DESC`
-	rows, err := p.pool.Query(ctx, query, args...)
+	rowsAffected, err := p.queries().DeleteRevision(ctx, sqlcdb.DeleteRevisionParams{
+		PackageID: packageID,
+		Revision:  revisionNumber,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) ListRevisions(ctx context.Context, packageID string, revision *int) ([]core.Revision, error) {
+	if revision != nil {
+		item, err := p.GetRevisionByNumber(ctx, packageID, *revision)
+		if errors.Is(err, ErrNotFound) {
+			return []core.Revision{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return []core.Revision{item}, nil
+	}
+	rows, err := p.queries().ListRevisions(ctx, packageID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanRevisions(rows)
-}
-
-// GetRevisionByNumber is part of the [Repository] interface.
-func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
-	rows, err := p.ListRevisions(ctx, packageID, &revision)
-	if err != nil {
-		return core.Revision{}, err
-	}
-	if len(rows) == 0 {
-		return core.Revision{}, ErrNotFound
-	}
-	return rows[0], nil
-}
-
-// GetLatestRevision is part of the [Repository] interface.
-func (p *Postgres) GetLatestRevision(ctx context.Context, packageID string) (core.Revision, error) {
-	rows, err := p.ListRevisions(ctx, packageID, nil)
-	if err != nil {
-		return core.Revision{}, err
-	}
-	if len(rows) == 0 {
-		return core.Revision{}, ErrNotFound
-	}
-	return rows[0], nil
-}
-
-func scanRevisions(rows pgx.Rows) ([]core.Revision, error) {
-	var out []core.Revision
-	for rows.Next() {
-		var item core.Revision
-		var basesJSON []byte
-		var attributesJSON []byte
-		var relationsJSON []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.PackageID,
-			&item.Revision,
-			&item.Version,
-			&item.Status,
-			&item.CreatedAt,
-			&item.CreatedBy,
-			&item.Size,
-			&item.SHA256,
-			&item.SHA384,
-			&item.ObjectKey,
-			&item.MetadataYAML,
-			&item.ConfigYAML,
-			&item.ActionsYAML,
-			&item.BundleYAML,
-			&item.ReadmeMD,
-			&basesJSON,
-			&attributesJSON,
-			&relationsJSON,
-			&item.Subordinate,
-		); err != nil {
+	out := make([]core.Revision, 0, len(rows))
+	for _, row := range rows {
+		item, err := revisionFromSQLC(row)
+		if err != nil {
 			return nil, err
 		}
-		unmarshalJSON(basesJSON, &item.Bases)
-		unmarshalJSON(attributesJSON, &item.Attributes)
-		unmarshalJSON(relationsJSON, &item.Relations)
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	return out, nil
+}
+
+func (p *Postgres) ListRevisionsByNumbers(
+	ctx context.Context,
+	packageID string,
+	revisions []int,
+) (map[int]core.Revision, error) {
+	if len(revisions) == 0 {
+		return map[int]core.Revision{}, nil
+	}
+	numbers, err := int32Slice(revisions)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := p.queries().ListRevisionsByNumbers(ctx, sqlcdb.ListRevisionsByNumbersParams{
+		PackageID: packageID,
+		Column2:   numbers,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int]core.Revision, len(rows))
+	for _, row := range rows {
+		item, err := revisionFromSQLC(row)
+		if err != nil {
+			return nil, err
+		}
+		out[item.Revision] = item
+	}
+	return out, nil
+}
+
+func (p *Postgres) GetRevisionByNumber(ctx context.Context, packageID string, revision int) (core.Revision, error) {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return core.Revision{}, err
+	}
+	item, err := p.queries().GetRevisionByNumber(ctx, sqlcdb.GetRevisionByNumberParams{
+		PackageID: packageID,
+		Revision:  revisionNumber,
+	})
+	if pgxNotFound(err) {
+		return core.Revision{}, ErrNotFound
+	}
+	if err != nil {
+		return core.Revision{}, err
+	}
+	return revisionFromSQLC(item)
+}
+
+func (p *Postgres) GetLatestRevision(ctx context.Context, packageID string) (core.Revision, error) {
+	item, err := p.queries().GetLatestRevision(ctx, packageID)
+	if pgxNotFound(err) {
+		return core.Revision{}, ErrNotFound
+	}
+	if err != nil {
+		return core.Revision{}, err
+	}
+	return revisionFromSQLC(item)
 }

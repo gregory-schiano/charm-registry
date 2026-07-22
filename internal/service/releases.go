@@ -4,55 +4,48 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
+	"github.com/gschiano/charm-registry/internal/repo"
 )
 
-// Release assigns revisions to channels for a package.
+// CreateRelease assigns revisions to channels for a package.
 //
 // The following errors may be returned:
 // - Authorization, validation, or repository errors.
-func (s *Service) Release(
+func (s *Service) CreateRelease(
 	ctx context.Context,
 	identity core.Identity,
 	charmName string,
 	requests []core.Release,
 ) ([]core.Release, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return nil, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return nil, err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageReleases); err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	var released []core.Release
+	now := s.now()
+	released := make([]core.Release, 0, len(requests))
 	for _, request := range requests {
-		if request.Channel == "" {
-			return nil, newError(400, "invalid-request", "channel is required")
-		}
-		if _, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, request.Revision); err != nil {
-			return nil, translateRepoError(err, "revision not found")
-		}
-		if request.When.IsZero() {
-			request.When = now
-		}
-		if request.ID == "" {
-			request.ID = uuid.NewString()
-		}
-		if err := s.enforceChannelRestriction(identity, request.Channel); err != nil {
+		created, err := s.createRelease(ctx, identity, pkg.ID, request, now)
+		if err != nil {
 			return nil, err
 		}
-		if err := s.repo.ReplaceRelease(ctx, pkg.ID, request); err != nil {
-			return nil, err
-		}
-		released = append(released, request)
+		released = append(released, created)
 	}
 	pkg.Status = "published"
 	pkg.UpdatedAt = now
@@ -62,67 +55,142 @@ func (s *Service) Release(
 	return released, nil
 }
 
+func (s *Service) createRelease(
+	ctx context.Context,
+	identity core.Identity,
+	packageID string,
+	request core.Release,
+	now time.Time,
+) (core.Release, error) {
+	if request.Channel == "" {
+		return core.Release{}, newError(ErrorKindInvalidRequest, "invalid-request", "channel is required")
+	}
+	if _, err := s.repo.GetRevisionByNumber(ctx, packageID, request.Revision); err != nil {
+		return core.Release{}, translateRepoError(err, messageRevisionNotFound)
+	}
+	if err := s.validateReleaseResources(ctx, packageID, request.Revision, request.Resources); err != nil {
+		return core.Release{}, err
+	}
+	if request.When.IsZero() {
+		request.When = now
+	}
+	if request.ID == "" {
+		request.ID = uuid.NewString()
+	}
+	validated, err := core.NewRelease(request)
+	if err != nil {
+		return core.Release{}, newError(ErrorKindInvalidRequest, "invalid-request", err.Error())
+	}
+	request = validated
+	if err := s.enforceChannelRestriction(identity, request.Channel); err != nil {
+		return core.Release{}, err
+	}
+	if err := s.repo.ReplaceRelease(ctx, packageID, request); err != nil {
+		return core.Release{}, err
+	}
+	slog.InfoContext(ctx, "release published",
+		"package_id", packageID,
+		"channel", request.Channel,
+		"revision", request.Revision,
+		"resource_count", len(request.Resources),
+		"account_id", identity.Account.ID,
+	)
+	return request, nil
+}
+
+func (s *Service) validateReleaseResources(
+	ctx context.Context,
+	packageID string,
+	packageRevision int,
+	resources []core.ReleaseResourceRef,
+) error {
+	for _, ref := range resources {
+		if ref.Revision == nil {
+			continue
+		}
+		def, err := s.repo.GetResourceDefinition(ctx, packageID, ref.Name)
+		if err != nil {
+			return translateRepoError(err, messageResourceNotFound)
+		}
+		resourceRevision, err := s.repo.GetResourceRevision(ctx, def.ID, *ref.Revision)
+		if err != nil {
+			return translateRepoError(err, messageResourceRevisionNotFound)
+		}
+		if resourceRevision.PackageRevision != nil && *resourceRevision.PackageRevision != packageRevision {
+			return newError(
+				ErrorKindInvalidRequest,
+				"invalid-request",
+				fmt.Sprintf("resource %q revision %d is not compatible with package revision %d",
+					ref.Name,
+					*ref.Revision,
+					packageRevision,
+				),
+			)
+		}
+	}
+	return nil
+}
+
 // ListReleases returns the release map for a package.
 //
 // The following errors may be returned:
 // - Authorization or repository lookup errors.
-func (s *Service) ListReleases(ctx context.Context, identity core.Identity, charmName string) (map[string]any, error) {
+func (s *Service) ListReleases(ctx context.Context, identity core.Identity, charmName string) (listReleasesResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return listReleasesResponse{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
 	pkg, err = s.enrichPackage(ctx, pkg)
 	if err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
 	releases, err := s.repo.ListReleases(ctx, pkg.ID)
 	if err != nil {
-		return nil, err
+		return listReleasesResponse{}, err
 	}
-	channelMap := make([]map[string]any, 0, len(releases))
-	revisionsMap := map[int]core.Revision{}
+	channelMap := make([]listReleaseChannelMapItem, 0, len(releases))
+	revisionsMap, err := s.repo.ListRevisionsByNumbers(ctx, pkg.ID, uniqueRevisionNumbers(releases))
+	if err != nil {
+		return listReleasesResponse{}, err
+	}
 	for _, release := range releases {
-		rev, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-		if err != nil {
-			return nil, err
-		}
-		revisionsMap[rev.Revision] = rev
-		channelMap = append(channelMap, map[string]any{
-			"base":            release.Base,
-			"channel":         release.Channel,
-			"expiration-date": release.ExpirationDate,
-			"resources":       release.Resources,
-			"revision":        release.Revision,
-			"when":            release.When,
+		channelMap = append(channelMap, listReleaseChannelMapItem{
+			Base:           release.Base,
+			Channel:        release.Channel,
+			ExpirationDate: release.ExpirationDate,
+			Resources:      release.Resources,
+			Revision:       release.Revision,
+			When:           release.When,
 		})
 	}
-	var revisions []map[string]any
+	revisions := make([]listReleasesRevisionRow, 0, len(revisionsMap))
 	for _, revision := range revisionsMap {
-		revisions = append(revisions, map[string]any{
-			"bases":      revision.Bases,
-			"created-at": revision.CreatedAt,
-			"created-by": revision.CreatedBy,
-			"revision":   revision.Revision,
-			"sha3-384":   revision.SHA384,
-			"size":       revision.Size,
-			"status":     revision.Status,
-			"version":    revision.Version,
+		revisions = append(revisions, listReleasesRevisionRow{
+			Bases:     revision.Bases,
+			CreatedAt: revision.CreatedAt,
+			CreatedBy: revision.CreatedBy,
+			Errors:    []any{},
+			Revision:  revision.Revision,
+			SHA384:    revision.SHA384,
+			Size:      revision.Size,
+			Status:    revision.Status,
+			Version:   revision.Version,
 		})
 	}
 	sort.Slice(
 		revisions,
-		func(i, j int) bool { return revisions[i]["revision"].(int) < revisions[j]["revision"].(int) },
+		func(i, j int) bool { return revisions[i].Revision < revisions[j].Revision },
 	)
-	return map[string]any{
-		"channel-map":       channelMap,
-		"craft-channel-map": []any{},
-		"package": map[string]any{
-			"channels": packageChannels(pkg.Tracks),
+	return listReleasesResponse{
+		ChannelMap:      channelMap,
+		CraftChannelMap: []any{},
+		Package: listReleasesPackageResponse{
+			Channels: packageChannels(pkg.Tracks),
 		},
-		"revisions": revisions,
+		Revisions: revisions,
 	}, nil
 }
 
@@ -136,43 +204,74 @@ func (s *Service) CreateTracks(
 	charmName string,
 	tracks []core.Track,
 ) (int, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return 0, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return 0, translateRepoError(err, "package not found")
+		return 0, translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return 0, err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageMetadata); err != nil {
 		return 0, err
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	for index := range tracks {
 		if tracks[index].CreatedAt.IsZero() {
 			tracks[index].CreatedAt = now
 		}
 	}
-	return s.repo.CreateTracks(ctx, pkg.ID, tracks)
+	created, err := s.repo.CreateTracks(ctx, pkg.ID, tracks)
+	if err != nil {
+		return 0, err
+	}
+	slog.InfoContext(ctx, "tracks created",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"requested_count", len(tracks),
+		"created_count", created,
+		"account_id", identity.Account.ID,
+	)
+	return created, nil
 }
 
-// Refresh resolves refresh actions for one or more packages.
+// ResolveRefresh resolves refresh actions for one or more packages.
 //
 // Per the Charmhub API contract, errors that apply to a single action (e.g.
 // package not found, permission denied) are embedded as per-action error
 // entries inside "results" rather than turning the whole request into an HTTP
 // error response.  Only unexpected infrastructure errors (DB, blob storage)
 // are returned as a top-level error.
-func (s *Service) Refresh(ctx context.Context, identity core.Identity, request RefreshRequest) (map[string]any, error) {
-	results := make([]map[string]any, 0, len(request.Actions))
+func (s *Service) ResolveRefresh(ctx context.Context, identity core.Identity, request RefreshRequest) (refreshResponse, error) {
+	results := make([]refreshActionResponse, 0, len(request.Actions))
+	contextByInstanceKey := refreshContextsByInstanceKey(request.Context)
 	for _, action := range request.Actions {
-		item, err := s.resolveRefreshAction(ctx, identity, action)
+		item, err := s.resolveRefreshAction(ctx, identity, contextByInstanceKey[action.InstanceKey], action)
 		if err != nil {
 			// Unexpected infrastructure error — propagate so the API layer
 			// returns a top-level 500.
-			return nil, err
+			return refreshResponse{}, err
+		}
+		if item.Error != nil {
+			slog.InfoContext(ctx, "refresh action failed",
+				"action", action.Action,
+				"instance_key", action.InstanceKey,
+				"name", stringValue(action.Name),
+				"id", stringValue(action.ID),
+				"revision", intValue(action.Revision),
+				"channel", stringValue(action.Channel),
+				"base", action.Base,
+				"error_code", item.Error.Code,
+				"error_message", item.Error.Message,
+			)
 		}
 		results = append(results, item)
 	}
-	return map[string]any{
-		"error-list": []any{},
-		"results":    results,
+	return refreshResponse{
+		ErrorList: []any{},
+		Results:   results,
 	}, nil
 }
 
@@ -183,23 +282,24 @@ func (s *Service) Refresh(ctx context.Context, identity core.Identity, request R
 func (s *Service) resolveRefreshAction(
 	ctx context.Context,
 	identity core.Identity,
+	refreshContext *RefreshContext,
 	action RefreshAction,
-) (map[string]any, error) {
-	errorResult := func(svcErr *Error) map[string]any {
-		return map[string]any{
-			"instance-key": action.InstanceKey,
-			"result":       "error",
-			"error":        core.APIError{Code: svcErr.Code, Message: svcErr.Message},
+) (refreshActionResponse, error) {
+	errorResult := func(svcErr *Error) refreshActionResponse {
+		return refreshActionResponse{
+			InstanceKey: action.InstanceKey,
+			Result:      "error",
+			Error:       &core.APIError{Code: svcErr.Code, Message: svcErr.Message},
 		}
 	}
 
-	pkg, err := s.resolvePackageForRefresh(ctx, action)
+	pkg, err := s.resolvePackageForRefresh(ctx, refreshContext, action)
 	if err != nil {
 		var svcErr *Error
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
 	if err := s.requirePackageView(ctx, identity, pkg, false); err != nil {
@@ -207,52 +307,58 @@ func (s *Service) resolveRefreshAction(
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
-	release, revision, resources, effectiveChannel, redirectChannel, err := s.resolveRefreshSelection(ctx, pkg, action)
+	release, revision, resources, effectiveChannel, redirectChannel, err := s.resolveRefreshSelection(ctx, pkg, refreshContext, action)
 	if err != nil {
 		var svcErr *Error
 		if errors.As(err, &svcErr) {
 			return errorResult(svcErr), nil
 		}
-		return nil, err
+		return refreshActionResponse{}, err
 	}
 
 	revision.Resources = resources
-	item := map[string]any{
-		"charm":             refreshEntity(pkg, revision, resources, s.cfg),
-		"effective-channel": effectiveChannel,
-		"id":                pkg.ID,
-		"instance-key":      action.InstanceKey,
-		"name":              pkg.Name,
-		"released-at":       release.When,
-		"result":            action.Action,
+	charm := s.refreshEntityResponseFrom(pkg, revision, resources)
+	item := refreshActionResponse{
+		Charm:            &charm,
+		EffectiveChannel: effectiveChannel,
+		ID:               pkg.ID,
+		InstanceKey:      action.InstanceKey,
+		Name:             pkg.Name,
+		ReleasedAt:       &release.When,
+		Result:           action.Action,
 	}
 	if redirectChannel != "" {
-		item["redirect-channel"] = redirectChannel
+		item.RedirectChannel = redirectChannel
 	}
 	return item, nil
 }
 
-func (s *Service) resolvePackageForRefresh(ctx context.Context, action RefreshAction) (core.Package, error) {
+func (s *Service) resolvePackageForRefresh(ctx context.Context, refreshContext *RefreshContext, action RefreshAction) (core.Package, error) {
 	if action.Name != nil && *action.Name != "" {
 		pkg, err := s.repo.GetPackageByName(ctx, *action.Name)
-		return pkg, translateRepoError(err, "package not found")
+		return pkg, translateRepoError(err, messagePackageNotFound)
 	}
 	if action.ID != nil && *action.ID != "" {
 		pkg, err := s.repo.GetPackageByID(ctx, *action.ID)
-		return pkg, translateRepoError(err, "package not found")
+		return pkg, translateRepoError(err, messagePackageNotFound)
 	}
-	return core.Package{}, newError(400, "invalid-request", "refresh action must include id or name")
+	if refreshContext != nil && refreshContext.ID != "" {
+		pkg, err := s.repo.GetPackageByID(ctx, refreshContext.ID)
+		return pkg, translateRepoError(err, messagePackageNotFound)
+	}
+	return core.Package{}, newError(ErrorKindInvalidRequest, "invalid-request", "refresh action must include id or name")
 }
 
 func (s *Service) resolveRefreshSelection(
 	ctx context.Context,
 	pkg core.Package,
+	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (core.Release, core.Revision, []core.ResourceRevision, string, string, error) {
-	release, revision, channel, redirect, err := s.resolveReleaseAndRevision(ctx, pkg, action)
+	release, revision, channel, redirect, err := s.resolveReleaseAndRevision(ctx, pkg, refreshContext, action)
 	if err != nil {
 		return core.Release{}, core.Revision{}, nil, "", "", err
 	}
@@ -271,49 +377,268 @@ func (s *Service) resolveRefreshSelection(
 	return release, revision, resources, channel, redirect, nil
 }
 
+// resolveReleaseAndRevision selects the release/revision a refresh action
+// resolves to. Juju sends channel and revision mutually exclusively, so the
+// precedence is:
+//  1. an explicit action channel resolves the channel tip;
+//  2. an explicit action revision resolves exactly that revision and must not
+//     be shadowed by the unit's tracking-channel;
+//  3. the context tracking-channel resolves the channel tip (plain refresh);
+//  4. otherwise the package default release is used.
 func (s *Service) resolveReleaseAndRevision(
 	ctx context.Context,
 	pkg core.Package,
+	refreshContext *RefreshContext,
 	action RefreshAction,
 ) (core.Release, core.Revision, string, string, error) {
-	channel := normalizeChannel(channelOrDefault(action.Channel))
-	redirect := channel
+	base := effectiveRefreshBase(refreshActionBase(refreshContext, action))
+
+	if requestedChannel := channelOrDefault(action.Channel); requestedChannel != "" {
+		return s.resolveReleaseByChannel(ctx, pkg, normalizeChannel(requestedChannel), requestedChannel, base)
+	}
 
 	if action.Revision != nil && *action.Revision > 0 {
 		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, *action.Revision)
 		if err != nil {
-			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "revision not found")
+			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageRevisionNotFound)
 		}
 		release := core.Release{
-			Channel:        channel,
 			Revision:       revision.Revision,
 			When:           revision.CreatedAt,
 			ExpirationDate: nil,
 		}
-		return release, revision, channel, redirect, nil
+		slog.DebugContext(ctx, "refresh resolved explicit revision",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"revision", revision.Revision,
+		)
+		return release, revision, "", "", nil
 	}
 
-	if channel != "" {
-		release, err := s.repo.ResolveRelease(ctx, pkg.ID, channel)
-		if err != nil {
-			return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
+	if refreshContext != nil {
+		if trackingChannel := strings.TrimSpace(refreshContext.TrackingChannel); trackingChannel != "" {
+			return s.resolveReleaseByChannel(ctx, pkg, normalizeChannel(trackingChannel), trackingChannel, base)
 		}
-		revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
-		if err != nil {
-			return core.Release{}, core.Revision{}, "", "", err
-		}
-		return release, revision, channel, redirect, nil
 	}
 
 	release, err := s.repo.ResolveDefaultRelease(ctx, pkg.ID)
 	if err != nil {
-		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, "release not found")
+		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
 	}
 	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
 	if err != nil {
 		return core.Release{}, core.Revision{}, "", "", err
 	}
+	slog.DebugContext(ctx, "refresh resolved default release",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"channel", release.Channel,
+		"revision", release.Revision,
+		"base", release.Base,
+	)
 	return release, revision, release.Channel, release.Channel, nil
+}
+
+func (s *Service) resolveReleaseByChannel(
+	ctx context.Context,
+	pkg core.Package,
+	channel, requestedChannel string,
+	base *core.Base,
+) (core.Release, core.Revision, string, string, error) {
+	release, resolvedChannel, err := s.resolveReleaseForActionChannel(ctx, pkg, channel, requestedChannel, base)
+	if err != nil {
+		slog.InfoContext(ctx, "refresh release resolution failed",
+			"package", pkg.Name,
+			"requested_channel", requestedChannel,
+			"normalized_channel", channel,
+			"default_track", stringValue(pkg.DefaultTrack),
+			"effective_base", base,
+			"error", err,
+		)
+		return core.Release{}, core.Revision{}, "", "", translateRepoError(err, messageReleaseNotFound)
+	}
+
+	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, release.Revision)
+	if err != nil {
+		return core.Release{}, core.Revision{}, "", "", err
+	}
+	slog.DebugContext(ctx, "refresh resolved channel",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"requested_channel", requestedChannel,
+		"resolved_channel", resolvedChannel,
+		"revision", release.Revision,
+		"base", release.Base,
+	)
+	return release, revision, resolvedChannel, channel, nil
+}
+
+func refreshContextsByInstanceKey(contexts []RefreshContext) map[string]*RefreshContext {
+	out := make(map[string]*RefreshContext, len(contexts))
+	for index := range contexts {
+		if contexts[index].InstanceKey == "" {
+			continue
+		}
+		out[contexts[index].InstanceKey] = &contexts[index]
+	}
+	return out
+}
+
+func refreshActionBase(refreshContext *RefreshContext, action RefreshAction) *core.Base {
+	if action.Base != nil {
+		return action.Base
+	}
+	if refreshContext == nil {
+		return nil
+	}
+	return refreshContext.Base
+}
+
+func (s *Service) resolveReleaseForActionChannel(
+	ctx context.Context,
+	pkg core.Package,
+	channel, requestedChannel string,
+	base *core.Base,
+) (core.Release, string, error) {
+	release, err := s.resolveReleaseForChannel(ctx, pkg.ID, channel, base)
+	if err == nil {
+		return release, channel, nil
+	}
+	if !isRiskOnlyChannel(requestedChannel) || pkg.DefaultTrack == nil || *pkg.DefaultTrack == "" {
+		return core.Release{}, "", err
+	}
+	defaultTrackChannel := *pkg.DefaultTrack + "/" + requestedChannel
+	if defaultTrackChannel == channel {
+		return core.Release{}, "", err
+	}
+	release, fallbackErr := s.resolveReleaseForChannel(ctx, pkg.ID, defaultTrackChannel, base)
+	if fallbackErr != nil {
+		return core.Release{}, "", err
+	}
+	return release, defaultTrackChannel, nil
+}
+
+func (s *Service) resolveReleaseForChannel(
+	ctx context.Context,
+	packageID, channel string,
+	base *core.Base,
+) (core.Release, error) {
+	if base != nil {
+		return s.resolveReleaseForBaseConstraint(ctx, packageID, channel, *base)
+	}
+	return s.repo.ResolveRelease(ctx, packageID, channel)
+}
+
+func (s *Service) resolveReleaseForBaseConstraint(
+	ctx context.Context,
+	packageID, channel string,
+	base core.Base,
+) (core.Release, error) {
+	if hasConcreteBase(base) {
+		release, err := s.repo.ResolveReleaseForBase(ctx, packageID, channel, base)
+		if err == nil {
+			return release, nil
+		}
+	}
+
+	releases, err := s.repo.ListReleases(ctx, packageID)
+	if err != nil {
+		return core.Release{}, err
+	}
+	bestVariant, variantOK, bestGeneric, genericOK, err := bestReleaseForBaseConstraint(ctx, releases, channel, base)
+	if err != nil {
+		return core.Release{}, err
+	}
+	if variantOK {
+		return bestVariant, nil
+	}
+	if genericOK {
+		return bestGeneric, nil
+	}
+	return core.Release{}, repo.ErrNotFound
+}
+
+func bestReleaseForBaseConstraint(
+	ctx context.Context,
+	releases []core.Release,
+	channel string,
+	base core.Base,
+) (core.Release, bool, core.Release, bool, error) {
+	var (
+		bestVariant core.Release
+		variantOK   bool
+		bestGeneric core.Release
+		genericOK   bool
+	)
+	for _, release := range releases {
+		if err := checkContext(ctx); err != nil {
+			return core.Release{}, false, core.Release{}, false, err
+		}
+		if release.Channel != channel {
+			continue
+		}
+		if release.Base == nil {
+			if !genericOK || release.When.After(bestGeneric.When) {
+				bestGeneric = release
+				genericOK = true
+			}
+			continue
+		}
+		if releaseMatchesBaseConstraint(*release.Base, base) &&
+			(!variantOK || release.When.After(bestVariant.When)) {
+			bestVariant = release
+			variantOK = true
+		}
+	}
+	return bestVariant, variantOK, bestGeneric, genericOK, nil
+}
+
+func effectiveRefreshBase(base *core.Base) *core.Base {
+	if base == nil {
+		return nil
+	}
+	name := strings.TrimSpace(base.Name)
+	channel := strings.TrimSpace(base.Channel)
+	architecture := strings.TrimSpace(base.Architecture)
+	if name == "" || channel == "" || strings.EqualFold(name, "NA") || strings.EqualFold(channel, "NA") {
+		if architecture == "" {
+			return nil
+		}
+		return &core.Base{Architecture: architecture}
+	}
+	return &core.Base{
+		Name:         name,
+		Channel:      channel,
+		Architecture: architecture,
+	}
+}
+
+func hasConcreteBase(base core.Base) bool {
+	return strings.TrimSpace(base.Name) != "" &&
+		strings.TrimSpace(base.Channel) != "" &&
+		!strings.EqualFold(base.Name, "NA") &&
+		!strings.EqualFold(base.Channel, "NA")
+}
+
+func releaseMatchesBaseConstraint(releaseBase, requested core.Base) bool {
+	if hasConcreteBase(requested) &&
+		(!strings.EqualFold(releaseBase.Name, requested.Name) ||
+			!strings.EqualFold(releaseBase.Channel, requested.Channel)) {
+		return false
+	}
+	architecture := strings.TrimSpace(requested.Architecture)
+	if architecture == "" {
+		return true
+	}
+	if strings.EqualFold(releaseBase.Architecture, architecture) {
+		return true
+	}
+	for _, item := range releaseBase.Architectures {
+		if strings.EqualFold(item, architecture) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) applyResourceOverrides(
@@ -331,6 +656,7 @@ func (s *Service) applyResourceOverrides(
 			lookup[ref.Name] = *ref.Revision
 		}
 	}
+	resolvedDefs := make(map[string]core.ResourceDefinition, len(lookup))
 	for idx, item := range resources {
 		revisionNumber, ok := lookup[item.Name]
 		if !ok {
@@ -340,11 +666,28 @@ func (s *Service) applyResourceOverrides(
 		if err != nil {
 			return nil, err
 		}
+		resolvedDefs[item.Name] = def
 		overrideItem, err := s.repo.GetResourceRevision(ctx, def.ID, revisionNumber)
 		if err != nil {
 			return nil, err
 		}
 		resources[idx] = s.attachResourceDownload(packageID, overrideItem)
+		delete(lookup, item.Name)
+	}
+	for resourceName, revisionNumber := range lookup {
+		def, ok := resolvedDefs[resourceName]
+		if !ok {
+			var err error
+			def, err = s.repo.GetResourceDefinition(ctx, packageID, resourceName)
+			if err != nil {
+				return nil, err
+			}
+		}
+		overrideItem, err := s.repo.GetResourceRevision(ctx, def.ID, revisionNumber)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, s.attachResourceDownload(packageID, overrideItem))
 	}
 	return resources, nil
 }
@@ -373,34 +716,30 @@ func (s *Service) resolveReleaseResources(
 	return out, nil
 }
 
-func refreshEntity(
+func (s *Service) refreshEntityResponseFrom(
 	pkg core.Package,
 	revision core.Revision,
 	resources []core.ResourceRevision,
-	cfg config.Config,
-) map[string]any {
-	return map[string]any{
-		"created-at": revision.CreatedAt,
-		"download": map[string]any{
-			"hash-sha-256": revision.SHA256,
-			"size":         revision.Size,
-			"url": cfg.PublicAPIURL + "/api/v1/charms/download/" + pkg.ID + "_" + fmt.Sprintf(
-				"%d",
-				revision.Revision,
-			) + ".charm",
+) refreshEntityResponse {
+	return refreshEntityResponse{
+		CreatedAt: revision.CreatedAt,
+		Download: core.Download{
+			HashSHA256: revision.SHA256,
+			Size:       revision.Size,
+			URL:        s.charmDownloadURL(pkg.ID, revision.Revision),
 		},
-		"id":            pkg.ID,
-		"license":       "",
-		"name":          pkg.Name,
-		"publisher":     pkg.Publisher,
-		"resources":     releaseResourcesToDownloads(pkg.ID, resources, cfg),
-		"revision":      revision.Revision,
-		"summary":       stringValue(pkg.Summary),
-		"type":          pkg.Type,
-		"version":       revision.Version,
-		"bases":         revision.Bases,
-		"config-yaml":   revision.ConfigYAML,
-		"metadata-yaml": revision.MetadataYAML,
+		ID:           pkg.ID,
+		License:      "",
+		Name:         pkg.Name,
+		Publisher:    pkg.Publisher,
+		Resources:    resources,
+		Revision:     revision.Revision,
+		Summary:      stringValue(pkg.Summary),
+		Type:         pkg.Type,
+		Version:      revision.Version,
+		Bases:        revision.Bases,
+		ConfigYAML:   revision.ConfigYAML,
+		MetadataYAML: revision.MetadataYAML,
 	}
 }
 
@@ -417,6 +756,17 @@ func splitChannel(channel string) channelParts {
 	return channelParts{track: parts[0], risk: parts[1]}
 }
 
+func isRiskOnlyChannel(channel string) bool {
+	return channel != "" && !strings.Contains(channel, "/")
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 // normalizeChannel expands a bare risk name (e.g. "stable") to its fully
 // qualified form ("latest/stable"). Fully-qualified channels ("2.0/stable")
 // are returned unchanged. An empty string is returned as-is.
@@ -427,11 +777,11 @@ func normalizeChannel(channel string) string {
 	return "latest/" + channel
 }
 
-func packageChannels(tracks []core.Track) []map[string]any {
+func packageChannels(tracks []core.Track) []releaseChannelDescriptorResponse {
 	if len(tracks) == 0 {
 		tracks = []core.Track{{Name: "latest"}}
 	}
-	var channels []map[string]any
+	channels := make([]releaseChannelDescriptorResponse, 0, len(tracks)*4)
 	for _, track := range tracks {
 		channels = append(channels,
 			channelDescriptor(track.Name, "stable", nil),
@@ -443,12 +793,12 @@ func packageChannels(tracks []core.Track) []map[string]any {
 	return channels
 }
 
-func channelDescriptor(track, risk string, fallback *string) map[string]any {
-	return map[string]any{
-		"name":     track + "/" + risk,
-		"track":    track,
-		"risk":     risk,
-		"branch":   nil,
-		"fallback": fallback,
+func channelDescriptor(track, risk string, fallback *string) releaseChannelDescriptorResponse {
+	return releaseChannelDescriptorResponse{
+		Name:     track + "/" + risk,
+		Track:    track,
+		Risk:     risk,
+		Branch:   nil,
+		Fallback: fallback,
 	}
 }

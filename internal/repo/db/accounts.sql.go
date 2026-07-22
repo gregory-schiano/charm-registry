@@ -15,30 +15,34 @@ import (
 
 const createStoreToken = `-- name: CreateStoreToken :exec
 INSERT INTO store_tokens (
-    session_id, token_hash, account_id, description,
+    session_id, token_hash, token_prefix, token_hash_scheme, account_id, description,
     packages, channels, permissions,
     valid_since, valid_until, revoked_at, revoked_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type CreateStoreTokenParams struct {
-	SessionID   string
-	TokenHash   string
-	AccountID   string
-	Description *string
-	Packages    json.RawMessage
-	Channels    json.RawMessage
-	Permissions json.RawMessage
-	ValidSince  time.Time
-	ValidUntil  time.Time
-	RevokedAt   pgtype.Timestamptz
-	RevokedBy   *string
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
 }
 
 func (q *Queries) CreateStoreToken(ctx context.Context, arg CreateStoreTokenParams) error {
 	_, err := q.db.Exec(ctx, createStoreToken,
 		arg.SessionID,
 		arg.TokenHash,
+		arg.TokenPrefix,
+		arg.TokenHashScheme,
 		arg.AccountID,
 		arg.Description,
 		arg.Packages,
@@ -53,14 +57,15 @@ func (q *Queries) CreateStoreToken(ctx context.Context, arg CreateStoreTokenPara
 }
 
 const ensureAccount = `-- name: EnsureAccount :one
-INSERT INTO accounts (id, subject, username, display_name, email, validation, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO accounts (id, subject, username, display_name, email, validation, is_admin, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (subject) DO UPDATE SET
     username     = EXCLUDED.username,
     display_name = EXCLUDED.display_name,
     email        = EXCLUDED.email,
-    validation   = EXCLUDED.validation
-RETURNING id, subject, username, display_name, email, validation, created_at
+    validation   = EXCLUDED.validation,
+    is_admin     = EXCLUDED.is_admin
+RETURNING id, subject, username, display_name, email, validation, is_admin, created_at
 `
 
 type EnsureAccountParams struct {
@@ -70,6 +75,7 @@ type EnsureAccountParams struct {
 	DisplayName string
 	Email       string
 	Validation  string
+	IsAdmin     bool
 	CreatedAt   time.Time
 }
 
@@ -81,6 +87,7 @@ func (q *Queries) EnsureAccount(ctx context.Context, arg EnsureAccountParams) (A
 		arg.DisplayName,
 		arg.Email,
 		arg.Validation,
+		arg.IsAdmin,
 		arg.CreatedAt,
 	)
 	var i Account
@@ -91,6 +98,7 @@ func (q *Queries) EnsureAccount(ctx context.Context, arg EnsureAccountParams) (A
 		&i.DisplayName,
 		&i.Email,
 		&i.Validation,
+		&i.IsAdmin,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -98,7 +106,7 @@ func (q *Queries) EnsureAccount(ctx context.Context, arg EnsureAccountParams) (A
 
 const findStoreTokenByHash = `-- name: FindStoreTokenByHash :one
 SELECT
-    t.session_id, t.token_hash, t.account_id, t.description,
+    t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description,
     t.packages, t.channels, t.permissions,
     t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
     a.id          AS acc_id,
@@ -107,6 +115,7 @@ SELECT
     a.display_name AS acc_display_name,
     a.email       AS acc_email,
     a.validation  AS acc_validation,
+    a.is_admin    AS acc_is_admin,
     a.created_at  AS acc_created_at
 FROM store_tokens t
 JOIN accounts a ON a.id = t.account_id
@@ -114,24 +123,27 @@ WHERE t.token_hash = $1
 `
 
 type FindStoreTokenByHashRow struct {
-	SessionID      string
-	TokenHash      string
-	AccountID      string
-	Description    *string
-	Packages       json.RawMessage
-	Channels       json.RawMessage
-	Permissions    json.RawMessage
-	ValidSince     time.Time
-	ValidUntil     time.Time
-	RevokedAt      pgtype.Timestamptz
-	RevokedBy      *string
-	AccID          string
-	AccSubject     string
-	AccUsername    string
-	AccDisplayName string
-	AccEmail       string
-	AccValidation  string
-	AccCreatedAt   time.Time
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+	AccID           string
+	AccSubject      string
+	AccUsername     string
+	AccDisplayName  string
+	AccEmail        string
+	AccValidation   string
+	AccIsAdmin      bool
+	AccCreatedAt    time.Time
 }
 
 func (q *Queries) FindStoreTokenByHash(ctx context.Context, tokenHash string) (FindStoreTokenByHashRow, error) {
@@ -140,6 +152,8 @@ func (q *Queries) FindStoreTokenByHash(ctx context.Context, tokenHash string) (F
 	err := row.Scan(
 		&i.SessionID,
 		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.TokenHashScheme,
 		&i.AccountID,
 		&i.Description,
 		&i.Packages,
@@ -155,13 +169,98 @@ func (q *Queries) FindStoreTokenByHash(ctx context.Context, tokenHash string) (F
 		&i.AccDisplayName,
 		&i.AccEmail,
 		&i.AccValidation,
+		&i.AccIsAdmin,
 		&i.AccCreatedAt,
 	)
 	return i, err
 }
 
+const findStoreTokensByPrefix = `-- name: FindStoreTokensByPrefix :many
+SELECT
+    t.session_id, t.token_hash, t.token_prefix, t.token_hash_scheme, t.account_id, t.description,
+    t.packages, t.channels, t.permissions,
+    t.valid_since, t.valid_until, t.revoked_at, t.revoked_by,
+    a.id          AS acc_id,
+    a.subject     AS acc_subject,
+    a.username    AS acc_username,
+    a.display_name AS acc_display_name,
+    a.email       AS acc_email,
+    a.validation  AS acc_validation,
+    a.is_admin    AS acc_is_admin,
+    a.created_at  AS acc_created_at
+FROM store_tokens t
+JOIN accounts a ON a.id = t.account_id
+WHERE t.token_prefix = $1
+`
+
+type FindStoreTokensByPrefixRow struct {
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+	AccID           string
+	AccSubject      string
+	AccUsername     string
+	AccDisplayName  string
+	AccEmail        string
+	AccValidation   string
+	AccIsAdmin      bool
+	AccCreatedAt    time.Time
+}
+
+func (q *Queries) FindStoreTokensByPrefix(ctx context.Context, tokenPrefix *string) ([]FindStoreTokensByPrefixRow, error) {
+	rows, err := q.db.Query(ctx, findStoreTokensByPrefix, tokenPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindStoreTokensByPrefixRow{}
+	for rows.Next() {
+		var i FindStoreTokensByPrefixRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TokenHash,
+			&i.TokenPrefix,
+			&i.TokenHashScheme,
+			&i.AccountID,
+			&i.Description,
+			&i.Packages,
+			&i.Channels,
+			&i.Permissions,
+			&i.ValidSince,
+			&i.ValidUntil,
+			&i.RevokedAt,
+			&i.RevokedBy,
+			&i.AccID,
+			&i.AccSubject,
+			&i.AccUsername,
+			&i.AccDisplayName,
+			&i.AccEmail,
+			&i.AccValidation,
+			&i.AccIsAdmin,
+			&i.AccCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAccountByID = `-- name: GetAccountByID :one
-SELECT id, subject, username, display_name, email, validation, created_at
+SELECT id, subject, username, display_name, email, validation, is_admin, created_at
 FROM accounts
 WHERE id = $1
 `
@@ -176,13 +275,14 @@ func (q *Queries) GetAccountByID(ctx context.Context, id string) (Account, error
 		&i.DisplayName,
 		&i.Email,
 		&i.Validation,
+		&i.IsAdmin,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listActiveStoreTokens = `-- name: ListActiveStoreTokens :many
-SELECT session_id, token_hash, account_id, description,
+SELECT session_id, token_hash, token_prefix, token_hash_scheme, account_id, description,
        packages, channels, permissions,
        valid_since, valid_until, revoked_at, revoked_by
 FROM store_tokens
@@ -192,18 +292,36 @@ WHERE account_id = $1
 ORDER BY valid_since ASC
 `
 
-func (q *Queries) ListActiveStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error) {
+type ListActiveStoreTokensRow struct {
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+}
+
+func (q *Queries) ListActiveStoreTokens(ctx context.Context, accountID string) ([]ListActiveStoreTokensRow, error) {
 	rows, err := q.db.Query(ctx, listActiveStoreTokens, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []StoreToken{}
+	items := []ListActiveStoreTokensRow{}
 	for rows.Next() {
-		var i StoreToken
+		var i ListActiveStoreTokensRow
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.TokenHash,
+			&i.TokenPrefix,
+			&i.TokenHashScheme,
 			&i.AccountID,
 			&i.Description,
 			&i.Packages,
@@ -225,7 +343,7 @@ func (q *Queries) ListActiveStoreTokens(ctx context.Context, accountID string) (
 }
 
 const listAllStoreTokens = `-- name: ListAllStoreTokens :many
-SELECT session_id, token_hash, account_id, description,
+SELECT session_id, token_hash, token_prefix, token_hash_scheme, account_id, description,
        packages, channels, permissions,
        valid_since, valid_until, revoked_at, revoked_by
 FROM store_tokens
@@ -233,18 +351,36 @@ WHERE account_id = $1
 ORDER BY valid_since ASC
 `
 
-func (q *Queries) ListAllStoreTokens(ctx context.Context, accountID string) ([]StoreToken, error) {
+type ListAllStoreTokensRow struct {
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+}
+
+func (q *Queries) ListAllStoreTokens(ctx context.Context, accountID string) ([]ListAllStoreTokensRow, error) {
 	rows, err := q.db.Query(ctx, listAllStoreTokens, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []StoreToken{}
+	items := []ListAllStoreTokensRow{}
 	for rows.Next() {
-		var i StoreToken
+		var i ListAllStoreTokensRow
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.TokenHash,
+			&i.TokenPrefix,
+			&i.TokenHashScheme,
 			&i.AccountID,
 			&i.Description,
 			&i.Packages,
@@ -285,4 +421,27 @@ func (q *Queries) RevokeStoreToken(ctx context.Context, arg RevokeStoreTokenPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateTokenHashScheme = `-- name: UpdateTokenHashScheme :exec
+UPDATE store_tokens
+SET token_hash = $2, token_prefix = $3, token_hash_scheme = $4
+WHERE session_id = $1
+`
+
+type UpdateTokenHashSchemeParams struct {
+	SessionID       string
+	TokenHash       string
+	TokenPrefix     *string
+	TokenHashScheme string
+}
+
+func (q *Queries) UpdateTokenHashScheme(ctx context.Context, arg UpdateTokenHashSchemeParams) error {
+	_, err := q.db.Exec(ctx, updateTokenHashScheme,
+		arg.SessionID,
+		arg.TokenHash,
+		arg.TokenPrefix,
+		arg.TokenHashScheme,
+	)
+	return err
 }

@@ -1,0 +1,63 @@
+name: spellbook
+license: Apache-2.0
+base: core24
+version: "0.1"
+summary: Private charm registry
+description: |
+  A private charm registry compatible with stock Juju and Charmcraft workflows.
+  It stores charm metadata and artifacts, exposes publisher and consumer APIs,
+  and includes an embedded OCI registry for image resources.
+icon: snap/gui/icon.svg
+website: https://github.com/gregory-schiano/charm-registry
+source-code: https://github.com/gregory-schiano/charm-registry
+issues: https://github.com/gregory-schiano/charm-registry/issues
+
+grade: devel
+confinement: strict
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  charm-registry:
+    command: bin/charm-registry-wrapper
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    stop-timeout: 35s
+    plugs:
+      - network
+      - network-bind
+  charm-registryctl:
+    command: bin/charm-registryctl
+    plugs:
+      - network
+
+parts:
+  charm-registry:
+    plugin: go
+    source: .
+    build-packages:
+      - git
+    build-snaps:
+      - go/1.26/stable
+    build-environment:
+      - CGO_ENABLED: "0"
+      - GOFLAGS: "-trimpath -buildvcs=true"
+  wrapper:
+    plugin: dump
+    source: snap/local
+    stage-packages:
+      - openssl
+    organize:
+      charm-registry-wrapper: bin/charm-registry-wrapper
+      charm-registry-snap-helpers: bin/charm-registry-snap-helpers
+      config-env.map: etc/charm-registry/config-env.map
+    prime:
+      - -install-oci-cert.sh
+  k8s-cert-helper:
+    plugin: dump
+    source: deploy/k8s
+    organize:
+      install-oci-cert.sh: bin/install-oci-cert.sh

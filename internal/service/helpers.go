@@ -2,40 +2,50 @@ package service
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
-	"github.com/gschiano/charm-registry/internal/repo"
 )
 
 // --- Authorization guards ---
 
 func (s *Service) requireAuth(identity core.Identity) error {
+	if identity.System {
+		return nil
+	}
 	if !identity.Authenticated {
-		return newError(401, "unauthorized", "authentication required")
+		return newError(ErrorKindUnauthorized, "unauthorized", "authentication required")
 	}
 	return nil
 }
 
 func (s *Service) requirePermission(identity core.Identity, permission string) error {
+	if identity.System {
+		return nil
+	}
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
-	if identity.Token == nil || len(identity.Token.Permissions) == 0 {
+	if identity.Account.IsAdmin {
 		return nil
+	}
+	if identity.Token == nil {
+		// OIDC direct auth: no scoped token, permissions enforced elsewhere.
+		return nil
+	}
+	if len(identity.Token.Permissions) == 0 {
+		return newError(ErrorKindForbidden, "forbidden", "token has no permissions")
 	}
 	for _, item := range identity.Token.Permissions {
 		if item == permission || item == permPackageManage && strings.HasPrefix(permission, "package-") {
 			return nil
 		}
 	}
-	return newError(403, "forbidden", "token does not grant required permission")
+	return newError(ErrorKindForbidden, "forbidden", "token does not grant required permission")
 }
 
 func (s *Service) requirePermissionOrAnonymous(identity core.Identity, permission string) error {
@@ -51,6 +61,9 @@ func (s *Service) requirePackageView(
 	pkg core.Package,
 	requireTokenPermission bool,
 ) error {
+	if identity.System {
+		return nil
+	}
 	if !pkg.Private {
 		if requireTokenPermission {
 			return s.requirePermissionOrAnonymous(identity, permPackageView)
@@ -60,15 +73,21 @@ func (s *Service) requirePackageView(
 	if err := s.requireAuth(identity); err != nil {
 		return err
 	}
+	if identity.Account.IsAdmin {
+		if requireTokenPermission {
+			return s.requirePermission(identity, permPackageView)
+		}
+		return nil
+	}
 	allowed, err := s.repo.CanViewPackage(ctx, pkg.ID, identity.Account.ID)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return newError(403, "forbidden", "package is private")
+		return newError(ErrorKindForbidden, "forbidden", "package is private")
 	}
 	if identity.Token != nil && len(identity.Token.Packages) > 0 && !tokenAllowsPackage(identity.Token, pkg) {
-		return newError(403, "forbidden", "token does not allow this package")
+		return newError(ErrorKindForbidden, "forbidden", "token does not allow this package")
 	}
 	if requireTokenPermission {
 		return s.requirePermission(identity, permPackageView)
@@ -82,18 +101,24 @@ func (s *Service) requirePackageManage(
 	pkg core.Package,
 	permission string,
 ) error {
+	if identity.System {
+		return nil
+	}
 	if err := s.requirePermission(identity, permission); err != nil {
 		return err
+	}
+	if identity.Account.IsAdmin {
+		return nil
 	}
 	allowed, err := s.repo.CanManagePackage(ctx, pkg.ID, identity.Account.ID)
 	if err != nil {
 		return err
 	}
 	if !allowed {
-		return newError(403, "forbidden", "package management is not allowed")
+		return newError(ErrorKindForbidden, "forbidden", "package management is not allowed")
 	}
 	if identity.Token != nil && len(identity.Token.Packages) > 0 && !tokenAllowsPackage(identity.Token, pkg) {
-		return newError(403, "forbidden", "token does not allow this package")
+		return newError(ErrorKindForbidden, "forbidden", "token does not allow this package")
 	}
 	return nil
 }
@@ -107,24 +132,48 @@ func (s *Service) enforceChannelRestriction(identity core.Identity, channel stri
 			return nil
 		}
 	}
-	return newError(403, "forbidden", "token does not allow this channel")
+	return newError(ErrorKindForbidden, "forbidden", "token does not allow this channel")
 }
 
 func (s *Service) canSeePackage(ctx context.Context, identity core.Identity, pkg core.Package) bool {
 	return s.requirePackageView(ctx, identity, pkg, false) == nil
 }
 
+func (s *Service) ensurePackageNotSynchronized(ctx context.Context, packageName string) error {
+	if s.syncRules == nil {
+		return nil
+	}
+	rules, err := s.syncRules.ListCharmhubSyncRulesByPackageName(ctx, packageName)
+	if err != nil {
+		return err
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return newError(
+		ErrorKindConflict,
+		"package-synchronized",
+		"package is managed by Charmhub synchronization",
+	)
+}
+
+func checkContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
 // --- URL helpers ---
 
 func (s *Service) charmDownloadURL(packageID string, revision int) string {
-	return s.cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf("%d", revision) + ".charm"
+	return s.cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + strconv.Itoa(revision) + ".charm"
 }
 
 func (s *Service) resourceDownloadURL(packageID, resourceName string, revision int) string {
-	return s.cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resourceName + "_" + fmt.Sprintf(
-		"%d",
-		revision,
-	)
+	return s.cfg.PublicAPIURL + "/api/v1/resources/download/charm_" + packageID + "." + resourceName + "_" + strconv.Itoa(revision)
 }
 
 // --- Token and package selectors ---
@@ -139,13 +188,6 @@ func tokenAllowsPackage(token *core.StoreToken, pkg core.Package) bool {
 		}
 	}
 	return false
-}
-
-// --- Registry helpers ---
-
-func registryImageName(cfg config.Config, charmName, resourceName string) string {
-	withoutScheme := strings.TrimPrefix(strings.TrimPrefix(cfg.PublicRegistryURL, "https://"), "http://")
-	return withoutScheme + "/" + filepath.ToSlash(filepath.Join(cfg.RegistryRepositoryRoot, charmName, resourceName))
 }
 
 // --- Manifest helpers ---
@@ -180,35 +222,6 @@ func sanitizeSubject(subject string) string {
 	return replacer.Replace(subject)
 }
 
-func mergeLinks(existing map[string][]string, docs, issues, source string, websites []string) map[string][]string {
-	out := map[string][]string{}
-	for key, values := range existing {
-		out[key] = append([]string(nil), values...)
-	}
-	if docs != "" {
-		out["docs"] = uniqueAppend(out["docs"], docs)
-	}
-	if issues != "" {
-		out["issues"] = uniqueAppend(out["issues"], issues)
-	}
-	if source != "" {
-		out["source"] = uniqueAppend(out["source"], source)
-	}
-	for _, website := range websites {
-		out["website"] = uniqueAppend(out["website"], website)
-	}
-	return out
-}
-
-func uniqueAppend(values []string, candidate string) []string {
-	for _, value := range values {
-		if value == candidate {
-			return values
-		}
-	}
-	return append(values, candidate)
-}
-
 func channelOrDefault(channel *string) string {
 	if channel == nil || *channel == "" {
 		return ""
@@ -230,13 +243,11 @@ func stringValue(value *string) string {
 	return *value
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
+func intPtrValue(value *int) int {
+	if value == nil {
+		return 0
 	}
-	return ""
+	return *value
 }
 
 func firstLink(values []string) string {
@@ -246,39 +257,11 @@ func firstLink(values []string) string {
 	return values[0]
 }
 
-func nullIfEmpty[T any](value []T) any {
-	if len(value) == 0 {
-		return nil
-	}
-	return value
-}
-
 func emptySliceIfNil[T any](values []T) []T {
 	if values == nil {
 		return []T{}
 	}
 	return values
-}
-
-// --- Error helpers ---
-
-// translateRepoError converts a repository-layer error into a typed service
-// error with an appropriate HTTP status code and Charmhub API error code.
-// Unrecognised errors are returned as-is so the API layer can log and return
-// a generic 500.
-func translateRepoError(err error, message string) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, repo.ErrNotFound):
-		return newError(404, "not-found", message)
-	case errors.Is(err, repo.ErrConflict):
-		// HTTP 409 with the Charmhub-specified error code for duplicate
-		// registration.
-		return newError(409, "already-registered", message)
-	default:
-		return err
-	}
 }
 
 func detectUploadKind(filename string) string {

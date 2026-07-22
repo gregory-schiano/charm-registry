@@ -5,22 +5,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
-func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var req struct {
 		Name    string `json:"name"`
 		Private *bool  `json:"private"`
 		Type    string `json:"type"`
 	}
 	if err := a.decodeJSON(w, r, &req); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	private := false
@@ -29,77 +25,65 @@ func (a *API) handleRegisterPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	pkg, err := a.svc.RegisterPackage(r.Context(), identity, req.Name, req.Type, private)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": pkg.ID})
+	writeCreatedJSON(w, "/v1/charm/"+pkg.Name, registerPackageResponse{ID: pkg.ID})
 }
 
-func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleListPackages(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	packages, err := a.svc.ListRegisteredPackages(
 		r.Context(),
 		identity,
 		r.URL.Query().Get("include-collaborations") == "true",
 	)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	results := make([]map[string]any, 0, len(packages))
+	results := make([]packageMetadataResponse, 0, len(packages))
 	for _, pkg := range packages {
 		results = append(results, packageMetadata(pkg))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	writeJSON(w, http.StatusOK, packageListResponse{Results: results})
 }
 
-func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handleGetPackage(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	pkg, err := a.svc.GetPackage(r.Context(), identity, chi.URLParam(r, "name"), true)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
+	writeJSON(w, http.StatusOK, packageMetadataEnvelope{Metadata: packageMetadata(pkg)})
 }
 
-func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+func (a *API) handlePatchPackage(w http.ResponseWriter, r *http.Request, identity core.Identity) {
 	var patch service.MetadataPatch
 	if err := a.decodeJSON(w, r, &patch); err != nil {
-		writeError(w, invalidRequestError(err))
+		writeError(w, r, invalidRequestError(err))
 		return
 	}
 	pkg, err := a.svc.UpdatePackage(r.Context(), identity, chi.URLParam(r, "name"), patch)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": packageMetadata(pkg)})
+	writeJSON(w, http.StatusOK, packageMetadataEnvelope{Metadata: packageMetadata(pkg)})
 }
 
-func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request) {
-	identity, err := a.identity(r)
+func (a *API) handleDeletePackage(w http.ResponseWriter, r *http.Request, identity core.Identity) {
+	var (
+		packageID string
+		err       error
+	)
+	if r.URL.Query().Get("force") == "true" {
+		packageID, err = a.svc.PurgePackage(r.Context(), identity, chi.URLParam(r, "name"))
+	} else {
+		packageID, err = a.svc.UnregisterPackage(r.Context(), identity, chi.URLParam(r, "name"))
+	}
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
-	packageID, err := a.svc.UnregisterPackage(r.Context(), identity, chi.URLParam(r, "name"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"package-id": packageID})
+	writeJSON(w, http.StatusOK, deletePackageResponse{PackageID: packageID})
 }

@@ -1,0 +1,144 @@
+#!/bin/sh
+set -eu
+
+# Snapd requires a configure hook before `snap set` can store snap options.
+# The service wrapper reads those options at startup and exports app env vars.
+
+. "$SNAP/bin/charm-registry-snap-helpers"
+
+validate_non_negative_integer() {
+	key="$1"
+	value="$(config_get "$key")"
+	case "$value" in
+		"") return 0 ;;
+		*[!0-9]*)
+			echo "invalid $key: must be a non-negative integer" >&2
+			exit 1
+			;;
+	esac
+}
+
+validate_positive_byte_size() {
+	key="$1"
+	value="$(config_get "$key")"
+	value="$(printf '%s' "$value" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+	case "$value" in
+		"") return 0 ;;
+		*KB) value="${value%KB}" ;;
+		*MB) value="${value%MB}" ;;
+		*GB) value="${value%GB}" ;;
+	esac
+	case "$value" in
+		"" | *[!0-9]*)
+			echo "invalid $key: must be a positive byte size such as 1048576, 1KB, 32MB, or 1GB" >&2
+			exit 1
+			;;
+	esac
+	case "$value" in
+		*[1-9]*) ;;
+		*)
+			echo "invalid $key: must be a positive byte size such as 1048576, 1KB, 32MB, or 1GB" >&2
+			exit 1
+			;;
+	esac
+}
+
+validate_positive_duration() {
+	key="$1"
+	value="$(config_get "$key")"
+	case "$value" in
+		"") return 0 ;;
+		0 | 0s | 0m | 0h | -* | *[!0-9smh]*)
+			echo "invalid $key: must be a positive duration such as 30s, 1m, or 2h" >&2
+			exit 1
+			;;
+		*[0-9][smh]) return 0 ;;
+		*)
+			echo "invalid $key: must be a positive duration such as 30s, 1m, or 2h" >&2
+			exit 1
+			;;
+	esac
+}
+
+validate_rate_limit_config() {
+	validate_non_negative_integer rate-limit.ip-limit
+	validate_non_negative_integer rate-limit.token-limit
+	validate_positive_duration rate-limit.ip-window
+	validate_positive_duration rate-limit.token-window
+}
+
+validate_byte_limit_config() {
+	validate_positive_byte_size limits.max-archive-file-bytes
+	validate_positive_byte_size limits.max-upload-bytes
+	validate_positive_byte_size charmhub.max-artifact-bytes
+}
+
+generate_cert() {
+	name="$1"
+	default_url="$2"
+	shift 2
+
+	cert_dir="$SNAP_COMMON/certs"
+	cert_file="$cert_dir/$name.crt"
+	key_file="$cert_dir/$name.key"
+	hosts_file="$cert_dir/$name.hosts"
+
+	hosts="$(printf '%s\n' localhost 127.0.0.1 ::1 "$(url_host "$default_url")" "$@" | awk 'NF && !seen[$0]++')"
+
+	mkdir -p "$cert_dir"
+	if [ -f "$cert_file" ] && [ -f "$key_file" ] && [ -f "$hosts_file" ] &&
+		[ "$(cat "$hosts_file")" = "$hosts" ]; then
+		return 0
+	fi
+
+	san=""
+	while IFS= read -r host; do
+		if is_ip "$host"; then
+			san="${san}IP:${host},"
+		else
+			san="${san}DNS:${host},"
+		fi
+	done <<EOF
+$hosts
+EOF
+	san="${san%,}"
+
+	"$SNAP/usr/bin/openssl" req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
+		-keyout "$key_file" \
+		-out "$cert_file" \
+		-subj "/CN=$(url_host "$default_url")" \
+		-addext "subjectAltName=${san}" >/dev/null 2>&1
+
+	chmod 0644 "$cert_file"
+	chmod 0600 "$key_file"
+	printf '%s\n' "$hosts" >"$hosts_file"
+}
+
+public_api_url="$(snapctl get public-api-url 2>/dev/null || true)"
+public_storage_url="$(snapctl get public-storage-url 2>/dev/null || true)"
+public_registry_url="$(snapctl get public-registry-url 2>/dev/null || true)"
+internal_oci_url="$(snapctl get oci.internal-url 2>/dev/null || true)"
+
+validate_rate_limit_config
+validate_byte_limit_config
+
+api_default_url="${public_api_url:-https://localhost:8080}"
+oci_default_url="${public_registry_url:-https://localhost:5000}"
+
+if config_bool tls.enabled false; then
+	generate_cert \
+		registry \
+		"$api_default_url" \
+		"$(url_host "${public_api_url:-$api_default_url}")" \
+		"$(url_host "${public_storage_url:-$api_default_url}")"
+else
+	rm -f "$SNAP_COMMON/certs/registry.crt" \
+		"$SNAP_COMMON/certs/registry.key" \
+		"$SNAP_COMMON/certs/registry.hosts"
+fi
+
+generate_cert \
+	oci \
+	"$oci_default_url" \
+	"$(url_host "${public_registry_url:-$oci_default_url}")" \
+	"$(url_host "${internal_oci_url:-https://127.0.0.1:5000}")"

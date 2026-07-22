@@ -2,216 +2,202 @@ package repo
 
 import (
 	"context"
-	"errors"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/gschiano/charm-registry/internal/core"
+	sqlcdb "github.com/gschiano/charm-registry/internal/repo/db"
 )
 
-// UpsertResourceDefinition is part of the [Repository] interface.
 func (p *Postgres) UpsertResourceDefinition(
 	ctx context.Context,
 	resource core.ResourceDefinition,
 ) (core.ResourceDefinition, error) {
-	row := p.pool.QueryRow(
-		ctx,
-		`
-		INSERT INTO resource_definitions (id, package_id, name, type, description, filename, optional, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		ON CONFLICT (package_id, name) DO UPDATE SET
-			type = EXCLUDED.type,
-			description = EXCLUDED.description,
-			filename = EXCLUDED.filename,
-			optional = EXCLUDED.optional
-		RETURNING id, package_id, name, type, description, filename, optional, created_at
-	`,
-		resource.ID,
-		resource.PackageID,
-		resource.Name,
-		resource.Type,
-		resource.Description,
-		resource.Filename,
-		resource.Optional,
-		resource.CreatedAt,
-	)
-	var stored core.ResourceDefinition
-	err := row.Scan(
-		&stored.ID,
-		&stored.PackageID,
-		&stored.Name,
-		&stored.Type,
-		&stored.Description,
-		&stored.Filename,
-		&stored.Optional,
-		&stored.CreatedAt,
-	)
-	return stored, err
+	item, err := p.queries().UpsertResourceDefinition(ctx, sqlcdb.UpsertResourceDefinitionParams{
+		ID:          resource.ID,
+		PackageID:   resource.PackageID,
+		Name:        resource.Name,
+		Type:        resource.Type,
+		Description: resource.Description,
+		Filename:    resource.Filename,
+		Optional:    resource.Optional,
+		CreatedAt:   resource.CreatedAt,
+	})
+	if err != nil {
+		return core.ResourceDefinition{}, err
+	}
+	return resourceDefinitionFromSQLC(item), nil
 }
 
-// GetResourceDefinition is part of the [Repository] interface.
 func (p *Postgres) GetResourceDefinition(
 	ctx context.Context,
 	packageID, resourceName string,
 ) (core.ResourceDefinition, error) {
-	row := p.pool.QueryRow(ctx, `
-		SELECT id, package_id, name, type, description, filename, optional, created_at
-		FROM resource_definitions WHERE package_id = $1 AND name = $2
-	`, packageID, resourceName)
-	var resource core.ResourceDefinition
-	err := row.Scan(
-		&resource.ID,
-		&resource.PackageID,
-		&resource.Name,
-		&resource.Type,
-		&resource.Description,
-		&resource.Filename,
-		&resource.Optional,
-		&resource.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	item, err := p.queries().GetResourceDefinition(ctx, sqlcdb.GetResourceDefinitionParams{
+		PackageID: packageID,
+		Name:      resourceName,
+	})
+	if pgxNotFound(err) {
 		return core.ResourceDefinition{}, ErrNotFound
 	}
-	return resource, err
+	if err != nil {
+		return core.ResourceDefinition{}, err
+	}
+	return resourceDefinitionFromSQLC(item), nil
 }
 
-// ListResourceDefinitions is part of the [Repository] interface.
 func (p *Postgres) ListResourceDefinitions(ctx context.Context, packageID string) ([]core.ResourceDefinition, error) {
-	rows, err := p.pool.Query(ctx, `
-		SELECT id, package_id, name, type, description, filename, optional, created_at
-		FROM resource_definitions WHERE package_id = $1 ORDER BY name ASC
-	`, packageID)
+	rows, err := p.queries().ListResourceDefinitions(ctx, packageID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []core.ResourceDefinition
-	for rows.Next() {
-		var resource core.ResourceDefinition
-		if err := rows.Scan(
-			&resource.ID,
-			&resource.PackageID,
-			&resource.Name,
-			&resource.Type,
-			&resource.Description,
-			&resource.Filename,
-			&resource.Optional,
-			&resource.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		out = append(out, resource)
+	out := make([]core.ResourceDefinition, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, resourceDefinitionFromSQLC(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// CreateResourceRevision is part of the [Repository] interface.
-func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	_, err := p.pool.Exec(
-		ctx,
-		`
-		INSERT INTO resource_revisions (
-			id, resource_id, revision, name, type, description, filename, created_at, size,
-			sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-	`,
-		revision.ID,
-		revision.ResourceID,
-		revision.Revision,
-		revision.Name,
-		revision.Type,
-		revision.Description,
-		revision.Filename,
-		revision.CreatedAt,
-		revision.Size,
-		revision.SHA256,
-		revision.SHA384,
-		revision.SHA512,
-		revision.SHA3384,
-		revision.ObjectKey,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Architectures),
-		revision.OCIImageDigest,
-		revision.OCIImageBlob,
-	)
-	return err
-}
-
-// UpdateResourceRevision is part of the [Repository] interface.
-func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
-	tag, err := p.pool.Exec(
-		ctx,
-		`
-		UPDATE resource_revisions
-		SET bases = $4, architectures = $5, oci_image_digest = $6,
-		    oci_image_blob = $7
-		WHERE resource_id = $1 AND revision = $2 AND id = $3
-	`,
-		revision.ResourceID,
-		revision.Revision,
-		revision.ID,
-		mustJSON(revision.Bases),
-		mustJSON(revision.Architectures),
-		revision.OCIImageDigest,
-		revision.OCIImageBlob,
-	)
+func (p *Postgres) DeleteResourceDefinition(ctx context.Context, resourceID string) error {
+	rowsAffected, err := p.queries().DeleteResourceDefinition(ctx, resourceID)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if rowsAffected == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// ListResourceRevisions is part of the [Repository] interface.
+func (p *Postgres) CreateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
+	basesJSON, err := rawJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	architecturesJSON, err := rawJSON(revision.Architectures)
+	if err != nil {
+		return err
+	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
+	packageRevision, err := int32Ptr(revision.PackageRevision)
+	if err != nil {
+		return err
+	}
+	return p.queries().CreateResourceRevision(ctx, sqlcdb.CreateResourceRevisionParams{
+		ID:              revision.ID,
+		ResourceID:      revision.ResourceID,
+		Revision:        revisionNumber,
+		PackageRevision: packageRevision,
+		Name:            revision.Name,
+		Type:            revision.Type,
+		Description:     revision.Description,
+		Filename:        revision.Filename,
+		CreatedAt:       revision.CreatedAt,
+		Size:            revision.Size,
+		Sha256:          revision.SHA256,
+		Sha384:          revision.SHA384,
+		Sha512:          revision.SHA512,
+		Sha3384:         revision.SHA3384,
+		ObjectKey:       revision.ObjectKey,
+		Bases:           basesJSON,
+		Architectures:   architecturesJSON,
+		OciImageDigest:  revision.OCIImageDigest,
+		OciImageBlob:    revision.OCIImageBlob,
+	})
+}
+
+func (p *Postgres) DeleteResourceRevision(ctx context.Context, resourceID string, revision int) error {
+	revisionNumber, err := toInt32(revision)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := p.queries().DeleteResourceRevision(ctx, sqlcdb.DeleteResourceRevisionParams{
+		ResourceID: resourceID,
+		Revision:   revisionNumber,
+	})
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) UpdateResourceRevision(ctx context.Context, revision core.ResourceRevision) error {
+	basesJSON, err := rawJSON(revision.Bases)
+	if err != nil {
+		return err
+	}
+	architecturesJSON, err := rawJSON(revision.Architectures)
+	if err != nil {
+		return err
+	}
+	revisionNumber, err := toInt32(revision.Revision)
+	if err != nil {
+		return err
+	}
+	tag, err := p.queries().UpdateResourceRevision(ctx, sqlcdb.UpdateResourceRevisionParams{
+		ResourceID:     revision.ResourceID,
+		Revision:       revisionNumber,
+		ID:             revision.ID,
+		Bases:          basesJSON,
+		Architectures:  architecturesJSON,
+		OciImageDigest: revision.OCIImageDigest,
+		OciImageBlob:   revision.OCIImageBlob,
+	})
+	if err != nil {
+		return err
+	}
+	if tag == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *Postgres) ListResourceRevisions(ctx context.Context, resourceID string) ([]core.ResourceRevision, error) {
-	rows, err := p.pool.Query(ctx, `
-		SELECT id, resource_id, revision, name, type, description, filename, created_at, size,
-		       sha256, sha384, sha512, sha3_384, object_key, bases, architectures, oci_image_digest, oci_image_blob
-		FROM resource_revisions WHERE resource_id = $1 ORDER BY revision DESC
-	`, resourceID)
+	rows, err := p.queries().ListResourceRevisions(ctx, resourceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanResourceRevisions(rows)
+	out := make([]core.ResourceRevision, 0, len(rows))
+	for _, row := range rows {
+		item, err := resourceRevisionFromSQLC(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
-// GetResourceRevision is part of the [Repository] interface.
+func (p *Postgres) ListResourceRevisionObjectKeysByPackage(ctx context.Context, packageID string) ([]string, error) {
+	keys, err := p.queries().ListResourceRevisionObjectKeysByPackage(ctx, packageID)
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 func (p *Postgres) GetResourceRevision(
 	ctx context.Context,
 	resourceID string,
 	revision int,
 ) (core.ResourceRevision, error) {
-	rows, err := p.ListResourceRevisions(ctx, resourceID)
+	revisionNumber, err := toInt32(revision)
 	if err != nil {
 		return core.ResourceRevision{}, err
 	}
-	for _, item := range rows {
-		if item.Revision == revision {
-			return item, nil
-		}
+	item, err := p.queries().GetResourceRevision(ctx, sqlcdb.GetResourceRevisionParams{
+		ResourceID: resourceID,
+		Revision:   revisionNumber,
+	})
+	if pgxNotFound(err) {
+		return core.ResourceRevision{}, ErrNotFound
 	}
-	return core.ResourceRevision{}, ErrNotFound
-}
-
-func scanResourceRevisions(rows pgx.Rows) ([]core.ResourceRevision, error) {
-	var out []core.ResourceRevision
-	for rows.Next() {
-		var item core.ResourceRevision
-		var basesJSON []byte
-		var archJSON []byte
-		if err := rows.Scan(
-			&item.ID, &item.ResourceID, &item.Revision, &item.Name, &item.Type, &item.Description, &item.Filename,
-			&item.CreatedAt, &item.Size, &item.SHA256, &item.SHA384, &item.SHA512, &item.SHA3384, &item.ObjectKey,
-			&basesJSON, &archJSON, &item.OCIImageDigest, &item.OCIImageBlob,
-		); err != nil {
-			return nil, err
-		}
-		unmarshalJSON(basesJSON, &item.Bases)
-		unmarshalJSON(archJSON, &item.Architectures)
-		out = append(out, item)
+	if err != nil {
+		return core.ResourceRevision{}, err
 	}
-	return out, rows.Err()
+	return resourceRevisionFromSQLC(item)
 }

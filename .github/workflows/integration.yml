@@ -1,0 +1,52 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+jobs:
+  integration-test:
+    name: Charm-CI Integration
+    # Upstream charm-ci reusable workflow (build once via opcli matrix, then
+    # spread tests). SHA-pinned to v0.0.1-alpha.7; Renovate tracks the tag.
+    # NOTE: charm builds need CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS for
+    # the go-framework extension; pending an upstream charm-ci change to set
+    # it (opcli already does the equivalent for rockcraft).
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@2f274a6e4cfaac344660d8481ff8f8cb87a677b7 # v0.0.1-alpha.7
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    with:
+      working-directory: .
+      # upload-image is left unset on purpose: charm-ci auto-selects the rock
+      # upload mode (fork PRs -> artifact; push/non-fork -> registry), so
+      # push-to-main builds feed publish-edge a multi-arch rock resource.
+      charmcraft-channel: latest/edge
+      rockcraft-channel: latest/edge
+      test-timeout-minutes: 90
+
+  required-status-checks:
+    name: Required Integration Test Status Checks
+    runs-on: ubuntu-latest
+    needs: [integration-test]
+    if: always() && !cancelled()
+    steps:
+      - name: Check integration test status
+        run: |
+          result="${{ needs.integration-test.result }}"
+          if [ "$result" != "success" ]; then
+            echo "::error::Integration tests failed or were skipped: ${result}"
+            exit 1
+          fi

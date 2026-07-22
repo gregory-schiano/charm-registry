@@ -1,0 +1,108 @@
+summary: Install the charm-registry snap, configure it, and run functional scenarios.
+
+description: |
+  Smoke-test the charm-registry snap end-to-end: pack the snap from
+  source, install it with dangerous/local mode, configure insecure dev-auth
+  and public URLs, wait for the service to become healthy, and run the
+  shared functional scenario binary against the running snap-exposed
+  endpoints.
+
+systems: [ubuntu-24.04]
+
+environment:
+  SNAP_FILE: "$PROJECT_DIR/spellbook_0.1_$(dpkg --print-architecture).snap"
+
+prepare: |
+  set -euo pipefail
+
+  find_snap() {
+    find "$PROJECT_DIR" -maxdepth 3 -type f -name 'spellbook_*.snap' | sort | head -1
+  }
+
+  # Build the functional-test binary from source.
+  cd "$PROJECT_DIR"
+  go build -buildvcs=false -o "$PROJECT_DIR/.bin/functional-test" ./cmd/functional-test
+
+  # Use a pre-built snap from charm-ci artifacts, or pack locally as a fallback.
+  SNAP_PATH="$(find_snap)"
+  if [ -z "$SNAP_PATH" ]; then
+    if command -v snapcraft >/dev/null 2>&1; then
+      cd "$PROJECT_DIR"
+      snapcraft pack
+    else
+      echo "FAIL: no snapcraft available and no pre-built .snap found"
+      exit 1
+    fi
+    SNAP_PATH="$(find_snap)"
+  fi
+
+  # Locate the .snap file (packed or pre-existing).
+  if [ -z "$SNAP_PATH" ]; then
+    echo "FAIL: no .snap file found in $PROJECT_DIR"
+    exit 1
+  fi
+
+  # Install the snap locally with dangerous confinement acceptance.
+  snap install --dangerous "$SNAP_PATH"
+
+  # Configure snap settings: enable dev-auth and set public URLs.
+  snap set "$SNAP_NAME" \
+    admin.subjects="$FTEST_ADMIN_SUBJECT" \
+    admin.usernames="$FTEST_ADMIN_USER" \
+    insecure-dev-auth=true \
+    oci.secret-key=integration-test-oci-secret \
+    public-api-url="http://localhost:8080" \
+    public-registry-url="https://127.0.0.1:5000" \
+    public-storage-url="http://localhost:8080" \
+    rate-limit.ip-limit=0 \
+    rate-limit.token-limit=5 \
+    rate-limit.token-window=1m
+
+  # Start the snap service.
+  snap start "$SNAP_NAME.charm-registry"
+
+  # Wait for the API to become healthy (up to 60 seconds).
+  for i in $(seq 1 60); do
+    if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then
+      echo "charm-registry is healthy after ${i}s"
+      break
+    fi
+    if [ "$i" -eq 60 ]; then
+      echo "FAIL: charm-registry did not become healthy within 60s"
+      snap logs "$SNAP_NAME.charm-registry" -n 50
+      exit 1
+    fi
+    sleep 1
+  done
+
+restore: |
+  snap remove --purge "$SNAP_NAME" || true
+
+execute: |
+  set -euo pipefail
+
+  echo "=== Running charm-registry functional scenarios ==="
+  echo "API: $FTEST_API_URL"
+  echo "OCI: $FTEST_OCI_URL"
+  echo "OCI cert: $FTEST_OCI_CERT_PATH"
+
+  # Verify the functional-test binary was built in the suite prepare.
+  if [ ! -x "$PROJECT_DIR/.bin/functional-test" ]; then
+    echo "FAIL: functional-test binary not found at $PROJECT_DIR/.bin/functional-test"
+    exit 1
+  fi
+
+  echo "=== Running packaged admin CLI (charm-registryctl) e2e checks ==="
+  export FTEST_ADMIN_SUBJECT FTEST_ADMIN_USER FTEST_API_URL
+  "$PROJECT_DIR/tests/snap/registryctl-e2e-test.sh"
+
+  # Run all functional scenarios.
+  export FTEST_API_URL FTEST_OCI_URL FTEST_OCI_CERT_PATH
+
+  "$PROJECT_DIR/.bin/functional-test"
+
+debug: |
+  snap logs "$SNAP_NAME.charm-registry" -n 100 || true
+  snap services "$SNAP_NAME" || true
+  curl -sf http://localhost:8080/healthz || true
+  curl -sf http://localhost:8080/readyz || true

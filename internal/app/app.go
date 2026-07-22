@@ -2,43 +2,135 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/gschiano/charm-registry/internal/api"
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
+	"github.com/gschiano/charm-registry/internal/oci"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
+	registrysync "github.com/gschiano/charm-registry/internal/sync"
 )
 
 type App struct {
-	Handler http.Handler
+	Handler    http.Handler
+	OCIHandler http.Handler
+	closers    []io.Closer
 }
 
 // New wires the application dependencies and returns a ready HTTP app.
 //
 // The following errors may be returned:
 // - Errors from creating the blob store.
-// - Errors from opening or migrating PostgreSQL.
+// - Errors from opening or migrating the configured repository.
 // - Errors from configuring authentication.
 func New(ctx context.Context, cfg config.Config) (*App, error) {
-	storage, err := blob.NewS3Store(ctx, cfg)
-	if err != nil {
-		return nil, err
+	var closers []io.Closer
+	closeAll := func() error {
+		var errs []error
+		for i := len(closers) - 1; i >= 0; i-- {
+			if err := closers[i].Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
 	}
-	repository, err := repo.NewPostgres(ctx, cfg.DatabaseURL)
+	// With auto backends a missing DATABASE_URL or S3 endpoint silently
+	// selects the embedded fallback, so record what was actually chosen.
+	slog.InfoContext(ctx, "resolved backends",
+		"database", cfg.ResolvedDatabaseBackend(),
+		"storage", cfg.ResolvedStorageBackend(),
+		"oci_storage", cfg.ResolvedOCIStorageBackend(),
+	)
+	storage, err := newBlobStore(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot create blob store: %w", err)
+	}
+	if closer, ok := any(storage).(io.Closer); ok {
+		closers = append(closers, closer)
+	}
+	repository, err := newRepository(ctx, cfg)
+	if err != nil {
+		_ = closeAll()
+		return nil, fmt.Errorf("cannot open repository: %w", err)
+	}
+	if closer, ok := any(repository).(io.Closer); ok {
+		closers = append(closers, closer)
 	}
 	if err := repository.Migrate(ctx); err != nil {
-		return nil, err
+		_ = closeAll()
+		return nil, fmt.Errorf("cannot migrate repository: %w", err)
 	}
 	authenticator, err := auth.New(ctx, cfg, repository)
 	if err != nil {
-		return nil, err
+		_ = closeAll()
+		return nil, fmt.Errorf("cannot configure authentication: %w", err)
 	}
-	svc := service.New(cfg, repository, storage)
-	handler := api.New(cfg, svc, authenticator)
-	return &App{Handler: handler}, nil
+	ociRegistry, ociHandler, err := newOCIRegistry(ctx, cfg, repository)
+	if err != nil {
+		_ = closeAll()
+		return nil, fmt.Errorf("cannot create OCI registry client: %w", err)
+	}
+	if closer, ok := any(ociRegistry).(io.Closer); ok {
+		closers = append(closers, closer)
+	}
+	svc := service.New(cfg, repository, storage, ociRegistry)
+	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
+	closers = append(closers, syncSvc.StartManager(ctx))
+	handler := api.New(cfg, svc, syncSvc, authenticator)
+	return &App{Handler: handler, OCIHandler: ociHandler, closers: closers}, nil
+}
+
+// Close releases application resources such as DB pools and idle HTTP clients.
+func (a *App) Close() error {
+	var errs []error
+	for i := len(a.closers) - 1; i >= 0; i-- {
+		if err := a.closers[i].Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func newBlobStore(ctx context.Context, cfg config.Config) (blob.Store, error) {
+	resolved := cfg.ResolvedStorageBackend()
+	switch resolved {
+	case config.StorageBackendS3:
+		return blob.NewS3Store(ctx, cfg)
+	case config.StorageBackendFilesystem:
+		return blob.NewFileStore(cfg.BlobDir)
+	default:
+		return nil, fmt.Errorf("unsupported storage backend %q", resolved)
+	}
+}
+
+func newRepository(ctx context.Context, cfg config.Config) (repo.Backend, error) {
+	resolved := cfg.ResolvedDatabaseBackend()
+	switch resolved {
+	case config.DatabaseBackendPostgres:
+		return repo.NewPostgres(ctx, cfg.DatabaseURL)
+	case config.DatabaseBackendSQLite:
+		return repo.NewSQLite(ctx, cfg.SQLitePath)
+	default:
+		return nil, fmt.Errorf("unsupported database backend %q", resolved)
+	}
+}
+
+func newOCIRegistry(
+	ctx context.Context,
+	cfg config.Config,
+	repository repo.PackageRepo,
+) (service.OCIRegistry, http.Handler, error) {
+	client, err := oci.New(ctx, cfg, repository)
+	if err != nil {
+		return nil, nil, err
+	}
+	handler := client.Handler()
+	return client, handler, nil
 }

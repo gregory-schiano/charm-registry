@@ -1,0 +1,14 @@
+app_secret_key = "replace-with-a-generated-secret"
+
+# Charmhub source for the published charm-registry charm.
+app_charm_name = "charm-registry"
+app_channel    = "latest/edge"
+
+# Optional resource override. Leave unset to use the Charmhub-published app-image.
+# app_image = "ghcr.io/example/charm-registry:replace-me"
+
+# Canonical Kubernetes default GatewayClass.
+gateway_class = "ck-gateway"
+
+api_hostname = "api.charm-registry.test"
+oci_hostname = "oci.charm-registry.test"

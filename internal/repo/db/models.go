@@ -18,6 +18,7 @@ type Account struct {
 	DisplayName string
 	Email       string
 	Validation  string
+	IsAdmin     bool
 	CreatedAt   time.Time
 }
 
@@ -33,25 +34,47 @@ type AccountGroupMember struct {
 	AccountID string
 }
 
+type CharmhubSyncRule struct {
+	PackageName        string
+	Track              string
+	CreatedByAccountID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastSyncStatus     string
+	LastSyncStartedAt  pgtype.Timestamptz
+	LastSyncFinishedAt pgtype.Timestamptz
+	LastSyncError      *string
+	Bases              json.RawMessage
+	Architectures      json.RawMessage
+}
+
 type Package struct {
-	ID              string
-	Name            string
-	Type            string
-	Private         bool
-	Status          string
-	OwnerAccountID  string
-	Authority       *string
-	Contact         *string
-	DefaultTrack    *string
-	Description     *string
-	Summary         *string
-	Title           *string
-	Website         *string
-	Links           json.RawMessage
-	Media           json.RawMessage
-	TrackGuardrails json.RawMessage
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 string
+	Name               string
+	Type               string
+	Private            bool
+	Status             string
+	OwnerAccountID     string
+	OciProject         string
+	OciPushRobotID     *int64
+	OciPushRobotName   string
+	OciPushRobotSecret string
+	OciPullRobotID     *int64
+	OciPullRobotName   string
+	OciPullRobotSecret string
+	OciSyncedAt        pgtype.Timestamptz
+	Authority          *string
+	Contact            *string
+	DefaultTrack       *string
+	Description        *string
+	Summary            *string
+	Title              *string
+	Website            *string
+	Links              json.RawMessage
+	Media              json.RawMessage
+	TrackGuardrails    json.RawMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type PackageAcl struct {
@@ -71,6 +94,7 @@ type Release struct {
 	WhenCreated    time.Time
 	ExpirationDate pgtype.Timestamptz
 	Progressive    *float64
+	BaseKey        *string
 }
 
 type ResourceDefinition struct {
@@ -85,24 +109,25 @@ type ResourceDefinition struct {
 }
 
 type ResourceRevision struct {
-	ID             string
-	ResourceID     string
-	Revision       int32
-	Name           string
-	Type           string
-	Description    string
-	Filename       string
-	CreatedAt      time.Time
-	Size           int64
-	Sha256         string
-	Sha384         string
-	Sha512         string
-	Sha3384        string
-	ObjectKey      string
-	Bases          json.RawMessage
-	Architectures  json.RawMessage
-	OciImageDigest string
-	OciImageBlob   string
+	ID              string
+	ResourceID      string
+	Revision        int32
+	PackageRevision *int32
+	Name            string
+	Type            string
+	Description     string
+	Filename        string
+	CreatedAt       time.Time
+	Size            int64
+	Sha256          string
+	Sha384          string
+	Sha512          string
+	Sha3384         string
+	ObjectKey       string
+	Bases           json.RawMessage
+	Architectures   json.RawMessage
+	OciImageDigest  string
+	OciImageBlob    string
 }
 
 type Revision struct {
@@ -129,17 +154,19 @@ type Revision struct {
 }
 
 type StoreToken struct {
-	SessionID   string
-	TokenHash   string
-	AccountID   string
-	Description *string
-	Packages    json.RawMessage
-	Channels    json.RawMessage
-	Permissions json.RawMessage
-	ValidSince  time.Time
-	ValidUntil  time.Time
-	RevokedAt   pgtype.Timestamptz
-	RevokedBy   *string
+	SessionID       string
+	TokenHash       string
+	AccountID       string
+	Description     *string
+	Packages        json.RawMessage
+	Channels        json.RawMessage
+	Permissions     json.RawMessage
+	ValidSince      time.Time
+	ValidUntil      time.Time
+	RevokedAt       pgtype.Timestamptz
+	RevokedBy       *string
+	TokenPrefix     *string
+	TokenHashScheme string
 }
 
 type Track struct {
@@ -151,16 +178,18 @@ type Track struct {
 }
 
 type Upload struct {
-	ID         string
-	Filename   string
-	ObjectKey  string
-	Size       int64
-	Sha256     string
-	Sha384     string
-	Status     string
-	Kind       string
-	CreatedAt  time.Time
-	ApprovedAt pgtype.Timestamptz
-	Revision   *int32
-	Errors     json.RawMessage
+	ID                 string
+	Filename           string
+	ObjectKey          string
+	Size               int64
+	Sha256             string
+	Sha384             string
+	Status             string
+	Kind               string
+	CreatedAt          time.Time
+	ApprovedAt         pgtype.Timestamptz
+	Revision           *int32
+	Errors             json.RawMessage
+	CreatedByAccountID *string
+	Sha512             string
 }

@@ -1,0 +1,27 @@
+# See https://documentation.ubuntu.com/rockcraft/latest/reference/extensions/go-framework
+name: charm-registry
+license: Apache-2.0
+# see https://documentation.ubuntu.com/rockcraft/latest/explanation/bases/
+base: ubuntu@24.04
+version: '0.1' # just for humans. Semantic versioning is recommended
+summary: Private charm registry for Juju and charmcraft workflows
+description: |
+    Go-based private charm registry with Charmhub-compatible APIs,
+    PostgreSQL metadata storage, S3-backed artifact storage, and an
+    embedded OCI registry for charm resource workflows.
+platforms:
+    amd64:
+    arm64:
+
+extensions:
+    - go-framework
+
+parts:
+  go-framework/install-app:
+    # The go-framework extension defaults to the toolchain in the base; pin the
+    # version required by go.mod and prevent Go from fetching a newer one.
+    build-snaps:
+    - go/1.26/stable
+    build-environment:
+    - CGO_ENABLED: "0"
+    - GOTOOLCHAIN: local

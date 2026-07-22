@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,31 +23,36 @@ import (
 	"github.com/gschiano/charm-registry/internal/auth"
 	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/config"
+	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 	"github.com/gschiano/charm-registry/internal/service"
+	registrysync "github.com/gschiano/charm-registry/internal/sync"
+	"github.com/gschiano/charm-registry/internal/testutil"
 )
 
 var testCfg = config.Config{
-	PublicAPIURL:           "https://registry.test",
-	PublicStorageURL:       "https://storage.test",
-	PublicRegistryURL:      "https://oci.test",
-	EnableInsecureDevAuth:  true,
-	RegistryUsername:       "registry",
-	RegistryPassword:       "registry-secret",
-	RegistryRepositoryRoot: "charms",
-	MaxJSONBodyBytes:       1 << 20,
-	MaxUploadBytes:         64 << 20,
+	PublicAPIURL:          "https://registry.test",
+	PublicStorageURL:      "https://storage.test",
+	PublicRegistryURL:     "https://oci.test",
+	EnableInsecureDevAuth: true,
+	OCIProjectPrefix:      "charm",
+	OCIPullRobotPrefix:    "pull",
+	OCIPushRobotPrefix:    "push",
+	OCISecretKey:          "test-oci-secret",
+	MaxJSONBodyBytes:      1 << 20,
+	MaxUploadBytes:        64 << 20,
+	IPRateLimit:           30,
+	IPRateWindow:          time.Minute,
+	TokenRateLimit:        5,
+	TokenRateWindow:       time.Minute,
 }
 
-func TestRootIncludesSecurityHeaders(t *testing.T) {
+func TestRootResponseIncludesSecurityHeaders(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
-
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "nosniff", recorder.Header().Get("X-Content-Type-Options"))
 	assert.Equal(t, "DENY", recorder.Header().Get("X-Frame-Options"))
@@ -54,51 +62,99 @@ func TestRootIncludesSecurityHeaders(t *testing.T) {
 
 func TestRootReturnsJSON(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	resp := doRequest(t, handler, "GET", "/", nil, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Equal(t, "private-charm-registry", body["service-name"])
+
+}
+
+func TestRouterTimeoutUsesConfig(t *testing.T) {
+	t.Parallel()
+
+	handler := New(config.Config{RequestTimeout: time.Minute}, nil, nil, nil)
+	resp := doRequest(t, handler, "GET", "/healthz", nil, "")
+
+	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+func TestNotFoundRequestsAreLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/does-not-exist", nil, "")
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+	assert.Contains(t, logBuf.String(), "path=/does-not-exist")
+	assert.Contains(t, logBuf.String(), "status=404")
+
+}
+
+func TestMethodNotAllowedRequestsAreLogged(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "PUT", "/v1/charm", nil, "")
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.Code)
+	assert.Contains(t, logBuf.String(), "path=/v1/charm")
+	assert.Contains(t, logBuf.String(), "status=405")
+
+}
+
+func TestHealthz(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/healthz", nil, "")
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "ok", body["status"])
+}
+
+func TestReadyz(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "GET", "/readyz", nil, "")
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "ready", body["status"])
 }
 
 func TestOpenAPIEndpoint(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	resp := doRequest(t, handler, "GET", "/openapi.yaml", nil, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Equal(t, "application/yaml", resp.Header().Get("Content-Type"))
 	assert.Contains(t, resp.Body.String(), "openapi")
+
 }
 
 func TestDocsEndpoint(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	resp := doRequest(t, handler, "GET", "/docs", nil, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Header().Get("Content-Type"), "text/html")
 	assert.Contains(t, resp.Body.String(), "Charm Registry")
+
 }
 
 func TestGetTokensUnauthenticated(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	resp := doRequest(t, handler, "GET", "/v1/tokens", nil, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Equal(t, "oidc-login-required", body["macaroon"])
+
 }
 
 func TestIssueTokenRejectsOversizedJSONBody(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, config.Config{
 		EnableInsecureDevAuth: true,
 		MaxJSONBodyBytes:      8,
@@ -108,11 +164,10 @@ func TestIssueTokenRejectsOversizedJSONBody(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
-
 	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "request-too-large")
+
 }
 
 func TestIssueAndListTokens(t *testing.T) {
@@ -137,56 +192,275 @@ func TestIssueAndListTokens(t *testing.T) {
 	assert.GreaterOrEqual(t, len(macaroons), 1)
 }
 
-func TestExchangeToken(t *testing.T) {
+func TestIssueTokenRateLimitedPerAccount(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
-	resp := doRequest(t, handler, "POST", "/v1/tokens/exchange", nil, "Bearer dev:alice:alice")
+	for range 5 {
+		resp := doRequest(t, handler, "POST", "/v1/tokens", map[string]any{
+			"description": "test token",
+			"ttl":         3600,
+		}, "Bearer dev:alice:alice")
+		require.Equal(t, http.StatusOK, resp.Code)
+	}
+	resp := doRequest(t, handler, "POST", "/v1/tokens", map[string]any{
+		"description": "too many",
+		"ttl":         3600,
+	}, "Bearer dev:alice:alice")
+	assert.Equal(t, http.StatusTooManyRequests, resp.Code)
+	assert.Contains(t, resp.Body.String(), "rate-limit-exceeded")
 
+}
+
+func TestIPRateLimiterZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
+	limiter := newSlidingWindowLimiter(0, time.Minute)
+	for i := 0; i < 1000; i++ {
+		assert.True(t, limiter.Allow("1.2.3.4"), "limit=0 should allow all requests")
+	}
+}
+
+func TestIPRateLimiterPositiveEnforcesLimit(t *testing.T) {
+	t.Parallel()
+	limiter := newSlidingWindowLimiter(3, time.Minute)
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.True(t, limiter.Allow("1.2.3.4"))
+	assert.False(t, limiter.Allow("1.2.3.4"), "should reject after exceeding limit")
+	// Different IP should still be allowed.
+	assert.True(t, limiter.Allow("5.6.7.8"))
+}
+
+func TestTokenIssueLimiterZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
+	limiter := newSlidingWindowLimiter(0, time.Minute)
+	for i := 0; i < 1000; i++ {
+		assert.True(t, limiter.Allow("alice"), "limit=0 should allow all requests")
+	}
+}
+
+func TestTokenIssueLimiterPositiveEnforcesLimit(t *testing.T) {
+	t.Parallel()
+	limiter := newSlidingWindowLimiter(3, time.Minute)
+	assert.True(t, limiter.Allow("alice"))
+	assert.True(t, limiter.Allow("alice"))
+	assert.True(t, limiter.Allow("alice"))
+	assert.False(t, limiter.Allow("alice"), "should reject after exceeding limit")
+	// Different account should still be allowed.
+	assert.True(t, limiter.Allow("bob"))
+}
+
+// TestSlidingWindowLimiterPrunesEmptyKeys verifies that expired entries
+// are cleaned up inline, preventing unbounded map growth.
+func TestSlidingWindowLimiterPrunesEmptyKeys(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	limiter := newSlidingWindowLimiter(10, 100*time.Millisecond)
+	limiter.now = func() time.Time { return now }
+
+	// Add entries for several keys.
+	for _, key := range []string{"a", "b", "c"} {
+		require.True(t, limiter.Allow(key))
+	}
+
+	// Advance clock past the window.
+	limiter.now = func() time.Time { return now.Add(200 * time.Millisecond) }
+
+	// Trigger cleanup by calling Allow on a new key (cleanup happens at window interval).
+	limiter.cleanupInterval = 200 * time.Millisecond
+	assert.True(t, limiter.Allow("d"))
+
+	// All old keys (a, b, c) should have been cleaned up.
+	limiter.mu.Lock()
+	mapLen := len(limiter.entries)
+	limiter.mu.Unlock()
+	// "d" is the only key that should remain (plus the one we just allowed).
+	assert.Equal(t, 1, mapLen, "expired keys should be pruned from the map")
+}
+
+// TestSlidingWindowLimiterDeletesEmptyKeys verifies that when all timestamps
+// for a key expire, the key is deleted (not left as an empty slice).
+func TestSlidingWindowLimiterDeletesEmptyKeys(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	limiter := newSlidingWindowLimiter(5, 100*time.Millisecond)
+	limiter.now = func() time.Time { return now }
+
+	require.True(t, limiter.Allow("ephemeral"))
+
+	// Advance clock past the window and trigger prune on that key.
+	limiter.now = func() time.Time { return now.Add(200 * time.Millisecond) }
+	assert.True(t, limiter.Allow("ephemeral"), "should allow after window expires")
+
+	limiter.mu.Lock()
+	_, exists := limiter.entries["ephemeral"]
+	// After Allow with a clean slate (all old timestamps expired, one new one added),
+	// the key should exist with exactly one timestamp.
+	limiter.mu.Unlock()
+	require.True(t, exists, "key should exist after re-allow")
+	limiter.mu.Lock()
+	tsLen := len(limiter.entries["ephemeral"])
+	limiter.mu.Unlock()
+	assert.Equal(t, 1, tsLen, "should have exactly one timestamp from the fresh Allow call")
+}
+
+// TestRateLimitUsesRemoteAddrNotSpoofedHeader verifies that, with no trusted
+// proxies configured, the rate limiter keys on the transport peer address and
+// ignores X-Forwarded-For, preventing a spoofed bypass of rate limits.
+func TestRateLimitUsesRemoteAddrNotSpoofedHeader(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           2,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0, // disable token limiter for this test
+	}
+	handler := newTestHandler(t, cfg)
+
+	// Send 2 requests from 192.0.2.1 (the remote addr) with spoofed
+	// X-Forwarded-For headers. The middleware should ignore X-Forwarded-For
+	// and key on RemoteAddr.
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("spoofed-%d.example.com", i))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "request %d should pass", i)
+	}
+
+	// Third request from the same RemoteAddr should be rate-limited regardless
+	// of the spoofed X-Forwarded-For.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "totally-different-spoofer.example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "should reject despite spoofed header")
+}
+
+// TestRateLimitHonorsTrustedProxyForwardedFor verifies that when the direct
+// peer is a configured trusted proxy, the client IP from X-Forwarded-For is
+// used for rate limiting (so distinct real clients get distinct buckets), while
+// spoofed headers from an untrusted peer are ignored.
+func TestRateLimitHonorsTrustedProxyForwardedFor(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           1,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0,
+		TrustedProxies:        []string{"10.0.0.0/8"},
+	}
+	handler := newTestHandler(t, cfg)
+
+	// Two requests arriving via the trusted proxy but from different real
+	// clients must each get their own bucket (both allowed under a limit of 1).
+	for _, clientIP := range []string{"203.0.113.5", "203.0.113.6"} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "10.1.2.3:4444" // trusted proxy
+		req.Header.Set("X-Forwarded-For", clientIP)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "client %s should get its own bucket", clientIP)
+	}
+
+	// A second request for the same forwarded client is rate-limited.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "10.1.2.3:4444"
+	req.Header.Set("X-Forwarded-For", "203.0.113.5")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "repeat client should be limited")
+
+	// A spoofed X-Forwarded-For from an UNtrusted peer is ignored: the limiter
+	// keys on the peer address, so the second such request is limited even
+	// though the forwarded client IP differs.
+	for i, xff := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.RemoteAddr = "192.0.2.50:5555" // untrusted peer
+		req.Header.Set("X-Forwarded-For", xff)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if i == 0 {
+			assert.Equal(t, http.StatusOK, rec.Code)
+		} else {
+			assert.Equal(t, http.StatusTooManyRequests, rec.Code, "untrusted peer cannot spoof a new bucket")
+		}
+	}
+}
+
+// TestRateLimitTrimsWhitespace verifies that whitespace in RemoteAddr
+// is trimmed before use as a rate-limit key.
+func TestRateLimitTrimsWhitespace(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		EnableInsecureDevAuth: true,
+		MaxUploadBytes:        1024,
+		IPRateLimit:           1,
+		IPRateWindow:          time.Minute,
+		TokenRateLimit:        0,
+	}
+	handler := newTestHandler(t, cfg)
+
+	// First request with whitespace around remote addr.
+	req1 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req1.RemoteAddr = " 10.0.0.1:9999 "
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	// Second request with same IP (whitespace-normalized) should be limited.
+	req2 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req2.RemoteAddr = "10.0.0.1:9999"
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, rec2.Code, "whitespace-trimmed key should collide")
+}
+
+func TestExchangeToken(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "POST", "/v1/tokens/exchange", nil, "Bearer dev:alice:alice")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.NotEmpty(t, body["macaroon"])
+
 }
 
 func TestOfflineExchangeToken(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens/offline/exchange", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.NotEmpty(t, body["macaroon"])
+
 }
 
 func TestDashboardExchange(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens/dashboard/exchange",
 		map[string]any{"client-description": "web UI"}, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.NotEmpty(t, body["macaroon"])
+
 }
 
 func TestDashboardExchangeEmptyBody(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens/dashboard/exchange", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
+
 }
 
 func TestRevokeToken(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
 	// Issue a token first
@@ -200,42 +474,37 @@ func TestRevokeToken(t *testing.T) {
 	macaroons := body["macaroons"].([]any)
 	require.GreaterOrEqual(t, len(macaroons), 1)
 	sessionID := macaroons[0].(map[string]any)["session-id"].(string)
-
 	// Revoke it
 	resp = doRequest(t, handler, "POST", "/v1/tokens/revoke",
 		map[string]any{"session-id": sessionID}, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
+
 }
 
 func TestWhoAmI(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "GET", "/v1/whoami", nil, "Bearer dev:alice:Alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Equal(t, "Alice", body["username"])
+
 }
 
 func TestTokenWhoAmI(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
 	// Issue a store token first
 	resp := doRequest(t, handler, "POST", "/v1/tokens/exchange", nil, "Bearer dev:alice:Alice")
 	require.Equal(t, http.StatusOK, resp.Code)
 	macaroon := decodeJSON(t, resp)["macaroon"].(string)
-
 	resp = doRequest(t, handler, "GET", "/v1/tokens/whoami", nil, "Bearer "+macaroon)
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	account := body["account"].(map[string]any)
 	assert.Equal(t, "Alice", account["username"])
+
 }
 
 func TestRegisterAndGetPackage(t *testing.T) {
@@ -246,7 +515,8 @@ func TestRegisterAndGetPackage(t *testing.T) {
 	// Act: register
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "test-charm", "type": "charm"}, "Bearer dev:alice:alice")
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/test-charm", resp.Header().Get("Location"))
 	body := decodeJSON(t, resp)
 	assert.NotEmpty(t, body["id"])
 
@@ -261,47 +531,40 @@ func TestRegisterAndGetPackage(t *testing.T) {
 
 func TestListPackages(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "list-charm-1"}, "Bearer dev:alice:alice")
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "list-charm-2"}, "Bearer dev:alice:alice")
-
 	resp := doRequest(t, handler, "GET", "/v1/charm", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	results := body["results"].([]any)
 	assert.Len(t, results, 2)
+
 }
 
 func TestPatchPackage(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "patch-charm"}, "Bearer dev:alice:alice")
-
 	resp := doRequest(t, handler, "PATCH", "/v1/charm/patch-charm",
 		map[string]any{"title": "Patched Title", "summary": "New summary"}, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	metadata := body["metadata"].(map[string]any)
 	assert.Equal(t, "Patched Title", metadata["title"])
 	assert.Equal(t, "New summary", metadata["summary"])
+
 }
 
 func TestDeletePackage(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "doomed-charm"}, "Bearer dev:alice:alice")
-
 	resp := doRequest(t, handler, "DELETE", "/v1/charm/doomed-charm", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.NotEmpty(t, body["package-id"])
@@ -309,101 +572,114 @@ func TestDeletePackage(t *testing.T) {
 	// Assert: gone
 	resp = doRequest(t, handler, "GET", "/v1/charm/doomed-charm", nil, "Bearer dev:alice:alice")
 	assert.Equal(t, http.StatusNotFound, resp.Code)
+
 }
 
-func TestGetPackageNotFoundReturns404(t *testing.T) {
+func TestDeletePackageForcePurgesArtifacts(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "force-delete-charm"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	resp = doMultipartUpload(t, handler, buildTestCharmArchive(t, "force-delete-charm"), "force-delete-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/force-delete-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
 
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent", nil, "Bearer dev:alice:alice")
+	resp = doRequest(t, handler, "DELETE", "/v1/charm/force-delete-charm?force=true", nil, authHeader)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body := decodeJSON(t, resp)
+	assert.NotEmpty(t, body["package-id"])
 
+	resp = doRequest(t, handler, "GET", "/v1/charm/force-delete-charm", nil, authHeader)
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
 func TestCreateTracks(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "track-charm"}, "Bearer dev:alice:alice")
-
 	resp := doJSONRequest(t, handler, "POST", "/v1/charm/track-charm/tracks",
 		`[{"name":"2.0"},{"name":"3.0"}]`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/track-charm", resp.Header().Get("Location"))
 	body := decodeJSON(t, resp)
 	assert.Equal(t, float64(2), body["num-tracks-created"])
+
 }
 
 func TestFindEndpoint(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v2/charms/find?q=nonexistent", nil, "Bearer dev:alice:alice")
-
+	resp := doRequest(t, handler, "GET", "/v2/charms/find?q=nonexistent", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	results := body["results"].([]any)
 	assert.Empty(t, results)
+
 }
 
-func TestFullPublishAndRefreshViaHTTP(t *testing.T) {
+func TestPublishAndRefreshViaHTTPSucceeds(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	authHeader := "Bearer dev:publisher:publisher"
 
-	// Register
+	// Act: register package
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "http-charm"}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/http-charm", resp.Header().Get("Location"))
 
-	// Upload charm archive
+	// Act: upload charm archive
 	resp = doMultipartUpload(t, handler, buildTestCharmArchive(t, "http-charm"), "http-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
 	uploadBody := decodeJSON(t, resp)
 	require.Equal(t, true, uploadBody["successful"])
-	uploadID := uploadBody["upload_id"].(string)
+	uploadID := uploadBody["upload-id"].(string)
 
-	// Push revision
+	// Act: push revision
 	resp = doRequest(t, handler, "POST", "/v1/charm/http-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/http-charm/revisions/review?upload-id="+uploadID, resp.Header().Get("Location"))
 
-	// List revisions
+	// Act: list revisions
 	resp = doRequest(t, handler, "GET", "/v1/charm/http-charm/revisions", nil, authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
 	revBody := decodeJSON(t, resp)
 	revisions := revBody["revisions"].([]any)
 	assert.Len(t, revisions, 1)
 
-	// Review upload
+	// Act: review upload
 	resp = doRequest(t, handler, "GET",
 		"/v1/charm/http-charm/revisions/review?upload-id="+uploadID, nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 
-	// List resources
+	// Act: list resources
 	resp = doRequest(t, handler, "GET", "/v1/charm/http-charm/resources", nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 
-	// Release
+	// Act: release the published revision
 	resp = doJSONRequest(t, handler, "POST", "/v1/charm/http-charm/releases",
 		`[{"channel":"latest/stable","revision":1}]`, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/http-charm/releases", resp.Header().Get("Location"))
 
-	// List releases
+	// Act: list releases
 	resp = doRequest(t, handler, "GET", "/v1/charm/http-charm/releases", nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 
-	// Info
+	// Act: fetch info
 	resp = doRequest(t, handler, "GET", "/v2/charms/info/http-charm", nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 	infoBody := decodeJSON(t, resp)
 	assert.Equal(t, "http-charm", infoBody["name"])
 
-	// Refresh
+	// Act: refresh
 	resp = doRequest(t, handler, "POST", "/v2/charms/refresh", map[string]any{
 		"context": []any{},
 		"actions": []any{map[string]any{
@@ -416,11 +692,78 @@ func TestFullPublishAndRefreshViaHTTP(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 }
 
-func TestCharmDownloadInvalidFilename(t *testing.T) {
+func TestDownloadEndpointsStreamStoredArtifacts(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:publisher:publisher"
+	charmPayload := buildTestCharmArchiveWithResources(t, "download-charm")
+	resourcePayload := []byte("resource payload")
 
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "download-charm"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/download-charm", resp.Header().Get("Location"))
+	pkgID := decodeJSON(t, resp)["id"].(string)
+
+	resp = doMultipartUpload(t, handler, charmPayload, "download-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	charmUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/download-charm/revisions",
+		map[string]any{"upload-id": charmUploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doMultipartUpload(t, handler, resourcePayload, "config.yaml", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	resourceUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/download-charm/resources/config/revisions",
+		map[string]any{"upload-id": resourceUploadID, "type": "file"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, "GET", "/api/v1/charms/download/"+pkgID+"_1.charm", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, "application/octet-stream", resp.Header().Get("Content-Type"))
+	assert.Equal(t, fmt.Sprint(len(charmPayload)), resp.Header().Get("Content-Length"))
+	assert.Equal(t, charmPayload, resp.Body.Bytes())
+
+	resp = doRequest(t, handler, "GET", "/api/v1/resources/download/charm_"+pkgID+".config_1", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, "application/octet-stream", resp.Header().Get("Content-Type"))
+	assert.Equal(t, fmt.Sprint(len(resourcePayload)), resp.Header().Get("Content-Length"))
+	assert.Equal(t, resourcePayload, resp.Body.Bytes())
+}
+
+func TestUnscannedUploadHonorsBodySizeBoundary(t *testing.T) {
+	t.Parallel()
+
+	authHeader := "Bearer dev:publisher:publisher"
+	payload := buildTestCharmArchive(t, "boundary-charm")
+	request, bodySize := newMultipartUploadRequest(t, payload, "boundary-charm.charm", authHeader)
+	cfg := testCfg
+	cfg.MaxUploadBytes = int64(bodySize)
+	handler := newTestHandler(t, cfg)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	request, bodySize = newMultipartUploadRequest(t, payload, "boundary-charm.charm", authHeader)
+	cfg.MaxUploadBytes = int64(bodySize + 1)
+	handler = newTestHandler(t, cfg)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	request, bodySize = newMultipartUploadRequest(t, payload, "boundary-charm.charm", authHeader)
+	cfg.MaxUploadBytes = int64(bodySize - 1)
+	handler = newTestHandler(t, cfg)
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+}
+
+func TestCharmDownloadInvalidFilename(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
 	tests := []struct {
 		name     string
 		filename string
@@ -437,13 +780,12 @@ func TestCharmDownloadInvalidFilename(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, resp.Code)
 		})
 	}
+
 }
 
 func TestResourceDownloadInvalidFilename(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	tests := []struct {
 		name     string
 		filename string
@@ -460,71 +802,64 @@ func TestResourceDownloadInvalidFilename(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, resp.Code)
 		})
 	}
+
 }
 
 func TestListRevisionsInvalidRevisionParam(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "rev-charm"}, "Bearer dev:alice:alice")
-
 	resp := doRequest(t, handler, "GET", "/v1/charm/rev-charm/revisions?revision=abc", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+
 }
 
 func TestMultipleJSONDocumentsRejected(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	req := httptest.NewRequest("POST", "/v1/charm",
 		strings.NewReader(`{"name":"a"}{"name":"b"}`))
 	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
-
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+
 }
 
 func TestUnscannedUploadMissingFile(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
 	req := httptest.NewRequest("POST", "/unscanned-upload/", strings.NewReader("not multipart"))
+	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
-
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+
 }
 
 func TestUnscannedUploadSuccess(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "")
-
+	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "Bearer dev:alice:alice")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Equal(t, true, body["successful"])
-	assert.NotEmpty(t, body["upload_id"])
+	assert.NotEmpty(t, body["upload-id"])
+
 }
 
 func TestListPackagesWithCollaborationsParam(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "collab-charm"}, "Bearer dev:alice:alice")
-
 	resp := doRequest(t, handler, "GET", "/v1/charm?include-collaborations=true", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
+
 }
 
 func TestResourceEndpoints(t *testing.T) {
@@ -538,26 +873,47 @@ func TestResourceEndpoints(t *testing.T) {
 		map[string]any{"name": "res-charm"}, authHeader)
 	resp := doMultipartUpload(t, handler, buildTestCharmArchiveWithResources(t, "res-charm"), "res-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	doRequest(t, handler, "POST", "/v1/charm/res-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
 
 	// Upload a resource file
 	resp = doMultipartUpload(t, handler, []byte("config: true\n"), "config.yaml", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	resUploadID := decodeJSON(t, resp)["upload_id"].(string)
+	resUploadID := decodeJSON(t, resp)["upload-id"].(string)
 
 	// Push resource
 	resp = doRequest(t, handler, "POST", "/v1/charm/res-charm/resources/config/revisions",
 		map[string]any{"upload-id": resUploadID, "type": "file"}, authHeader)
-	assert.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, http.StatusCreated, resp.Code)
 
-	// List resource revisions
+	// List resource revisions (charmcraft/craft-store contract: top-level
+	// sha256/sha3-384/sha384/sha512 keys must all be present, bases a list)
 	resp = doRequest(t, handler, "GET", "/v1/charm/res-charm/resources/config/revisions", nil, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	revisions := body["revisions"].([]any)
 	assert.Len(t, revisions, 1)
+	craftRevision := revisions[0].(map[string]any)
+	for _, key := range []string{"sha256", "sha3-384", "sha384", "sha512"} {
+		_, present := craftRevision[key]
+		assert.True(t, present, "missing charmcraft hash key %q", key)
+	}
+	assert.NotEmpty(t, craftRevision["sha256"])
+	_, isList := craftRevision["bases"].([]any)
+	assert.True(t, isList, "bases must serialize as a JSON list")
+
+	// Charmhub-compatible resource revisions path used by Juju.
+	resp = doRequest(t, handler, "GET", "/v2/charms/resources/res-charm/config/revisions", nil, authHeader)
+	assert.Equal(t, http.StatusOK, resp.Code)
+	body = decodeJSON(t, resp)
+	revisions = body["revisions"].([]any)
+	assert.Len(t, revisions, 1)
+	compatibleRevision := revisions[0].(map[string]any)
+	assert.Equal(t, "config", compatibleRevision["name"])
+	assert.Equal(t, "file", compatibleRevision["type"])
+	assert.NotEmpty(t, compatibleRevision["sha256"])
+	assert.NotZero(t, compatibleRevision["size"])
 
 	// Update resource revision metadata
 	resp = doRequest(t, handler, "PATCH", "/v1/charm/res-charm/resources/config/revisions",
@@ -583,10 +939,10 @@ func TestOCIEndpoints(t *testing.T) {
 	charmArchive := buildTestCharmArchiveWithContainers(t, "oci-charm")
 	resp := doMultipartUpload(t, handler, charmArchive, "oci-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	resp = doRequest(t, handler, "POST", "/v1/charm/oci-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
 
 	// OCI upload credentials
 	resp = doRequest(t, handler, "GET",
@@ -594,7 +950,7 @@ func TestOCIEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	assert.Contains(t, body["image-name"], "oci-charm/workload-image")
-	assert.Equal(t, "registry", body["username"])
+	assert.Contains(t, body["username"], "robot$push-")
 
 	// OCI image blob
 	resp = doRequest(t, handler, "POST",
@@ -613,13 +969,13 @@ func TestCharmDownloadSuccess(t *testing.T) {
 	// Setup: register, upload, push, release
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "dl-charm"}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
 	pkgID := decodeJSON(t, resp)["id"].(string)
 
 	archiveData := buildTestCharmArchive(t, "dl-charm")
 	resp = doMultipartUpload(t, handler, archiveData, "dl-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	doRequest(t, handler, "POST", "/v1/charm/dl-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
 
@@ -641,19 +997,19 @@ func TestResourceDownloadSuccess(t *testing.T) {
 	// Setup: register, upload charm, push revision, upload resource, push resource
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "resdl-charm"}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
 	pkgID := decodeJSON(t, resp)["id"].(string)
 
 	resp = doMultipartUpload(t, handler, buildTestCharmArchiveWithResources(t, "resdl-charm"), "resdl-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	doRequest(t, handler, "POST", "/v1/charm/resdl-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
 
 	resourceData := []byte("resource content here")
 	resp = doMultipartUpload(t, handler, resourceData, "config.yaml", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	resUploadID := decodeJSON(t, resp)["upload_id"].(string)
+	resUploadID := decodeJSON(t, resp)["upload-id"].(string)
 	doRequest(t, handler, "POST", "/v1/charm/resdl-charm/resources/config/revisions",
 		map[string]any{"upload-id": resUploadID, "type": "file"}, authHeader)
 
@@ -667,166 +1023,29 @@ func TestResourceDownloadSuccess(t *testing.T) {
 
 func TestWriteErrorInternalError(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	// Trigger an internal error by requesting a download with valid filename format but nonexistent package
 	resp := doRequest(t, handler, "GET",
 		"/api/v1/charms/download/nonexistent_1.charm", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 	body := decodeJSON(t, resp)
 	errorList := body["error-list"].([]any)
 	assert.Len(t, errorList, 1)
+
 }
 
 func TestInfoEndpointNotFound(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "GET", "/v2/charms/info/nonexistent", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
+	body := decodeJSON(t, resp)
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	apiErr := errorList[0].(map[string]any)
+	assert.Equal(t, "not-found", apiErr["code"])
+	assert.NotEmpty(t, apiErr["message"])
 
-func TestRefreshEndpointInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v2/charms/refresh",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestPushRevisionInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-body-charm"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/bad-body-charm/revisions",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestReleaseInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-rel-charm"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/bad-rel-charm/releases",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestPatchInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "bad-patch-charm"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "PATCH", "/v1/charm/bad-patch-charm",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestRegisterInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestRevokeTokenInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens/revoke",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestIssueTokenInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestOCIImageBlobInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "oci-bad"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/oci-bad/resources/foo/oci-image/blob",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestPushResourceInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "res-bad"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/res-bad/resources/config/revisions",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestUpdateResourceRevisionsInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "resupd-bad"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "PATCH",
-		"/v1/charm/resupd-bad/resources/config/revisions",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestCreateTracksInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "track-bad"}, "Bearer dev:alice:alice")
-
-	resp := doJSONRequest(t, handler, "POST",
-		"/v1/charm/track-bad/tracks",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
 func TestHandlersRejectBadAuth(t *testing.T) {
@@ -838,300 +1057,163 @@ func TestHandlersRejectBadAuth(t *testing.T) {
 	endpoints := []struct {
 		method string
 		path   string
-		body   string
+		body   any
 	}{
-		{"POST", "/v1/tokens", `{}`},
-		{"POST", "/v1/tokens/exchange", ""},
-		{"POST", "/v1/tokens/offline/exchange", ""},
-		{"POST", "/v1/tokens/dashboard/exchange", ""},
-		{"POST", "/v1/tokens/revoke", `{"session-id":"x"}`},
-		{"GET", "/v1/tokens/whoami", ""},
-		{"GET", "/v1/whoami", ""},
-		{"POST", "/v1/charm", `{"name":"x"}`},
-		{"GET", "/v1/charm", ""},
-		{"GET", "/v1/charm/x", ""},
-		{"PATCH", "/v1/charm/x", `{}`},
-		{"DELETE", "/v1/charm/x", ""},
-		{"GET", "/v1/charm/x/revisions", ""},
-		{"POST", "/v1/charm/x/revisions", `{}`},
-		{"GET", "/v1/charm/x/revisions/review?upload-id=y", ""},
-		{"GET", "/v1/charm/x/resources", ""},
-		{"GET", "/v1/charm/x/resources/r/revisions", ""},
-		{"POST", "/v1/charm/x/resources/r/revisions", `{}`},
-		{"PATCH", "/v1/charm/x/resources/r/revisions", `{}`},
-		{"GET", "/v1/charm/x/resources/r/oci-image/upload-credentials", ""},
-		{"POST", "/v1/charm/x/resources/r/oci-image/blob", `{}`},
-		{"GET", "/v1/charm/x/releases", ""},
-		{"POST", "/v1/charm/x/releases", `[]`},
-		{"POST", "/v1/charm/x/tracks", `[]`},
-		{"GET", "/v2/charms/find?q=x", ""},
-		{"GET", "/v2/charms/info/x", ""},
-		{"POST", "/v2/charms/refresh", `{}`},
-		{"GET", "/api/v1/charms/download/x_1.charm", ""},
-		{"GET", "/api/v1/resources/download/charm_x.r_1", ""},
+		{"POST", "/v1/tokens/exchange", nil},
+		{"POST", "/v1/charm", map[string]any{"name": "x"}},
+		{"PATCH", "/v1/charm/x", map[string]any{}},
+		{"POST", "/v1/charm/x/revisions", map[string]any{}},
+		{"POST", "/v1/charm/x/resources/r/revisions", map[string]any{}},
+		{"POST", "/v2/charms/refresh", map[string]any{}},
+		{"GET", "/api/v1/charms/download/x_1.charm", nil},
 	}
 
 	for _, ep := range endpoints {
+		ep := ep
 		t.Run(ep.method+" "+ep.path, func(t *testing.T) {
 			t.Parallel()
-			var resp *httptest.ResponseRecorder
-			if ep.body != "" {
-				resp = doJSONRequest(t, handler, ep.method, ep.path, ep.body, badAuth)
-			} else {
-				req := httptest.NewRequest(ep.method, ep.path, nil)
-				req.Header.Set("Authorization", badAuth)
-				rec := httptest.NewRecorder()
-				handler.ServeHTTP(rec, req)
-				resp = rec
-			}
+			resp := doRequest(t, handler, ep.method, ep.path, ep.body, badAuth)
 			assert.Equal(t, http.StatusUnauthorized, resp.Code,
 				"expected 401 for %s %s, got %d: %s", ep.method, ep.path, resp.Code, resp.Body.String())
+		})
+	}
+
+}
+
+func TestProtectedRoutesRemainAuthenticated(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, http.MethodPost, "/v1/charm",
+		map[string]any{"name": "protected"}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"register package", http.MethodPost, "/v1/charm", map[string]any{"name": "protected"}},
+		{"upload artifact", http.MethodPost, "/unscanned-upload/", nil},
+		{"push revision", http.MethodPost, "/v1/charm/protected/revisions", map[string]any{"upload-id": "x"}},
+		{"oci credentials", http.MethodGet, "/v1/charm/protected/resources/image/oci-image/upload-credentials", nil},
+		{"admin sync rules", http.MethodGet, "/v1/admin/charmhub-sync", nil},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			resp := doRequest(t, handler, test.method, test.path, test.body, "")
+			assert.Equal(t, http.StatusUnauthorized, resp.Code)
+		})
+	}
+}
+
+func TestPackageMutationRouteAuthBoundaries(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "alice-owned", "private": true}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"patch package", "PATCH", "/v1/charm/alice-owned", map[string]any{"title": "bob edit"}},
+		{"delete package", "DELETE", "/v1/charm/alice-owned", nil},
+		{"push revision", "POST", "/v1/charm/alice-owned/revisions", map[string]any{"upload-id": "bogus"}},
+		{"push resource", "POST", "/v1/charm/alice-owned/resources/config/revisions", map[string]any{"upload-id": "bogus", "type": "file"}},
+		{"update resource revisions", "PATCH", "/v1/charm/alice-owned/resources/config/revisions", map[string]any{"resource-revision-updates": []any{}}},
+		{"oci upload credentials", "GET", "/v1/charm/alice-owned/resources/workload-image/oci-image/upload-credentials", nil},
+		{"oci image blob", "POST", "/v1/charm/alice-owned/resources/workload-image/oci-image/blob", map[string]any{"image-digest": "sha256:abc"}},
+		{"create release", "POST", "/v1/charm/alice-owned/releases", []any{map[string]any{"channel": "latest/stable", "revision": 1}}},
+		{"create tracks", "POST", "/v1/charm/alice-owned/tracks", []any{map[string]any{"name": "2.0"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertRouteAuthBoundaries(t, handler, tt.method, tt.path, tt.body)
+		})
+	}
+}
+
+func TestAdminMutationRouteAuthBoundaries(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"add sync rule", "POST", "/v1/admin/charmhub-sync", map[string]any{"name": "sync-charm", "track": "latest"}},
+		{"delete sync rule", "DELETE", "/v1/admin/charmhub-sync/sync-charm/latest", nil},
+		{"run sync", "POST", "/v1/admin/charmhub-sync/sync-charm/run", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertRouteAuthBoundaries(t, handler, tt.method, tt.path, tt.body)
 		})
 	}
 }
 
 func TestGetTokensWithInactiveFilter(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "GET", "/v1/tokens?include-inactive=true", nil, "Bearer dev:alice:alice")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
-}
 
-func TestDashboardExchangeInvalidBody(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/tokens/dashboard/exchange",
-		`not json`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestDeletePackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "DELETE", "/v1/charm/nonexistent", nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestPatchPackageNotFound(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "PATCH", "/v1/charm/nonexistent",
-		map[string]any{"title": "x"}, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestListRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/revisions", nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestListReleasesNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/releases", nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestListResourcesNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/resources", nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestListResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/resources/config/revisions",
-		nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestReviewUploadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET", "/v1/charm/nonexistent/revisions/review?upload-id=x",
-		nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestPushRevisionNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "POST", "/v1/charm/nonexistent/revisions",
-		map[string]any{"upload-id": "bogus"}, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestPushResourceNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "POST", "/v1/charm/nonexistent/resources/config/revisions",
-		map[string]any{"upload-id": "bogus", "type": "file"}, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestUpdateResourceRevisionsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "PATCH", "/v1/charm/nonexistent/resources/config/revisions",
-		map[string]any{"resource-revision-updates": []any{}}, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestOCIUploadCredentialsNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET",
-		"/v1/charm/nonexistent/resources/config/oci-image/upload-credentials",
-		nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
 func TestOCIImageBlobAssemblesPayload(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
 
-	// OCIImageBlob does not validate package existence — it assembles and returns the payload
-	resp := doRequest(t, handler, "POST",
-		"/v1/charm/any-charm/resources/config/oci-image/blob",
-		map[string]any{"image-digest": "sha256:abc"}, "Bearer dev:alice:alice")
-
+	doRequest(t, handler, "POST", "/v1/charm", map[string]any{"name": "oci-charm"}, authHeader)
+	resp := doMultipartUpload(
+		t,
+		handler,
+		buildTestCharmArchiveWithContainers(t, "oci-charm"),
+		"oci-charm.charm",
+		authHeader,
+	)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/oci-charm/revisions", map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	resp = doRequest(t, handler, "POST",
+		"/v1/charm/oci-charm/resources/workload-image/oci-image/blob",
+		map[string]any{"image-digest": "sha256:abc"}, authHeader)
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Contains(t, resp.Body.String(), "sha256:abc")
-}
 
-func TestReleaseNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/nonexistent/releases",
-		`[{"channel":"latest/stable","revision":1}]`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestCreateTracksNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doJSONRequest(t, handler, "POST", "/v1/charm/nonexistent/tracks",
-		`[{"name":"2.0"}]`, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestRefreshMissingIDAndName(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	// Per the Charmhub refresh contract the HTTP response is always 200; the
-	// error for this specific action is embedded in the per-action result.
-	resp := doRequest(t, handler, "POST", "/v2/charms/refresh", map[string]any{
-		"context": []any{},
-		"actions": []any{map[string]any{
-			"action":       "refresh",
-			"instance-key": "unit/0",
-		}},
-	}, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusOK, resp.Code)
-	body := decodeJSON(t, resp)
-	results := body["results"].([]any)
-	require.Len(t, results, 1)
-	item := results[0].(map[string]any)
-	assert.Equal(t, "error", item["result"])
-	apiErr := item["error"].(map[string]any)
-	assert.Equal(t, "invalid-request", apiErr["code"])
-}
-
-func TestResourceDownloadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET",
-		"/api/v1/resources/download/charm_nonexistent.config_1",
-		nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
-}
-
-func TestCharmDownloadNotFoundPackage(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-
-	resp := doRequest(t, handler, "GET",
-		"/api/v1/charms/download/nonexistent_1.charm",
-		nil, "Bearer dev:alice:alice")
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
 func TestWhoAmIUnauthenticated(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "GET", "/v1/whoami", nil, "")
-
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
 }
 
 func TestTokenWhoAmIUnauthenticated(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "GET", "/v1/tokens/whoami", nil, "")
-
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
 }
 
 // TestIssueTokenDevAutoLogin verifies that POST /v1/tokens with no credentials
@@ -1139,12 +1221,9 @@ func TestTokenWhoAmIUnauthenticated(t *testing.T) {
 // `charmcraft login` completes without an OIDC provider.
 func TestIssueTokenDevAutoLogin(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg) // EnableInsecureDevAuth: true
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens",
 		map[string]any{"description": "charmcraft@dev", "ttl": 108000}, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	macaroonJSON, ok := body["macaroon"].(string)
@@ -1157,21 +1236,20 @@ func TestIssueTokenDevAutoLogin(t *testing.T) {
 	assert.True(t, strings.HasPrefix(identifier, "cr_"), "macaroon identifier should use cr_ prefix")
 	assert.NotEmpty(t, macaroonDict["signature"], "macaroon should have a signature")
 	assert.Equal(t, testCfg.PublicAPIURL, macaroonDict["location"])
+
 }
 
 // TestIssueTokenDevAutoLoginDisabled verifies that POST /v1/tokens with no
 // credentials still returns 401 when dev auth is disabled.
 func TestIssueTokenDevAutoLoginDisabled(t *testing.T) {
 	t.Parallel()
-
 	cfg := testCfg
 	cfg.EnableInsecureDevAuth = false
 	handler := newTestHandler(t, cfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens",
 		map[string]any{}, "")
-
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
 }
 
 // TestIssueTokenDevAutoLoginExchange simulates the full charmcraft login flow:
@@ -1180,7 +1258,6 @@ func TestIssueTokenDevAutoLoginDisabled(t *testing.T) {
 //  3. Subsequent request with Authorization: Macaroon cr_xxx → authenticated
 func TestIssueTokenDevAutoLoginExchange(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
 	// Step 1: charmcraft calls POST /v1/tokens with no auth.
@@ -1188,18 +1265,15 @@ func TestIssueTokenDevAutoLoginExchange(t *testing.T) {
 		map[string]any{"description": "charmcraft@dev", "ttl": 108000}, "")
 	require.Equal(t, http.StatusOK, resp.Code)
 	macaroonJSON := decodeJSON(t, resp)["macaroon"].(string)
-
 	// Step 2: simulate what craft-store does — build the Macaroons header.
 	// craft-store serializes the macaroon array and base64url-encodes it.
 	macaroonsArray := "[" + macaroonJSON + "]"
 	macaroonsHeader := base64.URLEncoding.EncodeToString([]byte(macaroonsArray))
-
 	resp = doRequest(t, handler, "POST", "/v1/tokens/exchange",
 		map[string]any{}, "")
 	// Without the Macaroons header this should still be 401.
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 
-	resp = doJSONRequest(t, handler, "POST", "/v1/tokens/exchange", "{}", "")
 	req, _ := http.NewRequest("POST", "/v1/tokens/exchange", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Macaroons", macaroonsHeader)
@@ -1215,73 +1289,28 @@ func TestIssueTokenDevAutoLoginExchange(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.Code)
 	account := decodeJSON(t, resp)["account"].(map[string]any)
 	assert.Equal(t, "developer", account["username"])
+
 }
 
 func TestRevokeTokenUnauthenticated(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens/revoke",
 		map[string]any{"session-id": "x"}, "")
-
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
 }
 
 func TestExchangeTokenUnauthenticated(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	resp := doRequest(t, handler, "POST", "/v1/tokens/exchange", nil, "")
-
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
-}
 
-func TestDeletePackageWithRevisions(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "del-charm"}, authHeader)
-	resp := doMultipartUpload(t, handler, buildTestCharmArchive(t, "del-charm"), "del-charm.charm", authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
-	doRequest(t, handler, "POST", "/v1/charm/del-charm/revisions",
-		map[string]any{"upload-id": uploadID}, authHeader)
-
-	resp = doRequest(t, handler, "DELETE", "/v1/charm/del-charm", nil, authHeader)
-
-	// The caller is authorised; the business rule prevents deletion.
-	// This is 400 invalid-request, not 403 (which is reserved for auth).
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
-}
-
-func TestReleaseEmptyChannelReturns400(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "rel-err-charm"}, authHeader)
-	resp := doMultipartUpload(t, handler, buildTestCharmArchive(t, "rel-err-charm"), "rel-err-charm.charm", authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
-	doRequest(t, handler, "POST", "/v1/charm/rel-err-charm/revisions",
-		map[string]any{"upload-id": uploadID}, authHeader)
-
-	resp = doJSONRequest(t, handler, "POST", "/v1/charm/rel-err-charm/releases",
-		`[{"channel":"","revision":1}]`, authHeader)
-
-	assert.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
 func TestUnscannedUploadMissingBinaryField(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -1290,20 +1319,52 @@ func TestUnscannedUploadMissingBinaryField(t *testing.T) {
 	_, err = part.Write([]byte("data"))
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
-
 	req := httptest.NewRequest("POST", "/unscanned-upload/", &buf)
+	req.Header.Set("Authorization", "Bearer dev:alice:alice")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
-
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 	body := decodeJSON(t, recorder)
 	assert.Equal(t, false, body["successful"])
+
+}
+
+func TestUnscannedUploadRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "")
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+
+}
+
+func TestUnscannedUploadRejectsTokenWithoutUploadPermission(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	tokenResp := doRequest(t, handler, "POST", "/v1/tokens", map[string]any{
+		"description": "view-only",
+		"permissions": []string{
+			"package-view",
+		},
+	}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusOK, tokenResp.Code)
+	macaroonJSON := decodeJSON(t, tokenResp)["macaroon"].(string)
+	macaroonsHeader := base64.URLEncoding.EncodeToString([]byte("[" + macaroonJSON + "]"))
+	req := httptest.NewRequest("POST", "/v1/tokens/exchange", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Macaroons", macaroonsHeader)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	viewOnlyToken := decodeJSON(t, recorder)["macaroon"].(string)
+
+	resp := doMultipartUpload(t, handler, []byte("archive data"), "test.charm", "Macaroon "+viewOnlyToken)
+	assert.Equal(t, http.StatusForbidden, resp.Code)
 }
 
 func TestListRevisionsWithRevisionParam(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	authHeader := "Bearer dev:alice:alice"
 
@@ -1311,28 +1372,25 @@ func TestListRevisionsWithRevisionParam(t *testing.T) {
 		map[string]any{"name": "revparam-charm"}, authHeader)
 	resp := doMultipartUpload(t, handler, buildTestCharmArchive(t, "revparam-charm"), "revparam-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	doRequest(t, handler, "POST", "/v1/charm/revparam-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
-
 	resp = doRequest(t, handler, "GET", "/v1/charm/revparam-charm/revisions?revision=1",
 		nil, authHeader)
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	revisions := body["revisions"].([]any)
 	assert.Len(t, revisions, 1)
+
 }
 
 func TestRefreshNotFoundChannel(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	authHeader := "Bearer dev:alice:alice"
 
 	doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "norel-charm"}, authHeader)
-
 	// The charm exists but has no release on the requested channel.
 	// Per the Charmhub refresh contract the HTTP response is 200; the
 	// not-found error is embedded in the per-action result.
@@ -1345,7 +1403,6 @@ func TestRefreshNotFoundChannel(t *testing.T) {
 			"channel":      "latest/stable",
 		}},
 	}, authHeader)
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	results := body["results"].([]any)
@@ -1354,20 +1411,7 @@ func TestRefreshNotFoundChannel(t *testing.T) {
 	assert.Equal(t, "error", item["result"])
 	apiErr := item["error"].(map[string]any)
 	assert.Equal(t, "not-found", apiErr["code"])
-}
 
-func TestInfoEndpointNoRelease(t *testing.T) {
-	t.Parallel()
-
-	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
-
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "norel-info"}, authHeader)
-
-	resp := doRequest(t, handler, "GET", "/v2/charms/info/norel-info", nil, authHeader)
-
-	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
 
 // TestLibrariesBulkNoAuth verifies that POST /v1/charm/libraries/bulk works
@@ -1375,109 +1419,125 @@ func TestInfoEndpointNoRelease(t *testing.T) {
 // and always returns an empty libraries list.
 func TestLibrariesBulkNoAuth(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	// Empty request (no local libs with known IDs).
 	resp := doRequest(t, handler, "POST", "/v1/charm/libraries/bulk", []any{}, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	libs, ok := body["libraries"].([]any)
 	require.True(t, ok)
 	assert.Empty(t, libs)
+
 }
 
 func TestLibrariesBulkWithPayload(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-
 	// charmcraft sends a list of {library-id: "..."} objects.
 	payload := []any{
 		map[string]any{"library-id": "some-uuid-1"},
 		map[string]any{"library-id": "some-uuid-2"},
 	}
 	resp := doRequest(t, handler, "POST", "/v1/charm/libraries/bulk", payload, "")
-
 	assert.Equal(t, http.StatusOK, resp.Code)
 	body := decodeJSON(t, resp)
 	libs, ok := body["libraries"].([]any)
 	require.True(t, ok)
 	assert.Empty(t, libs, "unknown library IDs should return empty list, not an error")
+
 }
 
-func TestListReleasesEmpty(t *testing.T) {
+func TestSingleLibraryLookupNoAuthReturnsNotFound(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
-	authHeader := "Bearer dev:alice:alice"
 
-	doRequest(t, handler, "POST", "/v1/charm",
-		map[string]any{"name": "norel-list"}, authHeader)
+	resp := doRequest(t, handler, http.MethodGet,
+		"/v1/charm/libraries/example/00000000000000000000000000000000", nil, "")
 
-	resp := doRequest(t, handler, "GET", "/v1/charm/norel-list/releases", nil, authHeader)
-
-	assert.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusNotFound, resp.Code)
 	body := decodeJSON(t, resp)
-	channelMap := body["channel-map"].([]any)
-	assert.Empty(t, channelMap)
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	apiErr := errorList[0].(map[string]any)
+	assert.Equal(t, "not-found", apiErr["code"])
+	assert.Equal(t, "library not found", apiErr["message"])
+}
+
+func TestLibrariesBulkRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, config.Config{
+		EnableInsecureDevAuth: true,
+		MaxJSONBodyBytes:      8,
+		MaxUploadBytes:        1024,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/charm/libraries/bulk", strings.NewReader(`[{"library-id":"too-large"}]`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "request-too-large")
 }
 
 func TestFullPublishAndDownloadWithResources(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 	authHeader := "Bearer dev:alice:alice"
-
 	// Register
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "full-charm"}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/full-charm", resp.Header().Get("Location"))
 	pkgID := decodeJSON(t, resp)["id"].(string)
 
 	// Upload and push charm with resources declared
 	resp = doMultipartUpload(t, handler, buildTestCharmArchiveWithResources(t, "full-charm"), "full-charm.charm", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	uploadID := decodeJSON(t, resp)["upload_id"].(string)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
 	resp = doRequest(t, handler, "POST", "/v1/charm/full-charm/revisions",
 		map[string]any{"upload-id": uploadID}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
 
 	// Upload and push resource
 	resp = doMultipartUpload(t, handler, []byte("resource-data"), "config.yaml", authHeader)
 	require.Equal(t, http.StatusOK, resp.Code)
-	resUploadID := decodeJSON(t, resp)["upload_id"].(string)
+	resUploadID := decodeJSON(t, resp)["upload-id"].(string)
 	resp = doRequest(t, handler, "POST", "/v1/charm/full-charm/resources/config/revisions",
 		map[string]any{"upload-id": resUploadID, "type": "file"}, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
 
 	// Release with resource ref
 	resp = doJSONRequest(t, handler, "POST", "/v1/charm/full-charm/releases",
 		`[{"channel":"latest/stable","revision":1,"resources":[{"name":"config","revision":1}]}]`, authHeader)
-	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/full-charm/releases", resp.Header().Get("Location"))
 
 	// Info - should show resource downloads
-	resp = doRequest(t, handler, "GET", "/v2/charms/info/full-charm", nil, authHeader)
+	resp = doRequest(t, handler, "GET", "/v2/charms/info/full-charm", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	infoBody := decodeJSON(t, resp)
 	defaultRelease := infoBody["default-release"].(map[string]any)
 	resources := defaultRelease["resources"].([]any)
 	assert.Len(t, resources, 1)
 
+	// Resource revisions are part of Juju's anonymous Charmhub consumer API.
+	resp = doRequest(t, handler, "GET",
+		"/v2/charms/resources/full-charm/config/revisions", nil, "")
+	assert.Equal(t, http.StatusOK, resp.Code)
+
 	// Download charm
 	resp = doRequest(t, handler, "GET",
-		"/api/v1/charms/download/"+pkgID+"_1.charm", nil, authHeader)
+		"/api/v1/charms/download/"+pkgID+"_1.charm", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 
 	// Download resource
 	resp = doRequest(t, handler, "GET",
-		"/api/v1/resources/download/charm_"+pkgID+".config_1", nil, authHeader)
+		"/api/v1/resources/download/charm_"+pkgID+".config_1", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	assert.Equal(t, []byte("resource-data"), resp.Body.Bytes())
 
 	// Find
-	resp = doRequest(t, handler, "GET", "/v2/charms/find?q=full", nil, authHeader)
+	resp = doRequest(t, handler, "GET", "/v2/charms/find?q=full", nil, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
 	findBody := decodeJSON(t, resp)
 	results := findBody["results"].([]any)
@@ -1495,27 +1555,289 @@ func TestFullPublishAndDownloadWithResources(t *testing.T) {
 				map[string]any{"name": "config", "revision": 1},
 			},
 		}},
-	}, authHeader)
+	}, "")
 	assert.Equal(t, http.StatusOK, resp.Code)
+
+}
+
+func TestOptionalConsumerRoutesRejectInvalidCredentials(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, http.MethodGet, "/v2/charms/find?q=test", nil, "Bearer invalid")
+
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "authentication required")
+}
+
+func TestAnonymousConsumerRoutesDoNotExposePrivatePackage(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+
+	resp := doRequest(t, handler, http.MethodPost, "/v1/charm",
+		map[string]any{"name": "private-consumer-charm", "private": true}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	packageID := decodeJSON(t, resp)["id"].(string)
+
+	resp = doMultipartUpload(t, handler,
+		buildTestCharmArchiveWithResources(t, "private-consumer-charm"),
+		"private-consumer-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	charmUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, http.MethodPost, "/v1/charm/private-consumer-charm/revisions",
+		map[string]any{"upload-id": charmUploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doMultipartUpload(t, handler, []byte("private resource"), "config.yaml", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	resourceUploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, http.MethodPost,
+		"/v1/charm/private-consumer-charm/resources/config/revisions",
+		map[string]any{"upload-id": resourceUploadID, "type": "file"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doJSONRequest(t, handler, http.MethodPost,
+		"/v1/charm/private-consumer-charm/releases",
+		`[{"channel":"latest/stable","revision":1,"resources":[{"name":"config","revision":1}]}]`,
+		authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, http.MethodGet,
+		"/v2/charms/find?q=private-consumer-charm", nil, "")
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Empty(t, decodeJSON(t, resp)["results"].([]any))
+
+	protectedReads := []string{
+		"/v2/charms/info/private-consumer-charm",
+		"/v2/charms/resources/private-consumer-charm/config/revisions",
+		"/api/v1/charms/download/" + packageID + "_1.charm",
+		"/api/v1/resources/download/charm_" + packageID + ".config_1",
+	}
+	for _, path := range protectedReads {
+		resp = doRequest(t, handler, http.MethodGet, path, nil, "")
+		assert.Equal(t, http.StatusUnauthorized, resp.Code, path)
+	}
+
+	resp = doRequest(t, handler, http.MethodPost, "/v2/charms/refresh", map[string]any{
+		"context": []any{},
+		"actions": []any{map[string]any{
+			"action":       "refresh",
+			"instance-key": "private/0",
+			"name":         "private-consumer-charm",
+			"channel":      "latest/stable",
+		}},
+	}, "")
+	require.Equal(t, http.StatusOK, resp.Code)
+	results := decodeJSON(t, resp)["results"].([]any)
+	require.Len(t, results, 1)
+	item := results[0].(map[string]any)
+	assert.Equal(t, "error", item["result"])
+	assert.Equal(t, "unauthorized", item["error"].(map[string]any)["code"])
+
+	// Optional authentication must preserve private access for an authorized caller.
+	authorizedReads := []string{
+		"/v2/charms/info/private-consumer-charm",
+		"/v2/charms/resources/private-consumer-charm/config/revisions",
+		"/api/v1/charms/download/" + packageID + "_1.charm",
+		"/api/v1/resources/download/charm_" + packageID + ".config_1",
+	}
+	for _, path := range authorizedReads {
+		resp = doRequest(t, handler, http.MethodGet, path, nil, authHeader)
+		assert.Equal(t, http.StatusOK, resp.Code, path)
+	}
+
+	resp = doRequest(t, handler, http.MethodGet,
+		"/v2/charms/find?q=private-consumer-charm", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Len(t, decodeJSON(t, resp)["results"].([]any), 1)
+
+	resp = doRequest(t, handler, http.MethodPost, "/v2/charms/refresh", map[string]any{
+		"context": []any{},
+		"actions": []any{map[string]any{
+			"action":       "refresh",
+			"instance-key": "private/0",
+			"name":         "private-consumer-charm",
+			"channel":      "latest/stable",
+		}},
+	}, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	results = decodeJSON(t, resp)["results"].([]any)
+	require.Len(t, results, 1)
+	assert.NotEqual(t, "error", results[0].(map[string]any)["result"])
+}
+
+func TestInfoEndpointSupportsChannelQuery(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+	authHeader := "Bearer dev:alice:alice"
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "chan-info-charm"}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/chan-info-charm", resp.Header().Get("Location"))
+
+	resp = doMultipartUpload(t, handler, buildTestCharmArchiveWithResources(t, "chan-info-charm"), "chan-info-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+
+	resp = doRequest(t, handler, "POST", "/v1/charm/chan-info-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doJSONRequest(t, handler, "POST", "/v1/charm/chan-info-charm/releases",
+		`[{"channel":"latest/edge","revision":1}]`, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+	assert.Equal(t, "/v1/charm/chan-info-charm/releases", resp.Header().Get("Location"))
+
+	resp = doRequest(t, handler, "GET", "/v2/charms/info/chan-info-charm?channel=latest/edge", nil, authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	body := decodeJSON(t, resp)
+	defaultRelease := body["default-release"].(map[string]any)
+	channel := defaultRelease["channel"].(map[string]any)
+	assert.Equal(t, "latest/edge", channel["name"])
+
 }
 
 func TestRegisterPackageWithPrivateFlag(t *testing.T) {
 	t.Parallel()
-
 	handler := newTestHandler(t, testCfg)
 
 	resp := doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "private-charm", "private": true}, "Bearer dev:alice:alice")
 
-	assert.Equal(t, http.StatusOK, resp.Code)
-
+	assert.Equal(t, http.StatusCreated, resp.Code)
 	resp = doRequest(t, handler, "POST", "/v1/charm",
 		map[string]any{"name": "public-charm", "private": false}, "Bearer dev:alice:alice")
+	assert.Equal(t, http.StatusCreated, resp.Code)
 
-	assert.Equal(t, http.StatusOK, resp.Code)
+}
+
+func TestGetPrivatePackageForbiddenForDifferentUser(t *testing.T) {
+	t.Parallel()
+	handler := newTestHandler(t, testCfg)
+
+	resp := doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "alice-private", "private": true}, "Bearer dev:alice:alice")
+	require.Equal(t, http.StatusCreated, resp.Code)
+	resp = doRequest(t, handler, "GET", "/v1/charm/alice-private", nil, "Bearer dev:bob:bob")
+	assert.Equal(t, http.StatusForbidden, resp.Code)
+	assert.Contains(t, resp.Body.String(), "forbidden")
+
 }
 
 // --- helpers ---
+
+func TestEndpointsReturnNotFoundForMissingPackage(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	auth := "Bearer dev:alice:alice"
+
+	tests := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{"GET", "/v1/charm/nonexistent", nil},
+		{"DELETE", "/v1/charm/nonexistent", nil},
+		{"PATCH", "/v1/charm/nonexistent", map[string]any{"title": "x"}},
+		{"GET", "/v1/charm/nonexistent/revisions", nil},
+		{"POST", "/v1/charm/nonexistent/revisions", map[string]any{"upload-id": "bogus"}},
+		{"GET", "/v1/charm/nonexistent/revisions/review?upload-id=x", nil},
+		{"GET", "/v1/charm/nonexistent/releases", nil},
+		{"GET", "/v1/charm/nonexistent/resources", nil},
+		{"GET", "/v1/charm/nonexistent/resources/config/revisions", nil},
+		{"POST", "/v1/charm/nonexistent/resources/config/revisions", map[string]any{"upload-id": "bogus", "type": "file"}},
+		{"PATCH", "/v1/charm/nonexistent/resources/config/revisions", map[string]any{"resource-revision-updates": []any{}}},
+		{"GET", "/v1/charm/nonexistent/resources/config/oci-image/upload-credentials", nil},
+		{"POST", "/v1/charm/nonexistent/releases", []any{map[string]any{"channel": "latest/stable", "revision": 1}}},
+		{"POST", "/v1/charm/nonexistent/tracks", []any{map[string]any{"name": "2.0"}}},
+		{"GET", "/api/v1/charms/download/nonexistent_1.charm", nil},
+		{"GET", "/api/v1/resources/download/charm_nonexistent.config_1", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			t.Parallel()
+			resp := doRequest(t, handler, tt.method, tt.path, tt.body, auth)
+			assert.Equal(t, http.StatusNotFound, resp.Code,
+				"expected 404 for %s %s, got %d", tt.method, tt.path, resp.Code)
+		})
+	}
+}
+
+func TestEndpointsRejectInvalidJSONBody(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t, testCfg)
+	auth := "Bearer dev:alice:alice"
+
+	// Register a package for endpoints that need a valid package name in the path.
+	doRequest(t, handler, "POST", "/v1/charm", map[string]any{"name": "badbody-charm"}, auth)
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{"POST", "/v1/charm"},
+		{"PATCH", "/v1/charm/badbody-charm"},
+		{"POST", "/v1/charm/badbody-charm/revisions"},
+		{"POST", "/v1/charm/badbody-charm/releases"},
+		{"POST", "/v1/charm/badbody-charm/tracks"},
+		{"POST", "/v1/charm/badbody-charm/resources/config/revisions"},
+		{"PATCH", "/v1/charm/badbody-charm/resources/config/revisions"},
+		{"POST", "/v1/charm/badbody-charm/resources/foo/oci-image/blob"},
+		{"POST", "/v1/tokens"},
+		{"POST", "/v1/tokens/revoke"},
+		{"POST", "/v1/tokens/dashboard/exchange"},
+		{"POST", "/v2/charms/refresh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			t.Parallel()
+			resp := doJSONRequest(t, handler, tt.method, tt.path, "not json", auth)
+			assert.Equal(t, http.StatusBadRequest, resp.Code,
+				"expected 400 for %s %s with invalid JSON", tt.method, tt.path)
+		})
+	}
+}
+
+func TestOCIUploadCredentialsFailureHidesBackendCauseFromResponse(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	handler := newTestHandlerWithOCI(t, testCfg, serviceFailingOCIRegistry{
+		syncErr: errors.New("harbor backend: robot account quota exceeded"),
+	})
+	authHeader := "Bearer dev:alice:alice"
+
+	doRequest(t, handler, "POST", "/v1/charm",
+		map[string]any{"name": "failed-oci-charm"}, authHeader)
+	charmArchive := buildTestCharmArchiveWithContainers(t, "failed-oci-charm")
+	resp := doMultipartUpload(t, handler, charmArchive, "failed-oci-charm.charm", authHeader)
+	require.Equal(t, http.StatusOK, resp.Code)
+	uploadID := decodeJSON(t, resp)["upload-id"].(string)
+	resp = doRequest(t, handler, "POST", "/v1/charm/failed-oci-charm/revisions",
+		map[string]any{"upload-id": uploadID}, authHeader)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	resp = doRequest(t, handler, "GET",
+		"/v1/charm/failed-oci-charm/resources/workload-image/oci-image/upload-credentials", nil, authHeader)
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	body := decodeJSON(t, resp)
+	errorList := body["error-list"].([]any)
+	require.Len(t, errorList, 1)
+	errorBody := errorList[0].(map[string]any)
+	assert.Equal(t, "oci-provisioning-unavailable", errorBody["code"])
+	assert.Equal(t, "OCI package provisioning is temporarily unavailable", errorBody["message"])
+	assert.NotContains(t, resp.Body.String(), "robot account quota")
+	assert.Contains(t, logBuf.String(), "robot account quota")
+}
 
 func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	t.Helper()
@@ -1524,8 +1846,36 @@ func newTestHandler(t *testing.T, cfg config.Config) http.Handler {
 	authenticator, err := auth.New(context.Background(), cfg, repository)
 	require.NoError(t, err)
 
-	svc := service.New(cfg, repository, blob.NewMemoryStore())
-	return New(cfg, svc, authenticator)
+	storage := blob.NewMemoryStore()
+	ociRegistry := testutil.OCIRegistry{RegistryHost: "oci.test"}
+	svc := service.New(cfg, repository, storage, ociRegistry)
+	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
+	return New(cfg, svc, syncSvc, authenticator)
+}
+
+type serviceFailingOCIRegistry struct {
+	testutil.OCIRegistry
+	syncErr error
+}
+
+func (o serviceFailingOCIRegistry) SyncPackage(ctx context.Context, pkg core.Package) (core.Package, error) {
+	if o.syncErr != nil {
+		return core.Package{}, o.syncErr
+	}
+	return o.OCIRegistry.SyncPackage(ctx, pkg)
+}
+
+func newTestHandlerWithOCI(t *testing.T, cfg config.Config, ociRegistry service.OCIRegistry) http.Handler {
+	t.Helper()
+
+	repository := repo.NewMemory()
+	authenticator, err := auth.New(context.Background(), cfg, repository)
+	require.NoError(t, err)
+
+	storage := blob.NewMemoryStore()
+	svc := service.New(cfg, repository, storage, ociRegistry)
+	syncSvc := registrysync.New(cfg, repository, storage, ociRegistry)
+	return New(cfg, svc, syncSvc, authenticator)
 }
 
 func doRequest(t *testing.T, handler http.Handler, method, path string, body any, authHeader string) *httptest.ResponseRecorder {
@@ -1562,6 +1912,29 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path, body, authH
 
 func doMultipartUpload(t *testing.T, handler http.Handler, data []byte, filename, authHeader string) *httptest.ResponseRecorder {
 	t.Helper()
+	req, _ := newMultipartUploadRequest(t, data, filename, authHeader)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder
+}
+
+func assertRouteAuthBoundaries(t *testing.T, handler http.Handler, method, path string, body any) {
+	t.Helper()
+
+	unauthenticated := doRequest(t, handler, method, path, body, "")
+	assert.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
+
+	forbidden := doRequest(t, handler, method, path, body, "Bearer dev:bob:bob")
+	assert.Equal(t, http.StatusForbidden, forbidden.Code)
+	assert.Contains(t, forbidden.Body.String(), "forbidden")
+}
+
+func newMultipartUploadRequest(
+	t *testing.T,
+	data []byte,
+	filename, authHeader string,
+) (*http.Request, int) {
+	t.Helper()
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	part, err := writer.CreateFormFile("binary", filename)
@@ -1575,9 +1948,7 @@ func doMultipartUpload(t *testing.T, handler http.Handler, data []byte, filename
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-	return recorder
+	return req, buf.Len()
 }
 
 func decodeJSON(t *testing.T, resp *httptest.ResponseRecorder) map[string]any {

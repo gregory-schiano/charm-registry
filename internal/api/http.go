@@ -1,15 +1,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"net"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -21,74 +24,216 @@ import (
 	"github.com/gschiano/charm-registry/internal/service"
 )
 
+type syncAdminService interface {
+	ListCharmhubSyncRules(ctx context.Context, identity core.Identity) ([]core.CharmhubSyncRule, error)
+	AddCharmhubSyncRule(
+		ctx context.Context,
+		identity core.Identity,
+		packageName, track string,
+		bases, architectures []string,
+	) (core.CharmhubSyncRule, error)
+	RemoveCharmhubSyncRule(ctx context.Context, identity core.Identity, packageName, track string) error
+	TriggerCharmhubSync(ctx context.Context, identity core.Identity, packageName string) error
+}
+
 // API is the HTTP handler for the registry.
 type API struct {
-	cfg  config.Config
-	svc  *service.Service
-	auth *auth.Authenticator
+	cfg            config.Config
+	svc            *service.Service
+	sync           syncAdminService
+	auth           *auth.Authenticator
+	tokenLimiter   *slidingWindowLimiter
+	ipLimiter      *slidingWindowLimiter
+	trustedProxies []*net.IPNet
 }
 
 // New builds the HTTP handler for the registry API.
-func New(cfg config.Config, svc *service.Service, authenticator *auth.Authenticator) http.Handler {
-	api := &API{cfg: cfg, svc: svc, auth: authenticator}
+func New(cfg config.Config, svc *service.Service, syncSvc syncAdminService, authenticator *auth.Authenticator) http.Handler {
+	// Errors are ignored because the entries were already validated by
+	// config.Load; an empty slice safely means "trust no proxy".
+	trustedProxies, _ := cfg.TrustedProxyNets()
+	api := &API{
+		cfg:            cfg,
+		svc:            svc,
+		sync:           syncSvc,
+		auth:           authenticator,
+		tokenLimiter:   newSlidingWindowLimiter(cfg.TokenRateLimit, cfg.TokenRateWindow),
+		ipLimiter:      newSlidingWindowLimiter(cfg.IPRateLimit, cfg.IPRateWindow),
+		trustedProxies: trustedProxies,
+	}
 	router := chi.NewRouter()
 	router.Use(chimiddleware.RequestID)
-	router.Use(chimiddleware.RealIP)
+	router.Use(api.realIP)
+	router.Use(api.logRequests)
+	router.Use(chimiddleware.Timeout(cfg.RequestTimeout))
 	router.Use(chimiddleware.Recoverer)
 	router.Use(api.securityHeaders)
+	router.Use(api.rateLimit)
+	router.NotFound(api.handleNotFound)
+	router.MethodNotAllowed(api.handleMethodNotAllowed)
 
 	router.Get("/", api.handleRoot)
+	router.Get("/healthz", api.handleHealthz)
+	router.Get("/readyz", api.handleReadyz)
+	router.Get("/metrics", metricsHandler().ServeHTTP)
 	router.Get("/openapi.yaml", api.handleOpenAPI)
 	router.Get("/docs", api.handleDocs)
 
-	router.Get("/v1/tokens", api.handleGetTokens)
-	router.Post("/v1/tokens", api.handleIssueToken)
-	router.Post("/v1/tokens/exchange", api.handleExchangeToken)
-	router.Post("/v1/tokens/offline/exchange", api.handleExchangeToken)
-	router.Post("/v1/tokens/revoke", api.handleRevokeToken)
-	router.Get("/v1/tokens/whoami", api.handleTokenWhoAmI)
-	router.Post("/v1/tokens/dashboard/exchange", api.handleDashboardExchange)
-	router.Get("/v1/whoami", api.handleWhoAmI)
+	router.Group(func(r chi.Router) {
+		r.Get("/v1/charm/libraries/{charm}/{libraryID}", api.handleLibraryNotFound)
+		r.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
+	})
+	router.Group(func(r chi.Router) {
+		r.Get("/v1/tokens", api.requireIdentity(api.handleGetTokens))
+		r.Post("/v1/tokens", api.requireIdentity(api.handleIssueToken))
+		r.Post("/v1/tokens/exchange", api.requireIdentity(api.handleExchangeToken))
+		r.Post("/v1/tokens/offline/exchange", api.requireIdentity(api.handleExchangeToken))
+		r.Post("/v1/tokens/revoke", api.requireIdentity(api.handleRevokeToken))
+		r.Get("/v1/tokens/whoami", api.requireIdentity(api.handleTokenWhoAmI))
+		r.Post("/v1/tokens/dashboard/exchange", api.requireIdentity(api.handleDashboardExchange))
+		r.Get("/v1/whoami", api.requireIdentity(api.handleWhoAmI))
+		r.Get("/v1/admin/charmhub-sync", api.requireIdentity(api.handleListCharmhubSyncRules))
+		r.Post("/v1/admin/charmhub-sync", api.requireIdentity(api.handleAddCharmhubSyncRule))
+		r.Delete("/v1/admin/charmhub-sync/{name}/{track}", api.requireIdentity(api.handleDeleteCharmhubSyncRule))
+		r.Post("/v1/admin/charmhub-sync/{name}/run", api.requireIdentity(api.handleRunCharmhubSync))
 
-	router.Post("/v1/charm/libraries/bulk", api.handleLibrariesBulk)
-	router.Get("/v1/charm", api.handleListPackages)
-	router.Post("/v1/charm", api.handleRegisterPackage)
-	router.Get("/v1/charm/{name}", api.handleGetPackage)
-	router.Patch("/v1/charm/{name}", api.handlePatchPackage)
-	router.Delete("/v1/charm/{name}", api.handleDeletePackage)
+		r.Get("/v1/charm", api.requireIdentity(api.handleListPackages))
+		r.Post("/v1/charm", api.requireIdentity(api.handleRegisterPackage))
+		r.Get("/v1/charm/{name}", api.requireIdentity(api.handleGetPackage))
+		r.Patch("/v1/charm/{name}", api.requireIdentity(api.handlePatchPackage))
+		r.Delete("/v1/charm/{name}", api.requireIdentity(api.handleDeletePackage))
 
-	router.Get("/v1/charm/{name}/revisions", api.handleListRevisions)
-	router.Post("/v1/charm/{name}/revisions", api.handlePushRevision)
-	router.Get("/v1/charm/{name}/revisions/review", api.handleReviewUpload)
-	router.Get("/v1/charm/{name}/resources", api.handleListResources)
-	router.Get("/v1/charm/{name}/resources/{resource}/revisions", api.handleListResourceRevisions)
-	router.Post("/v1/charm/{name}/resources/{resource}/revisions", api.handlePushResource)
-	router.Patch("/v1/charm/{name}/resources/{resource}/revisions", api.handleUpdateResourceRevisions)
-	router.Get("/v1/charm/{name}/resources/{resource}/oci-image/upload-credentials", api.handleOCIUploadCredentials)
-	router.Post("/v1/charm/{name}/resources/{resource}/oci-image/blob", api.handleOCIImageBlob)
-	router.Get("/v1/charm/{name}/releases", api.handleListReleases)
-	router.Post("/v1/charm/{name}/releases", api.handleRelease)
-	router.Post("/v1/charm/{name}/tracks", api.handleCreateTracks)
+		r.Get("/v1/charm/{name}/revisions", api.requireIdentity(api.handleListRevisions))
+		r.Post("/v1/charm/{name}/revisions", api.requireIdentity(api.handlePushRevision))
+		r.Get("/v1/charm/{name}/revisions/review", api.requireIdentity(api.handleReviewUpload))
+		r.Get("/v1/charm/{name}/resources", api.requireIdentity(api.handleListResources))
+		r.Get("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handleListResourceRevisions))
+		r.Post("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handlePushResource))
+		r.Patch("/v1/charm/{name}/resources/{resource}/revisions", api.requireIdentity(api.handleUpdateResourceRevisions))
+		r.Get("/v1/charm/{name}/resources/{resource}/oci-image/upload-credentials", api.requireIdentity(api.handleOCIUploadCredentials))
+		r.Post("/v1/charm/{name}/resources/{resource}/oci-image/blob", api.requireIdentity(api.handleOCIImageBlob))
+		r.Get("/v1/charm/{name}/releases", api.requireIdentity(api.handleListReleases))
+		r.Post("/v1/charm/{name}/releases", api.requireIdentity(api.handleRelease))
+		r.Post("/v1/charm/{name}/tracks", api.requireIdentity(api.handleCreateTracks))
 
-	router.Post("/unscanned-upload/", api.handleUnscannedUpload)
+		r.Post("/unscanned-upload/", api.requireIdentity(api.handleUnscannedUpload))
 
-	router.Get("/v2/charms/find", api.handleFind)
-	router.Get("/v2/charms/info/{name}", api.handleInfo)
-	router.Post("/v2/charms/refresh", api.handleRefresh)
+		r.Get("/v2/charms/find", api.optionalIdentity(api.handleFind))
+		r.Get("/v2/charms/info/{name}", api.optionalIdentity(api.handleInfo))
+		r.Post("/v2/charms/refresh", api.optionalIdentity(api.handleRefresh))
+		r.Get("/v2/charms/resources/{name}/{resource}/revisions", api.optionalIdentity(api.handleListResourceRevisions))
 
-	router.Get("/api/v1/charms/download/{filename}", api.handleCharmDownload)
-	router.Get("/api/v1/resources/download/{filename}", api.handleResourceDownload)
+		r.Get("/api/v1/charms/download/{filename}", api.optionalIdentity(api.handleCharmDownload))
+		r.Get("/api/v1/resources/download/{filename}", api.optionalIdentity(api.handleResourceDownload))
+	})
 	return router
 }
 
-func (a *API) identity(r *http.Request) (core.Identity, error) {
+// slidingWindowLimiter provides per-key request rate limiting using a sliding
+// window. Stale entries are pruned inline on each Allow call and deleted when
+// empty, preventing unbounded map growth.
+type slidingWindowLimiter struct {
+	mu              sync.Mutex
+	entries         map[string][]time.Time
+	limit           int
+	window          time.Duration
+	cleanupInterval time.Duration
+	lastCleanup     time.Time
+	now             func() time.Time
+}
+
+func newSlidingWindowLimiter(limit int, window time.Duration) *slidingWindowLimiter {
+	return &slidingWindowLimiter{
+		entries:         make(map[string][]time.Time),
+		limit:           limit,
+		window:          window,
+		cleanupInterval: window,
+		now:             time.Now,
+	}
+}
+
+func (l *slidingWindowLimiter) Allow(key string) bool {
+	if l == nil || key == "" {
+		return true
+	}
+	// A limit of 0 means rate limiting is disabled (unlimited requests).
+	// Negative limits are rejected by config validation.
+	if l.limit == 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	cutoff := now.Add(-l.window)
+	if l.lastCleanup.IsZero() {
+		l.lastCleanup = now
+	} else if now.Sub(l.lastCleanup) >= l.cleanupInterval {
+		l.cleanup(cutoff)
+		l.lastCleanup = now
+	}
+	timestamps := l.pruneKey(key, cutoff)
+	if len(timestamps) >= l.limit {
+		return false
+	}
+	l.entries[key] = append(timestamps, now)
+	return true
+}
+
+func (l *slidingWindowLimiter) pruneKey(key string, cutoff time.Time) []time.Time {
+	ts := l.entries[key]
+	i := 0
+	for i < len(ts) && !ts[i].After(cutoff) {
+		i++
+	}
+	if i == len(ts) {
+		// All timestamps expired — delete the key to free memory.
+		delete(l.entries, key)
+		return nil
+	}
+	ts = ts[i:]
+	l.entries[key] = ts
+	return ts
+}
+
+func (l *slidingWindowLimiter) cleanup(cutoff time.Time) {
+	for key := range l.entries {
+		l.pruneKey(key, cutoff)
+	}
+}
+
+func (a *API) resolveIdentity(r *http.Request) (core.Identity, error) {
 	claims, token, err := a.auth.Authenticate(r)
 	if err != nil {
-		// Use a static message — the internal error detail (e.g. JWT parse
-		// errors, OIDC provider messages) must not be forwarded to clients.
-		return core.Identity{}, serviceError(http.StatusUnauthorized, "unauthorized", "authentication required")
+		return core.Identity{}, apiErrorf(http.StatusUnauthorized, "unauthorized", "authentication required")
 	}
 	return a.svc.ResolveIdentity(r.Context(), claims, token)
+}
+
+func (a *API) requireIdentity(next func(w http.ResponseWriter, r *http.Request, identity core.Identity)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, err := a.resolveIdentity(r)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		next(w, r, identity)
+	}
+}
+
+func (a *API) optionalIdentity(next func(w http.ResponseWriter, r *http.Request, identity core.Identity)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			next(w, r, core.Identity{})
+			return
+		}
+		identity, err := a.resolveIdentity(r)
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		next(w, r, identity)
+	}
 }
 
 func (a *API) securityHeaders(next http.Handler) http.Handler {
@@ -102,6 +247,34 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+func (a *API) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := chimiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.InfoContext(r.Context(), "http request",
+			"request_id", chimiddleware.GetReqID(r.Context()),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"bytes", ww.BytesWritten(),
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote_addr", r.RemoteAddr,
+		)
+		// Label on the matched route pattern (e.g. /v1/charm/{name}), not the raw
+		// path, to keep metric cardinality bounded.
+		routePattern := chi.RouteContext(r.Context()).RoutePattern()
+		if routePattern == "" {
+			routePattern = "unmatched"
+		}
+		requestsTotal.WithLabelValues(r.Method, routePattern, strconv.Itoa(status)).Inc()
+	})
+}
+
 func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, a.cfg.MaxJSONBodyBytes)
@@ -110,7 +283,7 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) err
 	if err := decoder.Decode(target); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			return serviceError(
+			return apiErrorf(
 				http.StatusRequestEntityTooLarge,
 				"request-too-large",
 				fmt.Sprintf("request body exceeds %d bytes", a.cfg.MaxJSONBodyBytes),
@@ -125,72 +298,127 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, target any) err
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		slog.Error("json encode", "error", err)
+	}
 }
 
-func writeError(w http.ResponseWriter, err error) {
+func writeCreatedJSON(w http.ResponseWriter, location string, payload any) {
+	if location != "" {
+		w.Header().Set("Location", location)
+	}
+	writeJSON(w, http.StatusCreated, payload)
+}
+
+func writeAttachment(w http.ResponseWriter, r *http.Request, filename string, body io.ReadCloser, size int64) {
+	defer body.Close()
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(filename)+`"`)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	if _, err := io.Copy(w, body); err != nil {
+		slog.ErrorContext(r.Context(), "stream attachment",
+			"request_id", chimiddleware.GetReqID(r.Context()),
+			"error", err,
+		)
+	}
+}
+
+// sanitizeFilename strips characters that could cause Content-Disposition
+// header injection (quotes, backslashes, CRLF) and replaces non-printable
+// characters with underscores.
+func sanitizeFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r == '"' || r == '\\' || r == '\r' || r == '\n':
+			return -1 // strip
+		case r < 32 || r == 0x7f:
+			return '_' // replace control chars
+		default:
+			return r
+		}
+	}, name)
+	// Truncate to a safe length.
+	if len(name) > 255 {
+		name = name[:255]
+	}
+	return name
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if err == nil {
+		return
+	}
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		writeJSON(w, apiErr.Status, newErrorListResponse(apiErr.Code, apiErr.Message))
 		return
 	}
 	var serviceErr *service.Error
 	if errors.As(err, &serviceErr) {
-		writeJSON(w, serviceErr.Status, map[string]any{
-			"error-list": []map[string]any{{
-				"code":    serviceErr.Code,
-				"message": serviceErr.Message,
-			}},
-		})
+		writeJSON(w, serviceErrorStatus(serviceErr), newErrorListResponse(serviceErr.Code, serviceErr.Message))
 		return
 	}
 	if errors.Is(err, repo.ErrNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error-list": []map[string]any{{"code": "not-found", "message": "resource not found"}},
-		})
+		writeJSON(w, http.StatusNotFound, newErrorListResponse("not-found", "resource not found"))
 		return
 	}
-	log.Printf("internal error: %v", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]any{
-		"error-list": []map[string]any{{"code": "internal-error", "message": "internal server error"}},
-	})
+	slog.ErrorContext(r.Context(), "internal error",
+		"request_id", chimiddleware.GetReqID(r.Context()),
+		"error", err,
+	)
+	writeJSON(w, http.StatusInternalServerError, newErrorListResponse("internal-error", "internal server error"))
 }
 
-func serviceError(status int, code, message string) error {
-	return &service.Error{Status: status, Code: code, Message: message}
+type apiError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+func apiErrorf(status int, code, message string) error {
+	return &apiError{Status: status, Code: code, Message: message}
+}
+
+func (a *API) handleNotFound(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusNotFound, newErrorListResponse("not-found", "endpoint not found"))
+}
+
+func (a *API) handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusMethodNotAllowed, newErrorListResponse("method-not-allowed", "method not allowed"))
 }
 
 func invalidRequestError(err error) error {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) {
+		return err
+	}
 	var serviceErr *service.Error
 	if errors.As(err, &serviceErr) {
 		return err
 	}
-	return serviceError(http.StatusBadRequest, "invalid-request", err.Error())
+	return apiErrorf(http.StatusBadRequest, "invalid-request", err.Error())
 }
 
-func packageMetadata(pkg core.Package) map[string]any {
-	tracks := make([]core.Track, len(pkg.Tracks))
-	copy(tracks, pkg.Tracks)
-	sort.Slice(tracks, func(i, j int) bool { return tracks[i].Name < tracks[j].Name })
-	return map[string]any{
-		"authority":        pkg.Authority,
-		"contact":          pkg.Contact,
-		"default-track":    pkg.DefaultTrack,
-		"description":      pkg.Description,
-		"id":               pkg.ID,
-		"links":            pkg.Links,
-		"media":            pkg.Media,
-		"name":             pkg.Name,
-		"private":          pkg.Private,
-		"publisher":        pkg.Publisher,
-		"status":           pkg.Status,
-		"store":            pkg.Store,
-		"summary":          pkg.Summary,
-		"title":            pkg.Title,
-		"track-guardrails": pkg.TrackGuardrails,
-		"tracks":           tracks,
-		"type":             pkg.Type,
-		"website":          pkg.Website,
+func serviceErrorStatus(err *service.Error) int {
+	switch err.Kind {
+	case service.ErrorKindUnauthorized:
+		return http.StatusUnauthorized
+	case service.ErrorKindForbidden:
+		return http.StatusForbidden
+	case service.ErrorKindNotFound:
+		return http.StatusNotFound
+	case service.ErrorKindConflict:
+		return http.StatusConflict
+	default:
+		return http.StatusBadRequest
 	}
 }
 
@@ -224,4 +452,89 @@ func parseResourceDownloadFilename(filename string) (string, string, int, error)
 		return "", "", 0, err
 	}
 	return packageID, resourcePart[:lastUnderscore], revision, nil
+}
+
+func (api *API) rateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// r.RemoteAddr has been normalized to the client IP by the realIP
+		// middleware, which only honours forwarded headers from trusted
+		// proxies. Reading X-Forwarded-For here would allow spoofing.
+		ip := strings.TrimSpace(r.RemoteAddr)
+		if ip == "" {
+			ip = "unknown"
+		}
+		if !api.ipLimiter.Allow(ip) {
+			writeJSON(w, http.StatusTooManyRequests, newErrorListResponse("too-many-requests", "rate limit exceeded"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// realIP normalizes r.RemoteAddr to the effective client IP used for rate
+// limiting and logging. Forwarded headers (X-Forwarded-For, X-Real-IP,
+// True-Client-IP) are honoured ONLY when the direct peer is a configured
+// trusted proxy; for any other peer the real transport address is used and
+// forwarded headers are ignored. This stops clients from spoofing their source
+// IP to evade per-IP rate limiting — unlike chi's RealIP, which trusts the
+// headers from every caller.
+func (a *API) realIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = a.clientIP(r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP resolves the client IP for a request. When the direct peer is a
+// trusted proxy it walks X-Forwarded-For right-to-left and returns the first
+// address that is not itself a trusted proxy, falling back to X-Real-IP then
+// True-Client-IP. For untrusted peers it returns the bare peer address.
+func (a *API) clientIP(r *http.Request) string {
+	peer := hostFromRemoteAddr(r.RemoteAddr)
+	if !a.isTrustedProxy(peer) {
+		return peer
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			if candidate == "" || net.ParseIP(candidate) == nil {
+				continue
+			}
+			if a.isTrustedProxy(candidate) {
+				continue
+			}
+			return candidate
+		}
+	}
+	for _, header := range []string{"X-Real-IP", "True-Client-IP"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" && net.ParseIP(value) != nil {
+			return value
+		}
+	}
+	return peer
+}
+
+func (a *API) isTrustedProxy(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, network := range a.trustedProxies {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostFromRemoteAddr strips the port (and any surrounding whitespace) from a
+// RemoteAddr, returning the bare host/IP. RemoteAddr without a port is returned
+// as-is.
+func hostFromRemoteAddr(remoteAddr string) string {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }

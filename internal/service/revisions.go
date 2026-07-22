@@ -1,19 +1,23 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
-	"time"
+	"strconv"
 
 	"github.com/google/uuid"
 
+	"github.com/gschiano/charm-registry/internal/blob"
 	"github.com/gschiano/charm-registry/internal/charm"
-	"github.com/gschiano/charm-registry/internal/config"
 	"github.com/gschiano/charm-registry/internal/core"
 	"github.com/gschiano/charm-registry/internal/repo"
 )
@@ -23,21 +27,48 @@ import (
 // The following errors may be returned:
 // - Blob storage or repository errors.
 func (s *Service) CreateUpload(ctx context.Context, filename string, payload []byte) (core.Upload, error) {
-	now := time.Now().UTC()
+	return s.CreateUploadStream(ctx, filename, bytes.NewReader(payload))
+}
+
+// CreateUploadStream stores an uploaded artifact directly from a reader and records its metadata.
+//
+// The following errors may be returned:
+// - Blob storage or repository errors.
+func (s *Service) CreateUploadStream(ctx context.Context, filename string, payload io.Reader) (core.Upload, error) {
+	now := s.now()
 	uploadID := uuid.NewString()
-	sha256sum := sha256.Sum256(payload)
-	sha384sum := sha512.Sum384(payload)
+	sha256sum := sha256.New()
+	sha384sum := sha512.New384()
+	sha512sum := sha512.New()
+	tmp, err := os.CreateTemp("", "charm-registry-upload-*")
+	if err != nil {
+		return core.Upload{}, err
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
 	key := filepath.ToSlash(filepath.Join("uploads", uploadID, filename))
-	if err := s.blobs.Put(ctx, key, payload, "application/octet-stream"); err != nil {
+	// Hash the payload in the single streaming pass so resource publishing can
+	// reuse these digests without re-reading the blob.
+	size, err := io.Copy(io.MultiWriter(tmp, sha256sum, sha384sum, sha512sum), payload)
+	if err != nil {
+		return core.Upload{}, err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return core.Upload{}, err
+	}
+	if err := s.blobs.Put(ctx, key, tmp, "application/octet-stream"); err != nil {
 		return core.Upload{}, err
 	}
 	upload := core.Upload{
 		ID:        uploadID,
 		Filename:  filename,
 		ObjectKey: key,
-		Size:      int64(len(payload)),
-		SHA256:    hex.EncodeToString(sha256sum[:]),
-		SHA384:    hex.EncodeToString(sha384sum[:]),
+		Size:      size,
+		SHA256:    hex.EncodeToString(sha256sum.Sum(nil)),
+		SHA384:    hex.EncodeToString(sha384sum.Sum(nil)),
+		SHA512:    hex.EncodeToString(sha512sum.Sum(nil)),
 		Status:    "pending",
 		Kind:      detectUploadKind(filename),
 		CreatedAt: now,
@@ -45,13 +76,61 @@ func (s *Service) CreateUpload(ctx context.Context, filename string, payload []b
 	if err := s.repo.CreateUpload(ctx, upload); err != nil {
 		return core.Upload{}, err
 	}
+	slog.DebugContext(ctx, "upload stored",
+		"upload_id", upload.ID,
+		"filename", upload.Filename,
+		"kind", upload.Kind,
+		"size", upload.Size,
+	)
 	return upload, nil
+}
+
+// AuthorizeUpload verifies that the caller may create an upload placeholder.
+func (s *Service) AuthorizeUpload(identity core.Identity) error {
+	return s.requirePermission(identity, permAccountRegisterPackage)
+}
+
+// parseUploadArchive parses a charm archive from blob storage using random
+// access from disk instead of buffering the whole archive in memory. When the
+// blob store keeps files locally (filesystem backend) it parses in place with
+// zero copy; otherwise it streams the blob to a temp file first.
+func (s *Service) parseUploadArchive(ctx context.Context, upload core.Upload) (core.CharmArchive, error) {
+	if local, ok := s.blobs.(blob.LocalBlob); ok {
+		if path, ok := local.LocalPath(upload.ObjectKey); ok {
+			return charm.ParseArchiveFile(path, upload.Size, s.cfg.MaxArchiveFileBytes)
+		}
+	}
+	reader, _, err := s.blobs.Open(ctx, upload.ObjectKey)
+	if err != nil {
+		return core.CharmArchive{}, err
+	}
+	defer reader.Close()
+	tmp, err := os.CreateTemp("", "charm-registry-parse-*")
+	if err != nil {
+		return core.CharmArchive{}, err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	size, err := io.Copy(tmp, reader)
+	if err != nil {
+		_ = tmp.Close()
+		return core.CharmArchive{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return core.CharmArchive{}, err
+	}
+	if upload.Size > 0 {
+		size = upload.Size
+	}
+	return charm.ParseArchiveFile(tmpName, size, s.cfg.MaxArchiveFileBytes)
 }
 
 // PushRevision publishes a charm revision from a prior upload.
 //
 // The following errors may be returned:
 // - Authorization, validation, blob, or repository errors.
+//
+//nolint:gocognit,cyclop // Publishing a revision intentionally follows the end-to-end workflow in one place.
 func (s *Service) PushRevision(
 	ctx context.Context,
 	identity core.Identity,
@@ -60,24 +139,31 @@ func (s *Service) PushRevision(
 ) (string, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return "", translateRepoError(err, "package not found")
+		return "", translateRepoError(err, messagePackageNotFound)
+	}
+	if err := s.ensurePackageNotSynchronized(ctx, pkg.Name); err != nil {
+		return "", err
 	}
 	if err := s.requirePackageManage(ctx, identity, pkg, permPackageManageRevisions); err != nil {
 		return "", err
 	}
 	upload, err := s.repo.GetUpload(ctx, req.UploadID)
 	if err != nil {
-		return "", translateRepoError(err, "upload not found")
+		return "", translateRepoError(err, messageUploadNotFound)
 	}
-	payload, err := s.blobs.Get(ctx, upload.ObjectKey)
+	archive, err := s.parseUploadArchive(ctx, upload)
 	if err != nil {
-		return "", err
-	}
-	archive, err := charm.ParseArchive(payload)
-	if err != nil {
+		slog.InfoContext(ctx, "revision upload rejected",
+			"package", pkg.Name,
+			"package_id", pkg.ID,
+			"upload_id", upload.ID,
+			"error", err,
+		)
 		reviewErr := []core.APIError{{Code: "invalid-archive", Message: err.Error()}}
-		_ = s.repo.ApproveUpload(ctx, upload.ID, nil, reviewErr)
-		return "", newError(400, "invalid-archive", err.Error())
+		if approveErr := s.repo.ApproveUpload(ctx, upload.ID, nil, reviewErr); approveErr != nil {
+			return "", fmt.Errorf("cannot record upload review failure: %w", approveErr)
+		}
+		return "", newError(ErrorKindInvalidRequest, "invalid-archive", err.Error())
 	}
 	latest, err := s.repo.GetLatestRevision(ctx, pkg.ID)
 	revisionNumber := 1
@@ -86,12 +172,12 @@ func (s *Service) PushRevision(
 	} else if !errors.Is(err, repo.ErrNotFound) {
 		return "", err
 	}
-	now := time.Now().UTC()
-	rev := core.Revision{
+	now := s.now()
+	rev, err := core.NewRevision(core.Revision{
 		ID:           uuid.NewString(),
 		PackageID:    pkg.ID,
 		Revision:     revisionNumber,
-		Version:      fmt.Sprintf("%d", revisionNumber),
+		Version:      strconv.Itoa(revisionNumber),
 		Status:       "approved",
 		CreatedAt:    now,
 		CreatedBy:    identity.Account.ID,
@@ -115,41 +201,56 @@ func (s *Service) PushRevision(
 			"peers":    archive.Manifest.Peers,
 		},
 		Subordinate: archive.Manifest.Subordinate,
-	}
-	if err := s.repo.CreateRevision(ctx, rev); err != nil {
-		return "", err
-	}
-	if err := s.repo.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
+	})
+	if err != nil {
 		return "", err
 	}
 	pkg.Status = "published"
-	pkg.Title = stringPtr(firstNonEmpty(archive.Manifest.DisplayName, archive.Manifest.Name, pkg.Name))
+	pkg.Title = stringPtr(core.FirstNonEmpty(archive.Manifest.DisplayName, archive.Manifest.Name, pkg.Name))
 	pkg.Summary = stringPtr(archive.Manifest.Summary)
 	pkg.Description = stringPtr(archive.Manifest.Description)
 	websites := charm.ExtractWebsites(archive.Manifest.Website)
-	pkg.Links = mergeLinks(pkg.Links, archive.Manifest.Docs, archive.Manifest.Issues, archive.Manifest.Source, websites)
+	pkg.Links = core.MergeLinks(pkg.Links, archive.Manifest.Docs, archive.Manifest.Issues, archive.Manifest.Source, websites)
 	if len(websites) > 0 {
 		pkg.Website = &websites[0]
 	}
 	pkg.UpdatedAt = now
-	if err := s.repo.UpdatePackage(ctx, pkg); err != nil {
+	if err := s.withRepositoryTransaction(ctx, func(repository repo.PackageRepo) error {
+		if err := repository.CreateRevision(ctx, rev); err != nil {
+			return err
+		}
+		if err := repository.ApproveUpload(ctx, upload.ID, &revisionNumber, nil); err != nil {
+			return err
+		}
+		if err := repository.UpdatePackage(ctx, pkg); err != nil {
+			return err
+		}
+		for name, resource := range archive.Manifest.Resources {
+			if _, err := repository.UpsertResourceDefinition(ctx, core.ResourceDefinition{
+				ID:          uuid.NewString(),
+				PackageID:   pkg.ID,
+				Name:        name,
+				Type:        resource.Type,
+				Description: resource.Description,
+				Filename:    resource.Filename,
+				Optional:    false,
+				CreatedAt:   now,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return "", err
 	}
-	for name, resource := range archive.Manifest.Resources {
-		_, err := s.repo.UpsertResourceDefinition(ctx, core.ResourceDefinition{
-			ID:          uuid.NewString(),
-			PackageID:   pkg.ID,
-			Name:        name,
-			Type:        resource.Type,
-			Description: resource.Description,
-			Filename:    resource.Filename,
-			Optional:    false,
-			CreatedAt:   now,
-		})
-		if err != nil {
-			return "", err
-		}
-	}
+	slog.InfoContext(ctx, "revision published",
+		"package", pkg.Name,
+		"package_id", pkg.ID,
+		"revision", rev.Revision,
+		"upload_id", upload.ID,
+		"size", rev.Size,
+		"account_id", identity.Account.ID,
+	)
 	return fmt.Sprintf("/v1/charm/%s/revisions/review?upload-id=%s", charmName, upload.ID), nil
 }
 
@@ -161,24 +262,24 @@ func (s *Service) ReviewUpload(
 	ctx context.Context,
 	identity core.Identity,
 	charmName, uploadID string,
-) (map[string]any, error) {
+) (reviewUploadResponse, error) {
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return reviewUploadResponse{}, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
-		return nil, err
+		return reviewUploadResponse{}, err
 	}
 	upload, err := s.repo.GetUpload(ctx, uploadID)
 	if err != nil {
-		return nil, translateRepoError(err, "upload not found")
+		return reviewUploadResponse{}, translateRepoError(err, messageUploadNotFound)
 	}
-	return map[string]any{
-		"revisions": []map[string]any{{
-			"errors":    nullIfEmpty(upload.Errors),
-			"revision":  upload.Revision,
-			"status":    upload.Status,
-			"upload-id": upload.ID,
+	return reviewUploadResponse{
+		Revisions: []uploadReviewResponse{{
+			Errors:   upload.Errors,
+			Revision: upload.Revision,
+			Status:   upload.Status,
+			UploadID: upload.ID,
 		}},
 	}, nil
 }
@@ -193,9 +294,12 @@ func (s *Service) ListRevisions(
 	charmName string,
 	revision *int,
 ) ([]core.Revision, error) {
+	if err := s.requireAuth(identity); err != nil {
+		return nil, err
+	}
 	pkg, err := s.repo.GetPackageByName(ctx, charmName)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, true); err != nil {
 		return nil, err
@@ -213,41 +317,56 @@ func (s *Service) DownloadCharm(
 	packageID string,
 	revisionNumber int,
 ) ([]byte, error) {
+	reader, _, err := s.DownloadCharmStream(ctx, identity, packageID, revisionNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+// DownloadCharmStream opens a charm revision artifact for streaming.
+//
+// The following errors may be returned:
+// - Authorization, repository lookup, or blob errors.
+func (s *Service) DownloadCharmStream(
+	ctx context.Context,
+	identity core.Identity,
+	packageID string,
+	revisionNumber int,
+) (io.ReadCloser, int64, error) {
 	pkg, err := s.repo.GetPackageByID(ctx, packageID)
 	if err != nil {
-		return nil, translateRepoError(err, "package not found")
+		return nil, 0, translateRepoError(err, messagePackageNotFound)
 	}
 	if err := s.requirePackageView(ctx, identity, pkg, false); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	revision, err := s.repo.GetRevisionByNumber(ctx, pkg.ID, revisionNumber)
 	if err != nil {
-		return nil, translateRepoError(err, "revision not found")
+		return nil, 0, translateRepoError(err, messageRevisionNotFound)
 	}
-	return s.blobs.Get(ctx, revision.ObjectKey)
+	return s.blobs.Open(ctx, revision.ObjectKey)
 }
 
-func revisionToInfo(revision core.Revision, packageID string, cfg config.Config) map[string]any {
-	return map[string]any{
-		"actions-yaml": revision.ActionsYAML,
-		"attributes":   revision.Attributes,
-		"bases":        revision.Bases,
-		"bundle-yaml":  revision.BundleYAML,
-		"config-yaml":  revision.ConfigYAML,
-		"created-at":   revision.CreatedAt,
-		"download": map[string]any{
-			"hash-sha-256": revision.SHA256,
-			"size":         revision.Size,
-			"url": cfg.PublicAPIURL + "/api/v1/charms/download/" + packageID + "_" + fmt.Sprintf(
-				"%d",
-				revision.Revision,
-			) + ".charm",
+func (s *Service) revisionToInfo(revision core.Revision, packageID string) infoRevisionResponse {
+	return infoRevisionResponse{
+		ActionsYAML: revision.ActionsYAML,
+		Attributes:  revision.Attributes,
+		Bases:       revision.Bases,
+		BundleYAML:  revision.BundleYAML,
+		ConfigYAML:  revision.ConfigYAML,
+		CreatedAt:   revision.CreatedAt,
+		Download: core.Download{
+			HashSHA256: revision.SHA256,
+			Size:       revision.Size,
+			URL:        s.charmDownloadURL(packageID, revision.Revision),
 		},
-		"metadata-yaml": revision.MetadataYAML,
-		"readme-md":     revision.ReadmeMD,
-		"relations":     revision.Relations,
-		"revision":      revision.Revision,
-		"subordinate":   revision.Subordinate,
-		"version":       revision.Version,
+		MetadataYAML: revision.MetadataYAML,
+		ReadmeMD:     revision.ReadmeMD,
+		Relations:    revision.Relations,
+		Revision:     revision.Revision,
+		Subordinate:  revision.Subordinate,
+		Version:      revision.Version,
 	}
 }
